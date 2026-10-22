@@ -141,6 +141,8 @@ pub(super) struct Asked<'a> {
 	pub(super) netns: &'a Path,
 	/// The directory of its secrets on the host, bound read-only at `/run/secrets`, where it has any.
 	pub(super) secrets: Option<&'a Path>,
+	/// The directory of the files a hosted runtime is given on the host, and where it is bound.
+	pub(super) files: Option<(&'a Path, &'a str)>,
 }
 
 /// An environment with each of `over` set on it, the image's own entry of a name replaced.
@@ -216,6 +218,14 @@ pub(super) fn build(asked: &Asked<'_>) -> Result<Value, Refused> {
 			"destination": SECRETS,
 			"type": "bind",
 			"source": secrets,
+			"options": ["rbind", "ro", "nosuid", "nodev", "noexec"],
+		}));
+	}
+	if let Some((files, at)) = asked.files {
+		mounts.push(json!({
+			"destination": at,
+			"type": "bind",
+			"source": files,
 			"options": ["rbind", "ro", "nosuid", "nodev", "noexec"],
 		}));
 	}

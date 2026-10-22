@@ -1,0 +1,20 @@
+[package]
+name = "driver-machine-function"
+version = "0.0.0"
+description = "driver(machine)'s function: modules run by workerd, one process for each deployment in a container of its binding's, RFC vr5lw"
+edition.workspace = true
+publish.workspace = true
+license = "MIT OR Apache-2.0"
+
+[lints]
+workspace = true
+
+[dependencies]
+driver-machine-container = { path = "../container" }
+envelope = { path = "../../../platform/code/libs/envelope" }
+serde_json = "1"
+tar = { version = "0.4", default-features = false }
+
+[dev-dependencies]
+sha2 = "0.11"
+tokio = { version = "1", features = ["macros", "rt"] }

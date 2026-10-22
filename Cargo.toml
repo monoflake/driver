@@ -2,7 +2,7 @@
 # The platform's crates are reached by path through the checkout beside this one, `../platform`.
 [workspace]
 resolver = "3"
-members = ["machine", "machine/container", "machine/management", "machine/object"]
+members = ["machine", "machine/container", "machine/function", "machine/management", "machine/object"]
 
 [workspace.package]
 edition = "2024"

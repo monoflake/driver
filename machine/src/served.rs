@@ -15,11 +15,13 @@ use axum::response::{IntoResponse, Response};
 use driver_machine_container::{
 	Bridge, Btrfs, Containers, Deployments, Https, Refused, Runtimes, Socket,
 };
+use driver_machine_function::Functions;
 use driver_machine_management::{Binding, Hold, Tokens, Unread};
 use driver_machine_object::{MOST, Objects as _, Unwritten};
 use envelope::contracts::interface::{deployments, management, object};
 use envelope::contracts::{
-	DeploymentDeleted, Error, Failure, ObjectDeleted, ObjectDescribed, ObjectListed,
+	DeploymentDeleted, DeploymentForm, DeploymentRuntime, Error, Failure, ObjectDeleted,
+	ObjectDescribed, ObjectListed,
 };
 use envelope::{Called, Encoded, Operation};
 
@@ -147,7 +149,8 @@ async fn managed(
 	}
 }
 
-/// A deployments call through the container kind, within what the machine made of its binding.
+/// A deployments call within what the machine made of its binding, modules for workerd deployed by
+/// the function kind and the rest by the container kind, which holds every form's containers.
 async fn deployed(
 	driver: Arc<Driver>,
 	binding: Binding,
@@ -155,7 +158,8 @@ async fn deployed(
 	form: Form,
 ) -> Served {
 	let holding = driver.lists.lock().await.get(&binding).and_then(|l| l.made.clone());
-	let containers = &driver.containers;
+	let functions = &driver.functions;
+	let containers = &functions.containers;
 	let Some(made) = holding else {
 		// A binding the machine made nothing of holds no capacity and has deployed nothing.
 		let none = || Refused { reason: "not_found", message: None };
@@ -177,7 +181,13 @@ async fn deployed(
 	};
 	match call {
 		deployments::Call::Deploy(i) => {
-			answered::<deployments::Deploy>(containers.deploy(&made, i).await, form)
+			let workerd = matches!(i.runtime, None | Some(DeploymentRuntime::Workerd));
+			let deployed = match (i.form, workerd) {
+				(DeploymentForm::Modules, true) => functions.deploy(&made, i).await,
+				(DeploymentForm::Modules, false)
+				| (DeploymentForm::Component | DeploymentForm::Image, _) => containers.deploy(&made, i).await,
+			};
+			answered::<deployments::Deploy>(deployed, form)
 		}
 		deployments::Call::Stop(i) => {
 			answered::<deployments::Stop>(containers.stop(&made, i).await, form)
@@ -339,20 +349,23 @@ fn started(arguments: Arguments) -> Driver {
 		files: arguments.bindings,
 		tokens: RwLock::new(Tokens::default()),
 		lists: tokio::sync::Mutex::new(BTreeMap::new()),
-		containers: Containers {
-			containerd: Socket { path: arguments.containerd },
-			network: Bridge {
-				plugins: arguments.plugins,
-				name: arguments.bridge,
-				subnet: arguments.subnet,
-				state: state.join("network"),
+		functions: Functions {
+			containers: Containers {
+				containerd: Socket { path: arguments.containerd },
+				network: Bridge {
+					plugins: arguments.plugins,
+					name: arguments.bridge,
+					subnet: arguments.subnet,
+					state: state.join("network"),
+				},
+				quota: Btrfs { mount: arguments.mount, binary: arguments.btrfs },
+				fetch: Https { local: arguments.local },
+				runtimes: Runtimes { runc: arguments.runc, crun: arguments.crun, youki: arguments.youki },
+				state: state.join("containers"),
+				secrets: arguments.secrets,
+				largest: arguments.largest,
 			},
-			quota: Btrfs { mount: arguments.mount, binary: arguments.btrfs },
-			fetch: Https { local: arguments.local },
-			runtimes: Runtimes { runc: arguments.runc, crun: arguments.crun, youki: arguments.youki },
-			state: state.join("containers"),
-			secrets: arguments.secrets,
-			largest: arguments.largest,
+			workerd: arguments.workerd,
 		},
 	};
 	reload(&driver);

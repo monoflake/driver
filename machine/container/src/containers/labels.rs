@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use envelope::contracts::{DeploymentRuns, DeploymentRuntime};
+use envelope::contracts::{DeploymentIsolation, DeploymentRuns, DeploymentRuntime};
 
 /// What the container runs, as [`runs`] writes it.
 pub(super) const RUNS: &str = "monoflake.runs";
@@ -12,6 +12,7 @@ const RUNTIME: &str = "monoflake.runtime";
 const ADDRESS: &str = "monoflake.address";
 const PORT: &str = "monoflake.port";
 const USER: &str = "monoflake.user";
+const ISOLATION: &str = "monoflake.isolation";
 
 /// A deployment's runs as a label holds it, `app/<id>` or `component/<name>`.
 pub(super) fn runs(runs: &DeploymentRuns) -> String {
@@ -46,9 +47,31 @@ fn runtime_name(runtime: DeploymentRuntime) -> &'static str {
 
 fn runtime_named(name: &str) -> Option<DeploymentRuntime> {
 	match name {
+		"workers" => Some(DeploymentRuntime::Workers),
+		"workerd" => Some(DeploymentRuntime::Workerd),
+		"wasmtime" => Some(DeploymentRuntime::Wasmtime),
 		"runc" => Some(DeploymentRuntime::Runc),
 		"crun" => Some(DeploymentRuntime::Crun),
 		"youki" => Some(DeploymentRuntime::Youki),
+		_ => None,
+	}
+}
+
+fn isolation_name(isolation: DeploymentIsolation) -> &'static str {
+	match isolation {
+		DeploymentIsolation::Isolate => "isolate",
+		DeploymentIsolation::Kernel => "kernel",
+		DeploymentIsolation::Userspace => "userspace",
+		DeploymentIsolation::Vm => "vm",
+	}
+}
+
+fn isolation_named(name: &str) -> Option<DeploymentIsolation> {
+	match name {
+		"isolate" => Some(DeploymentIsolation::Isolate),
+		"kernel" => Some(DeploymentIsolation::Kernel),
+		"userspace" => Some(DeploymentIsolation::Userspace),
+		"vm" => Some(DeploymentIsolation::Vm),
 		_ => None,
 	}
 }
@@ -62,6 +85,8 @@ pub(super) struct Kept {
 	pub(super) port: u16,
 	/// Who its process runs as, `uid:gid`, whose its secrets' files are.
 	pub(super) user: (u32, u32),
+	/// The isolation it stands on.
+	pub(super) isolation: Vec<DeploymentIsolation>,
 }
 
 impl Kept {
@@ -73,6 +98,10 @@ impl Kept {
 			(ADDRESS.to_owned(), self.address.clone()),
 			(PORT.to_owned(), self.port.to_string()),
 			(USER.to_owned(), format!("{}:{}", self.user.0, self.user.1)),
+			(
+				ISOLATION.to_owned(),
+				self.isolation.iter().map(|i| isolation_name(*i)).collect::<Vec<_>>().join(","),
+			),
 		])
 	}
 
@@ -90,6 +119,14 @@ impl Kept {
 				.split_once(':')
 				.and_then(|(u, g)| Some((u.parse().ok()?, g.parse().ok()?)))
 				.ok_or_else(|| format!("the label {USER} is no uid:gid"))?,
+			// A container labelled before its isolation was is an image's, on the kernel's alone.
+			isolation: match labels.get(ISOLATION) {
+				None => vec![DeploymentIsolation::Kernel],
+				Some(named) => named
+					.split(',')
+					.map(|n| isolation_named(n).ok_or_else(|| format!("the label {ISOLATION} names {n:?}")))
+					.collect::<Result<_, _>>()?,
+			},
 		})
 	}
 }

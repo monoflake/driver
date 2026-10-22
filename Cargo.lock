@@ -467,6 +467,7 @@ dependencies = [
  "clap",
  "codec",
  "driver-machine-container",
+ "driver-machine-function",
  "driver-machine-management",
  "driver-machine-object",
  "envelope",
@@ -485,6 +486,18 @@ dependencies = [
  "reqwest",
  "serde_json",
  "sha2",
+ "tokio",
+]
+
+[[package]]
+name = "driver-machine-function"
+version = "0.0.0"
+dependencies = [
+ "driver-machine-container",
+ "envelope",
+ "serde_json",
+ "sha2",
+ "tar",
  "tokio",
 ]
 
@@ -567,6 +580,16 @@ name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
+
+[[package]]
+name = "filetime"
+version = "0.2.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c287a33c7f0a620c38e641e7f60827713987b3c0f26e8ddc9462cc69cf75759"
+dependencies = [
+ "cfg-if",
+ "libc",
+]
 
 [[package]]
 name = "find-msvc-tools"
@@ -1886,6 +1909,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
 ]
 
 [[package]]

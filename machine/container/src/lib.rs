@@ -7,7 +7,8 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use envelope::contracts::{
-	DeploymentDeleted, DeploymentDeploy, DeploymentDescribed, DeploymentOf, DeploymentRuntime,
+	DeploymentArtifact, DeploymentDeleted, DeploymentDeploy, DeploymentDescribed,
+	DeploymentIsolation, DeploymentOf, DeploymentRuntime,
 };
 
 mod containerd;
@@ -15,6 +16,9 @@ mod containers;
 mod fetch;
 mod network;
 mod quota;
+
+/// Where a container finds its secrets, each a file by its name.
+pub const SECRETS: &str = "/run/secrets";
 
 /// A failure an operation answers, by its reason as the `deployments` interface declares it, or one
 /// every operation may fail for; its message a person reads, none for the reason's own.
@@ -85,6 +89,45 @@ pub trait Deployments {
 		binding: &Binding,
 		input: DeploymentOf,
 	) -> impl Future<Output = Result<DeploymentDeleted, Refused>> + Send;
+}
+
+/// A runtime of the machine's own run as a container for another kind, as the function kind runs
+/// workerd, RFC vr5lw, its image, what it is run with, the files it is given, how it is described.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hosted {
+	/// Its image's OCI archive on the machine, imported as a fetched one is and never removed.
+	pub image: PathBuf,
+	/// What its image's entrypoint is run with, in place of its `Cmd`.
+	pub cmd: Vec<String>,
+	/// The port it is called on.
+	pub port: u16,
+	/// The files it is given, by their paths below `at`, kept and removed with its container.
+	pub files: BTreeMap<String, Vec<u8>>,
+	/// Where in it the files are bound, read-only.
+	pub at: String,
+	/// The runtime it is described as running on.
+	pub runtime: DeploymentRuntime,
+	/// The isolation it stands on.
+	pub isolation: Vec<DeploymentIsolation>,
+}
+
+/// What another kind asks of the containers, an artifact fetched as an image's is and a runtime of
+/// the machine's run as an image is, RFC vr5lw; implemented for [`Containers`].
+pub trait Host {
+	/// An artifact fetched for the namespace, held to its bound and its hash; its bytes.
+	fn fetch(
+		&self,
+		namespace: &str,
+		artifact: &DeploymentArtifact,
+	) -> impl Future<Output = Result<Vec<u8>, Refused>> + Send;
+	/// The deployment run on the hosted runtime in the container of capacity its `into` names, as
+	/// idempotent as `deploy`; its form, runtime and isolation are the caller's to have checked.
+	fn host(
+		&self,
+		binding: &Binding,
+		input: DeploymentDeploy,
+		hosted: Hosted,
+	) -> impl Future<Output = Result<DeploymentDescribed, Refused>> + Send;
 }
 
 /// An image's configuration, as its OCI config gives it.

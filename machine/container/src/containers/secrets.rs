@@ -14,7 +14,7 @@ use crate::{Fault, Refused};
 const NONCE: usize = 24;
 
 /// Where a container finds its secrets, each a file by its name.
-pub(super) const INSIDE: &str = "/run/secrets";
+pub(super) const INSIDE: &str = crate::SECRETS;
 
 /// What no secret is named with, so none shadows what the platform gives a container.
 const PLATFORM: &str = "MONOFLAKE_";

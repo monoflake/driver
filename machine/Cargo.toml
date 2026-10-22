@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 driver-machine-container = { path = "container" }
+driver-machine-function = { path = "function" }
 driver-machine-management = { path = "management" }
 driver-machine-object = { path = "object" }
 codec = { path = "../../platform/code/libs/codec" }

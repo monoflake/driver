@@ -9,11 +9,25 @@ let driver: Made.driver = {
   management: #rust,
   managementTakes: [rust("rustix", "1"), rust("blake3", "1")],
   implements: [
+    // workerd in a container of the binding's for each deployment, from monoflake/runtime's image.
     {
       kind: #function,
       contract: "deployments",
       language: #rust,
       as_: "workerd, run for each deployment",
+      uses: ["envelope*"],
+      blocks: ["driver-machine-container"],
+      takes: [
+        rust("tar", "0.4"),
+        rust("serde_json", "1"),
+        rust("tokio", "1"),
+        rust("sha2", "0.11"),
+      ],
+      samples: [
+        "../platform/tests/kinds/deployments/deploys.json",
+        "../platform/tests/kinds/deployments/instances.json",
+        "../platform/tests/kinds/deployments/lifecycle.json",
+      ],
     },
     {kind: #instance, contract: "deployments", language: #rust, as_: "a process"},
     {
@@ -63,7 +77,12 @@ let driver: Made.driver = {
     language: #rust,
     uses: ["envelope*", "codec*"],
     takes: [rust("axum", "0.8"), rust("tokio", "1"), rust("clap", "4"), rust("serde_json", "1")],
-    serves: ["driver-machine-container", "driver-machine-management", "driver-machine-object"],
+    serves: [
+      "driver-machine-container",
+      "driver-machine-function",
+      "driver-machine-management",
+      "driver-machine-object",
+    ],
     samples: [
       "../platform/tests/kinds/management/lists.json",
       "../platform/tests/kinds/management/graces.json",

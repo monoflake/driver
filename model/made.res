@@ -14,6 +14,8 @@ type implementation = {
   uses?: array<string>,
   /** What of others' it may take, as monoflake/platform's `model/graph/libraries.res` has it. */
   takes?: array<Libraries.taken>,
+  /** Other blocks of this driver it is built on, by their packages. */
+  blocks?: array<string>,
   /** The samples its tests read, from this repository's root. */
   samples?: array<string>,
 }
@@ -85,6 +87,7 @@ let blocks = (role, d: driver) => {
         i.language,
         ~uses=i.uses->Option.getOr([]),
         ~takes=i.takes->Option.getOr([]),
+        ~blocks=?i.blocks,
         ~samples=i.samples->Option.getOr([]),
       ),
     )

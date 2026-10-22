@@ -9,6 +9,7 @@ use std::sync::{Arc, RwLock};
 
 use clap::Parser;
 use driver_machine_container::{Bridge, Btrfs, Containers, Https, Refused, Socket};
+use driver_machine_function::Functions;
 use driver_machine_management::{Binding, Tokens};
 use envelope::contracts::{
 	ManagementApply, ManagementCapacity, ManagementDescribed, ManagementEnd, ManagementEnded,
@@ -86,6 +87,9 @@ struct Arguments {
 	/// The most an artifact may be, in bytes.
 	#[arg(long, value_name = "bytes")]
 	largest: u64,
+	/// workerd's image, the OCI archive monoflake/runtime releases, which a function runs on.
+	#[arg(long, value_name = "archive", default_value = "/etc/monoflake/images/workerd.tar")]
+	workerd: PathBuf,
 }
 
 /// An item of a binding's list as the driver holds it, its credentials by their hashes.
@@ -124,12 +128,12 @@ trait Manage {
 }
 
 /// What every call is served with, the token files and the tokens they hold, each binding's list,
-/// and the container kind; the object kind is each list's bucket.
+/// and the function kind over the container kind; the object kind is each list's bucket.
 struct Driver {
 	files: Vec<PathBuf>,
 	tokens: RwLock<Tokens>,
 	lists: tokio::sync::Mutex<BTreeMap<Binding, Listed>>,
-	containers: Containers<Socket, Bridge, Btrfs, Https>,
+	functions: Functions<Containers<Socket, Bridge, Btrfs, Https>>,
 }
 
 #[tokio::main]

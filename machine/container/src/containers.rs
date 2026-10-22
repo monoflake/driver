@@ -1,5 +1,6 @@
 //! The `deployments` interface for images, over containerd, the network, btrfs and the fetch.
 
+mod files;
 mod labels;
 mod marks;
 mod secrets;
@@ -9,13 +10,14 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use envelope::contracts::{
-	Architecture, DeploymentDeleted, DeploymentDeploy, DeploymentDescribed, DeploymentForm,
-	DeploymentIsolation, DeploymentOf, DeploymentRuns, DeploymentRuntime, DeploymentState,
+	Architecture, DeploymentArtifact, DeploymentDeleted, DeploymentDeploy, DeploymentDescribed,
+	DeploymentForm, DeploymentIsolation, DeploymentOf, DeploymentRuns, DeploymentRuntime,
+	DeploymentState,
 };
 
 use crate::{
-	Binding, Chosen, Containerd, Containers, Deployments, Fault, Fetch, Image, Listed, Network,
-	Quota, Refused, Runtimes, Spec, Task, Unfetched,
+	Binding, Chosen, Containerd, Containers, Deployments, Fault, Fetch, Host, Hosted, Image, Listed,
+	Network, Quota, Refused, Runtimes, Spec, Task, Unfetched,
 };
 use labels::Kept;
 use secrets::{KeyFile, Places};
@@ -23,11 +25,11 @@ use secrets::{KeyFile, Places};
 /// How long a task is given to stop on its signal before it is killed, in milliseconds.
 const GRACE: u64 = 10_000;
 
-/// The isolation every container stands on.
+/// The isolation every container of an image stands on.
 const ISOLATION: DeploymentIsolation = DeploymentIsolation::Kernel;
 
 impl Refused {
-	fn new(reason: &'static str, message: impl Into<String>) -> Self {
+	pub(crate) fn new(reason: &'static str, message: impl Into<String>) -> Self {
 		Self { reason, message: Some(message.into()) }
 	}
 
@@ -72,10 +74,13 @@ struct Wanted<'a> {
 	runs: String,
 	version: String,
 	runtime: DeploymentRuntime,
+	isolation: Vec<DeploymentIsolation>,
 	port: u16,
 	capacity: &'a crate::Capacity,
 	env: Vec<String>,
 	secrets: &'a BTreeMap<String, Vec<u8>>,
+	/// What a hosted runtime is given, its files and where they are bound.
+	files: Option<(&'a BTreeMap<String, Vec<u8>>, &'a str)>,
 }
 
 impl<'a> Wanted<'a> {
@@ -123,9 +128,31 @@ impl<'a> Wanted<'a> {
 			.and_then(|p| {
 				u16::try_from(p).map_err(|_| Refused::new("malformed", "a port is at most 65535"))
 			})?;
-		let into = input.into.ok_or_else(|| {
-			Refused::new("malformed", "an image is deployed into a container of capacity")
-		})?;
+		Self::within(binding, input, runtime, vec![ISOLATION], port, None)
+	}
+
+	/// What a deploy asks of a hosted runtime, its form, runtime and isolation the caller's.
+	fn hosted(
+		binding: &'a Binding,
+		input: &'a DeploymentDeploy,
+		hosted: &'a Hosted,
+	) -> Result<Self, Refused> {
+		let files = Some((&hosted.files, hosted.at.as_str()));
+		Self::within(binding, input, hosted.runtime, hosted.isolation.clone(), hosted.port, files)
+	}
+
+	/// What every deploy asks, checked against the binding, its container and its secrets' names.
+	fn within(
+		binding: &'a Binding,
+		input: &'a DeploymentDeploy,
+		runtime: DeploymentRuntime,
+		isolation: Vec<DeploymentIsolation>,
+		port: u16,
+		files: Option<(&'a BTreeMap<String, Vec<u8>>, &'a str)>,
+	) -> Result<Self, Refused> {
+		let into = input
+			.into
+			.ok_or_else(|| Refused::new("malformed", "a deployment runs in a container of capacity"))?;
 		let capacity = binding.capacities.get(&into).ok_or_else(|| {
 			Refused::new("beyond_host", format!("the binding holds no capacity {into}"))
 		})?;
@@ -137,10 +164,12 @@ impl<'a> Wanted<'a> {
 			runs: labels::runs(&input.runs),
 			version: hex(&input.version),
 			runtime,
+			isolation,
 			port,
 			capacity,
 			env,
 			secrets: &input.secrets,
+			files,
 		})
 	}
 }
@@ -191,7 +220,7 @@ fn state(listed: &Listed, asked: bool) -> DeploymentState {
 			Ok(kept) => DeploymentState::Running {
 				address: kept.address,
 				runtime: kept.runtime,
-				isolation: vec![ISOLATION],
+				isolation: kept.isolation,
 			},
 			Err(why) => DeploymentState::Failed { reason: "fault".into(), message: Some(why) },
 		},
@@ -252,15 +281,19 @@ where
 		Places::of(&self.secrets, &self.state, namespace, id)
 	}
 
-	/// The artifact fetched and held to its hash, as a file to import.
-	async fn fetched(&self, namespace: &str, input: &DeploymentDeploy) -> Result<PathBuf, Refused> {
+	/// The artifact fetched and held to its hash, as a file.
+	async fn fetched(
+		&self,
+		namespace: &str,
+		artifact: &DeploymentArtifact,
+	) -> Result<PathBuf, Refused> {
 		let directory = self.state.join("artifacts");
 		tokio::fs::create_dir_all(&directory)
 			.await
 			.map_err(|e| Refused::new("fault", format!("{}: {e}", directory.display())))?;
-		let file = directory.join(format!("{namespace}-{}.tar", hex(&input.artifact.hash)));
-		match self.fetch.fetch(&input.artifact.address, &file, self.largest).await {
-			Ok(hash) if hash == input.artifact.hash => Ok(file),
+		let file = directory.join(format!("{namespace}-{}.tar", hex(&artifact.hash)));
+		match self.fetch.fetch(&artifact.address, &file, self.largest).await {
+			Ok(hash) if hash == artifact.hash => Ok(file),
 			Ok(_) => {
 				forget(&file).await;
 				Err(Refused::bare("hash_mismatch"))
@@ -276,12 +309,50 @@ where
 		}
 	}
 
-	/// The artifact fetched and imported into the binding's namespace.
-	async fn imported(&self, namespace: &str, input: &DeploymentDeploy) -> Result<Image, Refused> {
-		let archive = self.fetched(namespace, input).await?;
+	/// The image imported into the binding's namespace, the artifact fetched or the hosted runtime's
+	/// own archive, which is kept, run with what it is hosted with.
+	async fn imported(
+		&self,
+		namespace: &str,
+		input: &DeploymentDeploy,
+		hosted: Option<&Hosted>,
+	) -> Result<Image, Refused> {
+		if let Some(hosted) = hosted {
+			let mut image = self.containerd.import(namespace, &hosted.image).await?;
+			image.config.cmd.clone_from(&hosted.cmd);
+			return Ok(image);
+		}
+		let archive = self.fetched(namespace, &input.artifact).await?;
 		let imported = self.containerd.import(namespace, &archive).await;
 		forget(&archive).await;
 		Ok(imported?)
+	}
+
+	/// The version wanted running in place of every other, once; what a version already made answers.
+	async fn replaced(
+		&self,
+		binding: &Binding,
+		input: &DeploymentDeploy,
+		wanted: &Wanted<'_>,
+		hosted: Option<&Hosted>,
+	) -> Result<DeploymentDescribed, Refused> {
+		let mine = self.mine(binding, &input.runs).await?;
+		if let Some(same) = mine.iter().find(|l| l.labels.get(labels::VERSION) == Some(&wanted.version))
+		{
+			return self.told(binding, &input.runs, same).await;
+		}
+		let id = container_id(&input.runs, &wanted.version);
+		let image = self.imported(&binding.namespace, input, hosted).await?;
+		if let Err(refused) = self.made(binding, &image, wanted, &id).await {
+			// What was made of it before the failure goes with it; the failure is what is answered.
+			let _ = self.removed(&binding.namespace, &id).await;
+			return Err(refused);
+		}
+		for old in &mine {
+			self.containerd.stop(&binding.namespace, &old.id, GRACE).await?;
+			self.removed(&binding.namespace, &old.id).await?;
+		}
+		self.answer(binding, &input.runs).await
 	}
 
 	/// A new container made and started on the image, its labels holding what it is.
@@ -307,6 +378,10 @@ where
 				Some(places.open.as_path())
 			}
 		};
+		let given = match wanted.files {
+			None => None,
+			Some((given, at)) => Some((files::write(&self.state, namespace, id, given).await?, at)),
+		};
 		let runtime_spec = spec::build(&spec::Asked {
 			id,
 			namespace,
@@ -316,6 +391,7 @@ where
 			capacity: wanted.capacity,
 			netns: &attachment.netns,
 			secrets: bound,
+			files: given.as_ref().map(|(directory, at)| (directory.as_path(), *at)),
 		})?;
 		let kept = Kept {
 			runs: wanted.runs.clone(),
@@ -324,6 +400,7 @@ where
 			address: attachment.address.to_string(),
 			port: wanted.port,
 			user: (user.uid, user.gid),
+			isolation: wanted.isolation.clone(),
 		};
 		let spec = Spec {
 			id: id.to_owned(),
@@ -344,6 +421,7 @@ where
 		self.containerd.remove(namespace, id).await?;
 		self.network.detach(&network_id(namespace, id)).await?;
 		secrets::remove(&self.places(namespace, id)).await?;
+		files::remove(&self.state, namespace, id).await?;
 		marks::clear(&self.state, namespace, id).await
 	}
 }
@@ -367,23 +445,7 @@ where
 		input: DeploymentDeploy,
 	) -> Result<DeploymentDescribed, Refused> {
 		let wanted = Wanted::of(binding, &input)?;
-		let mine = self.mine(binding, &input.runs).await?;
-		if let Some(same) = mine.iter().find(|l| l.labels.get(labels::VERSION) == Some(&wanted.version))
-		{
-			return self.told(binding, &input.runs, same).await;
-		}
-		let id = container_id(&input.runs, &wanted.version);
-		let image = self.imported(&binding.namespace, &input).await?;
-		if let Err(refused) = self.made(binding, &image, &wanted, &id).await {
-			// What was made of it before the failure goes with it; the failure is what is answered.
-			let _ = self.removed(&binding.namespace, &id).await;
-			return Err(refused);
-		}
-		for old in &mine {
-			self.containerd.stop(&binding.namespace, &old.id, GRACE).await?;
-			self.removed(&binding.namespace, &old.id).await?;
-		}
-		self.answer(binding, &input.runs).await
+		self.replaced(binding, &input, &wanted, None).await
 	}
 
 	async fn stop(
@@ -448,5 +510,34 @@ where
 			self.removed(&binding.namespace, &listed.id).await?;
 		}
 		Ok(DeploymentDeleted {})
+	}
+}
+
+impl<C, N, Q, F> Host for Containers<C, N, Q, F>
+where
+	C: Containerd,
+	N: Network,
+	Q: Quota,
+	F: Fetch,
+{
+	async fn fetch(
+		&self,
+		namespace: &str,
+		artifact: &DeploymentArtifact,
+	) -> Result<Vec<u8>, Refused> {
+		let file = self.fetched(namespace, artifact).await?;
+		let bytes = tokio::fs::read(&file).await;
+		forget(&file).await;
+		bytes.map_err(|e| Refused::new("fault", format!("{}: {e}", file.display())))
+	}
+
+	async fn host(
+		&self,
+		binding: &Binding,
+		input: DeploymentDeploy,
+		hosted: Hosted,
+	) -> Result<DeploymentDescribed, Refused> {
+		let wanted = Wanted::hosted(binding, &input, &hosted)?;
+		self.replaced(binding, &input, &wanted, Some(&hosted)).await
 	}
 }
