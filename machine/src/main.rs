@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use clap::Parser;
 use driver_machine_container::{Bridge, Btrfs, Containers, Https, Refused, Socket};
@@ -99,14 +99,15 @@ struct Item {
 }
 
 /// A binding's list, the generations of the list and the policy held, the grace and each item, and
-/// what the machine made of the binding, which its deployments run within.
-#[derive(Debug, Clone, PartialEq)]
+/// what the machine made of the binding, which its deployments run within, and its bucket.
+#[derive(Debug, Clone)]
 struct Listed {
 	generation: u64,
 	policy: u64,
 	grace: u32,
 	items: BTreeMap<u32, Item>,
 	made: Option<driver_machine_container::Binding>,
+	bucket: Option<Arc<driver_machine_object::Bucket>>,
 }
 
 /// Management's operations on one binding's list, RFC vr5lw; implemented for [`Listed`]. A time is
@@ -123,7 +124,7 @@ trait Manage {
 }
 
 /// What every call is served with, the token files and the tokens they hold, each binding's list,
-/// and the container kind.
+/// and the container kind; the object kind is each list's bucket.
 struct Driver {
 	files: Vec<PathBuf>,
 	tokens: RwLock<Tokens>,

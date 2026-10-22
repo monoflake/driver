@@ -25,9 +25,11 @@ so an `apply` naming any item new or changed waits on this RFC, `todo!("4elqc")`
    btrfs qgroup above its subvolumes, each a name `driver-machine-container`'s `Binding` holds as a
    string, made when its first item is made and removed when its last is.
 3. **What each kind's item is, and its address**: a `container` item is a share of cores and
-   memory the container kind reads from its `Binding`; a `volume` a subvolume, an `object` a store
-   and a `database` a SQLite file, none of which has a block yet. A `made` item reports an
-   address, and for none of the four is it written what the address names.
+   memory the container kind reads from its `Binding`; a `volume` a subvolume, an `object` a bucket
+   `driver-machine-object` opens at a directory and makes a subvolume of, and a `database` a SQLite
+   file, the volume and the database without a block yet. A `made` item reports an address, and
+   for none of the four is it written what the address names, nor which bucket an `object` call
+   reaches, since it names none.
 4. **How an item is unmade**, once its grace has passed or `end` asks it, and whether that waits
    for a call to come, as the program sweeps now, or a timer of its own.
 5. **Where the list is kept**: the program holds every binding's list in memory, as
@@ -48,6 +50,11 @@ The agent's proposal, for the author to take, change or refuse.
 - **Items**: a `container` item is recorded alone, `made` at once with the driver's own address,
   since the container kind applies its share as it creates each container; the other three wait
   for their kinds' blocks, answering `failed` with `beyond_host` until each is written.
+- **A bucket** is a subvolume at `<mount>/buckets/<binding>/<item>`, made by
+  `driver-machine-object`'s `Btrfs`, assigned to the binding's qgroup by the container kind's
+  `Quota`, and opened with the item's size as its capacity. A binding holds one `object` item, the
+  bucket every `object` call of its token reaches, and a second is `failed` with `beyond_host`
+  until a call names its bucket.
 - **Unmaking** runs on a timer of a minute beside the calls, so an item past its grace goes
   whether or not anything is asked.
 - **Keeping**: the list is written to `<state>/lists/<binding>.json` on every change, read at

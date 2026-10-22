@@ -33,11 +33,19 @@ let driver: Made.driver = {
         rust("chacha20poly1305", "0.11"),
       ],
     },
+    // A bucket is a subvolume, its names indexed by SQLite and its contents files by their hash.
     {
       kind: #object,
       contract: "object",
       language: #rust,
       as_: "objects on the machine's file system",
+      uses: ["envelope*"],
+      takes: [rust("rusqlite", "0.40"), rust("blake3", "1"), rust("serde_json", "1")],
+      samples: [
+        "../platform/tests/kinds/objects/listing.json",
+        "../platform/tests/kinds/objects/ranges.json",
+        "../platform/tests/kinds/objects/writes.json",
+      ],
     },
     {kind: #volume, language: #rust, as_: "a btrfs subvolume"},
     {kind: #database, contract: "database", language: #rust, as_: "SQLite on a volume"},
@@ -55,12 +63,13 @@ let driver: Made.driver = {
     language: #rust,
     uses: ["envelope*", "codec*"],
     takes: [rust("axum", "0.8"), rust("tokio", "1"), rust("clap", "4"), rust("serde_json", "1")],
-    serves: ["driver-machine-container", "driver-machine-management"],
+    serves: ["driver-machine-container", "driver-machine-management", "driver-machine-object"],
     samples: [
       "../platform/tests/kinds/management/lists.json",
       "../platform/tests/kinds/management/graces.json",
       "../platform/tests/kinds/management/ends.json",
       "../platform/tests/kinds/deployments/lifecycle.json",
+      "../platform/tests/kinds/objects/writes.json",
     ],
   },
 }

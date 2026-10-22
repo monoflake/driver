@@ -6,4 +6,5 @@ let blocks: dict<Work.state> = dict{
   "driver-machine": InWork,
   "driver-machine-container": Accepted,
   "driver-machine-management": Accepted,
+  "driver-machine-object": InWork,
 }

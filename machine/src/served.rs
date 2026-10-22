@@ -16,8 +16,11 @@ use driver_machine_container::{
 	Bridge, Btrfs, Containers, Deployments, Https, Refused, Runtimes, Socket,
 };
 use driver_machine_management::{Binding, Hold, Tokens, Unread};
-use envelope::contracts::interface::{deployments, management};
-use envelope::contracts::{DeploymentDeleted, Error, Failure};
+use driver_machine_object::{MOST, Objects as _, Unwritten};
+use envelope::contracts::interface::{deployments, management, object};
+use envelope::contracts::{
+	DeploymentDeleted, Error, Failure, ObjectDeleted, ObjectDescribed, ObjectListed,
+};
 use envelope::{Called, Encoded, Operation};
 
 use crate::answer::{self, Form, Forms};
@@ -26,8 +29,11 @@ use crate::{Arguments, Driver, Listed, Manage};
 /// The most a call's body may be, axum's own default bound.
 const LARGEST: usize = 2 * 1024 * 1024;
 
+/// The most an `object` call's body may be, a content at its bound in base64url beside the rest.
+const LARGEST_OBJECT: usize = MOST.div_ceil(3) * 4 + LARGEST;
+
 /// The interfaces it serves, as a call names them.
-const SERVED: &str = "management, deployments";
+const SERVED: &str = "management, deployments, object";
 
 /// What a call was answered, its status, its bytes in their form, and how it ended for the log.
 struct Served {
@@ -188,6 +194,74 @@ async fn deployed(
 	}
 }
 
+/// What a bucket refused a write for, as `write` answers it.
+fn unwritten(refusal: Unwritten) -> Refused {
+	match refusal {
+		Unwritten::TooLarge => Refused { reason: "too_large", message: None },
+		Unwritten::StorageFull => Refused { reason: "storage_full", message: None },
+		Unwritten::Fault(f) => faulted(f),
+	}
+}
+
+/// What a bucket refused a read for, as `read` answers it.
+fn unread(refusal: driver_machine_object::Unread) -> Refused {
+	match refusal {
+		driver_machine_object::Unread::NotFound => Refused { reason: "not_found", message: None },
+		driver_machine_object::Unread::Fault(f) => faulted(f),
+	}
+}
+
+/// What a bucket could not do, answered `fault`.
+fn faulted(fault: driver_machine_object::Fault) -> Refused {
+	Refused { reason: "fault", message: Some(fault.0) }
+}
+
+/// An object call on its binding's bucket, on a thread that may block, as SQLite and the file
+/// system do.
+async fn stored(driver: Arc<Driver>, binding: Binding, call: object::Call, form: Form) -> Served {
+	let holding = driver.lists.lock().await.get(&binding).and_then(|l| l.bucket.clone());
+	let Some(bucket) = holding else {
+		// A binding the machine made no bucket of holds no object and has room for none.
+		return match call {
+			object::Call::Write(_) => answered::<object::Write>(
+				Err(Refused {
+					reason: "storage_full",
+					message: Some("the binding holds no bucket".into()),
+				}),
+				form,
+			),
+			object::Call::Read(_) => {
+				answered::<object::Read>(Err(Refused { reason: "not_found", message: None }), form)
+			}
+			object::Call::Describe(_) => {
+				answered::<object::Describe>(Ok(ObjectDescribed { size: None }), form)
+			}
+			object::Call::Delete(_) => answered::<object::Delete>(Ok(ObjectDeleted {}), form),
+			object::Call::List(_) => {
+				answered::<object::List>(Ok(ObjectListed { objects: Vec::new(), next: None }), form)
+			}
+		};
+	};
+	let ran = tokio::task::spawn_blocking(move || match call {
+		object::Call::Write(i) => answered::<object::Write>(bucket.write(&i).map_err(unwritten), form),
+		object::Call::Read(i) => answered::<object::Read>(bucket.read(&i).map_err(unread), form),
+		object::Call::Describe(i) => {
+			answered::<object::Describe>(bucket.describe(&i).map_err(faulted), form)
+		}
+		object::Call::Delete(i) => answered::<object::Delete>(bucket.delete(&i).map_err(faulted), form),
+		object::Call::List(i) => answered::<object::List>(bucket.list(&i).map_err(faulted), form),
+	})
+	.await;
+	match ran {
+		Ok(served) => served,
+		// Thrown on, so `guarded` answers it as it answers any operation's panic.
+		Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
+		Err(e) => {
+			Served::of::<ObjectDeleted>(Err(answer::error(&[], "fault", Some(e.to_string()))), form)
+		}
+	}
+}
+
 /// A refusal before any operation is reached, a denial or a call not as its interface writes it.
 fn early(forms: Forms, error: Error) -> Served {
 	Served::of::<DeploymentDeleted>(Err(error), forms.answer)
@@ -217,8 +291,9 @@ async fn serve(
 			answer::malformed("a call's body is application/json or application/cbor"),
 		);
 	};
-	let Ok(bytes) = axum::body::to_bytes(body, LARGEST).await else {
-		return early(forms, answer::malformed(format!("a call's body is at most {LARGEST} bytes")));
+	let largest = if interface == "object" { LARGEST_OBJECT } else { LARGEST };
+	let Ok(bytes) = axum::body::to_bytes(body, largest).await else {
+		return early(forms, answer::malformed(format!("a call's body is at most {largest} bytes")));
 	};
 	let reply = forms.answer;
 	match interface {
@@ -228,6 +303,10 @@ async fn serve(
 		},
 		"deployments" => match read::<deployments::Call>(form, operation, &bytes) {
 			Ok(call) => guarded(reply, deployed(driver, binding, call, reply)).await,
+			Err(e) => early(forms, e),
+		},
+		"object" => match read::<object::Call>(form, operation, &bytes) {
+			Ok(call) => guarded(reply, stored(driver, binding, call, reply)).await,
 			Err(e) => early(forms, e),
 		},
 		other => early(forms, answer::malformed(format!("no interface {other}, one of {SERVED}"))),

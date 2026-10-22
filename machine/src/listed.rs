@@ -20,7 +20,7 @@ const YEAR: u32 = 31_536_000;
 
 impl Default for Listed {
 	fn default() -> Self {
-		Self { generation: 0, policy: 0, grace: WEEK, items: BTreeMap::new(), made: None }
+		Self { generation: 0, policy: 0, grace: WEEK, items: BTreeMap::new(), made: None, bucket: None }
 	}
 }
 

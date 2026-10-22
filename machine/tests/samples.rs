@@ -17,6 +17,7 @@ const MANAGEMENT: [&str; 3] = [
 	"../platform/tests/kinds/management/ends.json",
 ];
 const DEPLOYMENTS: &str = "../platform/tests/kinds/deployments/lifecycle.json";
+const OBJECTS: &str = "../platform/tests/kinds/objects/writes.json";
 
 /// The RFC an apply naming any item waits on, answered `fault` until it is decided.
 const MAKING: &str = "4elqc";
@@ -89,4 +90,24 @@ fn what_a_deployment_never_deployed_answers_holds() {
 	for case in here {
 		assert_eq!(ran(&driver, 1, "deployments", case), Ran::Passed, "{}", case["description"]);
 	}
+}
+
+#[test]
+fn what_a_binding_with_no_bucket_answers_holds() {
+	let driver = Started::with("objects", 1);
+	let cases = sample(OBJECTS)["cases"].as_array().unwrap().clone();
+	// A case writing needs a bucket, which only the making of a list gives a binding.
+	let here: Vec<&Value> = cases
+		.iter()
+		.filter(|c| c["steps"].as_array().unwrap().iter().all(|s| s["call"] != "write"))
+		.collect();
+	assert!(!here.is_empty());
+	for case in here {
+		assert_eq!(ran(&driver, 1, "object", case), Ran::Passed, "{}", case["description"]);
+	}
+	let input = serde_json::json!({ "name": "a", "content": "aGVsbG8" });
+	let (status, answer) = driver.call(1, "object", "write", &input);
+	assert_eq!((status, &answer["reason"]), (503, &serde_json::json!("storage_full")));
+	let (_, listed) = driver.call(1, "object", "list", &serde_json::json!({ "prefix": "" }));
+	assert_eq!(listed["data"], serde_json::json!({ "objects": [] }));
 }

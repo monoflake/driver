@@ -1,0 +1,19 @@
+[package]
+name = "driver-machine-object"
+version = "0.0.0"
+description = "driver(machine)'s object: a bucket as a btrfs subvolume, its names indexed by SQLite and its contents files named by their hash, RFC vr5lw"
+edition.workspace = true
+publish.workspace = true
+license = "MIT OR Apache-2.0"
+
+[lints]
+workspace = true
+
+[dependencies]
+envelope = { path = "../../../platform/code/libs/envelope" }
+blake3 = "1"
+# SQLite compiled in, so the static musl build links no library of the system's.
+rusqlite = { version = "0.40", features = ["bundled"] }
+
+[dev-dependencies]
+serde_json = "1"
