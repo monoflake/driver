@@ -49,10 +49,7 @@ async fn workerd_is_hosted_from_its_image_with_its_configuration_and_modules() {
 	let [(input, hosted)] = hosted.as_slice() else { panic!("hosted {}", hosted.len()) };
 	assert_eq!(input.into, Some(1), "the binding's container, none named");
 	assert_eq!(hosted.image, PathBuf::from(WORKERD));
-	assert_eq!(
-		hosted.cmd,
-		["serve", "/worker/config.capnp", "config", "--import-path", "/run/secrets"]
-	);
+	assert_eq!(hosted.cmd, ["serve", "/worker/config.capnp", "config"]);
 	assert_eq!((hosted.port, hosted.at.as_str()), (8080, "/worker"));
 	assert_eq!(hosted.runtime, DeploymentRuntime::Workerd);
 	assert_eq!(hosted.isolation, [DeploymentIsolation::Isolate, DeploymentIsolation::Kernel]);
@@ -60,6 +57,24 @@ async fn workerd_is_hosted_from_its_image_with_its_configuration_and_modules() {
 	assert_eq!(names, ["config.capnp", "modules/index.js", "modules/lib/answer.js"]);
 	let index = std::fs::read(common::here().join("tests/bundles/echo-modules/index.js")).unwrap();
 	assert_eq!(hosted.files["modules/index.js"], index);
+}
+
+#[tokio::test]
+async fn secrets_are_imported_only_where_a_deployment_has_them() {
+	let functions = functions(served());
+	let secrets = BTreeMap::from([("TOKEN".to_owned(), b"hidden".to_vec())]);
+	let secret = DeploymentDeploy { runs: DeploymentRuns::App { id: 2 }, secrets, ..echo() };
+	functions.deploy(&binding(), echo()).await.unwrap();
+	functions.deploy(&binding(), secret).await.unwrap();
+	let hosted = functions.containers.hosted.lock().unwrap();
+	let [(_, none), (_, one)] = hosted.as_slice() else { panic!("hosted {}", hosted.len()) };
+	assert_eq!(none.cmd, ["serve", "/worker/config.capnp", "config"]);
+	let config = String::from_utf8(none.files["config.capnp"].clone()).unwrap();
+	assert!(!config.contains("embed \"/"), "no secret file named, {config}");
+	let imported = ["serve", "/worker/config.capnp", "config", "--import-path", "/run/secrets"];
+	assert_eq!(one.cmd, imported);
+	let config = String::from_utf8(one.files["config.capnp"].clone()).unwrap();
+	assert!(config.contains("(name = \"TOKEN\", text = embed \"/TOKEN\")"), "{config}");
 }
 
 #[tokio::test]

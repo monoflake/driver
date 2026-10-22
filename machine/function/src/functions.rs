@@ -9,7 +9,9 @@ use envelope::contracts::{
 	DeploymentRuntime,
 };
 
-use crate::{AT, Bundle, CONFIG, Configure, Functions, MODULES, PORT, STANDS, Unpack, Worker};
+use crate::{
+	AT, Bound, Bundle, CONFIG, Configure, Functions, MODULES, PORT, STANDS, Unpack, Worker,
+};
 
 fn beyond(message: &str) -> Refused {
 	Refused { reason: "beyond_host", message: Some(message.to_owned()) }
@@ -47,9 +49,18 @@ fn container(binding: &Binding, into: Option<u32>) -> Result<u32, Refused> {
 }
 
 /// workerd serving its configuration, a secret's file found where the container kind binds it.
-fn command() -> Vec<String> {
+/// The kind binds that directory only for a deployment with secrets, so only then is it named.
+fn command(worker: &Worker) -> Vec<String> {
+	let secret = worker.bindings.iter().any(|b| match b {
+		Bound::Secret { .. } => true,
+		Bound::Text { .. } => false,
+	});
 	let config = format!("{AT}/{CONFIG}");
-	["serve", config.as_str(), "config", "--import-path", SECRETS].map(str::to_owned).to_vec()
+	let mut cmd: Vec<String> = ["serve", config.as_str(), "config"].map(str::to_owned).to_vec();
+	if secret {
+		cmd.extend(["--import-path", SECRETS].map(str::to_owned));
+	}
+	cmd
 }
 
 /// What workerd is given, its configuration and each module below [`MODULES`].
@@ -84,7 +95,7 @@ where
 		let worker = Worker::of(&input, &bundle);
 		let hosted = Hosted {
 			image: self.workerd.clone(),
-			cmd: command(),
+			cmd: command(&worker),
 			port: PORT,
 			files: files(&worker, bundle),
 			at: AT.to_owned(),
