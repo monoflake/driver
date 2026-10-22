@@ -67,6 +67,15 @@ fn uint53(size: u64) -> Result<Uint53, Fault> {
 	Uint53::new(size).ok_or_else(|| Fault(format!("{size} is past 2^53")))
 }
 
+/// A content written to a file, flushed, then renamed to where it is placed.
+fn placed(writing: &Path, placed: &Path, content: &[u8]) -> Result<(), Unwritten> {
+	let mut file = File::create(writing).map_err(|e| unwritten("make", writing, &e))?;
+	file.write_all(content).map_err(|e| unwritten("write", writing, &e))?;
+	file.sync_all().map_err(|e| unwritten("flush", writing, &e))?;
+	drop(file);
+	fs::rename(writing, placed).map_err(|e| unwritten("rename", writing, &e))
+}
+
 /// A directory's entries flushed, so a rename in it outlasts a crash.
 fn flushed(directory: &Path) -> io::Result<()> {
 	File::open(directory)?.sync_all()
@@ -98,15 +107,37 @@ fn swept(index: &Connection, contents: &Path) -> Result<(), Fault> {
 	Ok(())
 }
 
+/// Every object whose content's file is gone removed with its content's row and the bytes it held,
+/// since what it held is lost and no answer may say it is there.
+fn healed(index: &mut Connection, contents: &Path) -> Result<(), Fault> {
+	let transaction = index.transaction_with_behavior(TransactionBehavior::Immediate)?;
+	let mut held = index::held(&transaction)?;
+	for (hash, size) in index::contents(&transaction)? {
+		let path = contents.join(blake3::Hash::from_bytes(hash).to_hex().as_str());
+		match fs::symlink_metadata(&path) {
+			Ok(_) => {}
+			Err(e) if e.kind() == io::ErrorKind::NotFound => {
+				index::lose(&transaction, &hash)?;
+				held = held.saturating_sub(size);
+			}
+			Err(e) => return Err(failed("read", &path, &e)),
+		}
+	}
+	index::hold(&transaction, held)?;
+	transaction.commit()?;
+	Ok(())
+}
+
 impl Open for Bucket {
 	fn open(directory: &Path, capacity: Option<u64>) -> Result<Self, Fault> {
 		for made in [CONTENTS, WRITING] {
 			let path = directory.join(made);
 			fs::create_dir_all(&path).map_err(|e| failed("make", &path, &e))?;
 		}
-		let index = index::opened(&directory.join(INDEX))?;
+		let mut index = index::opened(&directory.join(INDEX))?;
 		emptied(&directory.join(WRITING))?;
 		swept(&index, &directory.join(CONTENTS))?;
+		healed(&mut index, &directory.join(CONTENTS))?;
 		Ok(Self { directory: directory.to_owned(), capacity, index: std::sync::Mutex::new(index) })
 	}
 }
@@ -122,21 +153,28 @@ impl Bucket {
 		self.directory.join(CONTENTS).join(blake3::Hash::from_bytes(*hash).to_hex().as_str())
 	}
 
-	/// A content written to its file, flushed, then renamed into place and the rename flushed.
+	/// A content written to its file, flushed, then renamed into place and the rename flushed; the
+	/// file being written is removed where any of it fails, so no room stays taken by it.
 	fn put(&self, hash: &[u8; 32], content: &[u8]) -> Result<(), Unwritten> {
 		let hex = blake3::Hash::from_bytes(*hash).to_hex();
 		let writing = self.directory.join(WRITING).join(hex.as_str());
-		let mut file = File::create(&writing).map_err(|e| unwritten("make", &writing, &e))?;
-		file.write_all(content).map_err(|e| unwritten("write", &writing, &e))?;
-		file.sync_all().map_err(|e| unwritten("flush", &writing, &e))?;
-		drop(file);
-		let placed = self.content(hash);
-		fs::rename(&writing, &placed).map_err(|e| unwritten("rename", &writing, &e))?;
+		let placed = placed(&writing, &self.content(hash), content);
+		if placed.is_err() {
+			let _ = fs::remove_file(&writing);
+		}
+		placed?;
 		let contents = self.directory.join(CONTENTS);
 		flushed(&contents).map_err(|e| unwritten("flush", &contents, &e))
 	}
 
-	/// A content's file removed once no row names it; one left by a failure here is swept at open.
+	/// Where an operation has let the index go, so a test runs another just after.
+	fn released(&self) {
+		#[cfg(test)]
+		tests::between(self);
+	}
+
+	/// A content's file removed once no row names it, called with the index still held so no write
+	/// puts the same content between; one left by a failure here is swept at open.
 	fn unlink(&self, hash: &[u8; 32]) {
 		let _ = fs::remove_file(self.content(hash));
 	}
@@ -165,20 +203,21 @@ impl Objects for Bucket {
 		if self.capacity.is_some_and(|c| after > c) {
 			return Err(Unwritten::StorageFull);
 		}
-		if !present {
-			self.put(&hash, &input.content)?;
+		// A content put here is named by no row but this transaction's, so a failure removes it.
+		let recorded = if present { Ok(()) } else { self.put(&hash, &input.content) }
+			.and_then(|()| recorded(transaction, &input.name, &hash, size, old, after));
+		match recorded {
+			Ok(Some(gone)) => self.unlink(&gone),
+			Ok(None) => {}
+			Err(e) => {
+				if !present {
+					self.unlink(&hash);
+				}
+				return Err(e);
+			}
 		}
-		index::name(&transaction, &input.name, &hash, size)?;
-		let gone = match old {
-			Some((h, _)) => index::release(&transaction, &h)?.then_some(h),
-			None => None,
-		};
-		index::hold(&transaction, after)?;
-		transaction.commit()?;
 		drop(index);
-		if let Some(h) = gone {
-			self.unlink(&h);
-		}
+		self.released();
 		Ok(ObjectWritten {})
 	}
 
@@ -230,10 +269,11 @@ impl Objects for Bucket {
 			index::hold(&transaction, held.saturating_sub(size))?;
 		}
 		transaction.commit()?;
-		drop(index);
 		if gone {
 			self.unlink(&hash);
 		}
+		drop(index);
+		self.released();
 		Ok(ObjectDeleted {})
 	}
 
@@ -266,6 +306,26 @@ impl Objects for Bucket {
 	}
 }
 
+/// A write's rows changed and committed, the name given its content and the old one released;
+/// the old content's hash where no name holds it now.
+fn recorded(
+	transaction: rusqlite::Transaction<'_>,
+	name: &str,
+	hash: &[u8; 32],
+	size: u64,
+	old: Option<([u8; 32], u64)>,
+	after: u64,
+) -> Result<Option<[u8; 32]>, Unwritten> {
+	index::name(&transaction, name, hash, size)?;
+	let gone = match old {
+		Some((h, _)) => index::release(&transaction, &h)?.then_some(h),
+		None => None,
+	};
+	index::hold(&transaction, after)?;
+	transaction.commit()?;
+	Ok(gone)
+}
+
 /// The least byte string after every one starting with `prefix`, none where nothing is after them.
 fn successor(prefix: &[u8]) -> Option<Vec<u8>> {
 	let mut bytes = prefix.to_vec();
@@ -280,7 +340,66 @@ fn successor(prefix: &[u8]) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+	use std::cell::RefCell;
+	use std::path::PathBuf;
+
+	use envelope::contracts::{ObjectName, ObjectRead, ObjectWrite};
+
 	use super::successor;
+	use crate::{Bucket, Objects as _, Open as _};
+
+	/// What runs once where the next operation lets the index go.
+	type Between = Box<dyn FnOnce(&Bucket)>;
+
+	thread_local! {
+		static BETWEEN: RefCell<Option<Between>> = RefCell::new(None);
+	}
+
+	/// The operation set to run where this one let the index go, taken so it runs once.
+	pub(super) fn between(bucket: &Bucket) {
+		if let Some(run) = BETWEEN.with(|b| b.borrow_mut().take()) {
+			run(bucket);
+		}
+	}
+
+	/// A bucket in a directory of its own under the system's temporary one.
+	fn opened(name: &str) -> (PathBuf, Bucket) {
+		let directory = std::env::temp_dir()
+			.join(format!("driver-machine-object-unit-{name}-{}", std::process::id()));
+		let _ = std::fs::remove_dir_all(&directory);
+		let bucket = Bucket::open(&directory, None).unwrap();
+		(directory, bucket)
+	}
+
+	fn write(bucket: &Bucket, name: &str, content: &[u8]) {
+		let input = ObjectWrite { name: name.into(), content: content.to_vec() };
+		bucket.write(&input).unwrap();
+	}
+
+	fn read(bucket: &Bucket, name: &str) -> Vec<u8> {
+		bucket.read(&ObjectRead { name: name.into(), range: None }).unwrap().content
+	}
+
+	#[test]
+	fn a_write_of_the_same_bytes_just_after_a_delete_of_their_last_name_keeps_its_file() {
+		let (directory, bucket) = opened("delete-race");
+		write(&bucket, "a", b"same");
+		BETWEEN.with(|b| *b.borrow_mut() = Some(Box::new(|bucket| write(bucket, "b", b"same"))));
+		bucket.delete(&ObjectName { name: "a".into() }).unwrap();
+		assert_eq!(read(&bucket, "b"), b"same");
+		let _ = std::fs::remove_dir_all(directory);
+	}
+
+	#[test]
+	fn a_write_of_the_same_bytes_just_after_a_write_freed_them_keeps_its_file() {
+		let (directory, bucket) = opened("write-race");
+		write(&bucket, "a", b"old");
+		BETWEEN.with(|b| *b.borrow_mut() = Some(Box::new(|bucket| write(bucket, "b", b"old"))));
+		write(&bucket, "a", b"new");
+		assert_eq!(read(&bucket, "b"), b"old");
+		assert_eq!(read(&bucket, "a"), b"new");
+		let _ = std::fs::remove_dir_all(directory);
+	}
 
 	#[test]
 	fn a_prefix_is_followed_by_its_last_byte_raised_past_every_highest_one() {

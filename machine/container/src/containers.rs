@@ -8,12 +8,14 @@ mod spec;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use envelope::contracts::{
 	Architecture, DeploymentArtifact, DeploymentDeleted, DeploymentDeploy, DeploymentDescribed,
 	DeploymentForm, DeploymentIsolation, DeploymentOf, DeploymentRuns, DeploymentRuntime,
 	DeploymentState,
 };
+use sha2::{Digest as _, Sha256};
 
 use crate::{
 	Binding, Chosen, Containerd, Containers, Deployments, Fault, Fetch, Host, Hosted, Image, Listed,
@@ -24,6 +26,12 @@ use secrets::{KeyFile, Places};
 
 /// How long a task is given to stop on its signal before it is killed, in milliseconds.
 const GRACE: u64 = 10_000;
+
+/// The most letters containerd takes in an id.
+const ID_MOST: usize = 76;
+
+/// How many fetches this process began, so each is written to a file of its own.
+static FETCHES: AtomicU64 = AtomicU64::new(0);
 
 /// The isolation every container of an image stands on.
 const ISOLATION: DeploymentIsolation = DeploymentIsolation::Kernel;
@@ -179,18 +187,42 @@ fn hex(hash: &[u8; 32]) -> String {
 	hash.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// The containerd id within the namespace of what runs as one container.
+/// The containerd id within the namespace of what runs as one container, a component's name
+/// cleaned to what containerd takes and followed by a hash of it whole, so no two names share one.
 fn container_id(runs: &DeploymentRuns, version: &str) -> String {
+	let short: String = version.chars().take(12).collect();
 	let of = match runs {
 		DeploymentRuns::App { id } => format!("app-{id}"),
 		DeploymentRuns::Component { component } => {
-			let clean: String =
-				component.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
-			format!("component-{}", clean.trim_matches('-'))
+			let whole = Sha256::digest(component.as_bytes());
+			let named: String = whole.iter().take(8).map(|b| format!("{b:02x}")).collect();
+			// What is left of the most once the rest of the id is written.
+			let room = ID_MOST.saturating_sub("component---".len() + named.len() + short.len());
+			let clean = cleaned(component, room);
+			match clean.is_empty() {
+				true => format!("component-{named}"),
+				false => format!("component-{clean}-{named}"),
+			}
 		}
 	};
-	let short: String = version.chars().take(12).collect();
 	format!("{of}-{short}")
+}
+
+/// A name's letters and digits at most `room` of them, each run of anything else one hyphen, and
+/// none at either end.
+fn cleaned(name: &str, room: usize) -> String {
+	let mut clean = String::new();
+	for c in name.chars() {
+		if clean.len() >= room {
+			break;
+		}
+		if c.is_ascii_alphanumeric() {
+			clean.push(c);
+		} else if !clean.is_empty() && !clean.ends_with('-') {
+			clean.push('-');
+		}
+	}
+	clean.trim_end_matches('-').to_owned()
 }
 
 /// A container's network, by a name unique on the machine, since containers of two bindings may
@@ -281,7 +313,8 @@ where
 		Places::of(&self.secrets, &self.state, namespace, id)
 	}
 
-	/// The artifact fetched and held to its hash, as a file.
+	/// The artifact fetched and held to its hash, as a file of this fetch's alone, so what another
+	/// fetch of the same artifact writes or removes never reaches the bytes checked here.
 	async fn fetched(
 		&self,
 		namespace: &str,
@@ -291,7 +324,9 @@ where
 		tokio::fs::create_dir_all(&directory)
 			.await
 			.map_err(|e| Refused::new("fault", format!("{}: {e}", directory.display())))?;
-		let file = directory.join(format!("{namespace}-{}.tar", hex(&artifact.hash)));
+		let n = FETCHES.fetch_add(1, Ordering::Relaxed);
+		let own = format!("{namespace}-{}-{}-{n}.tar", hex(&artifact.hash), std::process::id());
+		let file = directory.join(own);
 		match self.fetch.fetch(&artifact.address, &file, self.largest).await {
 			Ok(hash) if hash == artifact.hash => Ok(file),
 			Ok(_) => {

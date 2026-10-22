@@ -150,3 +150,57 @@ fn a_page_holds_at_most_the_contracts_thousand() {
 	let rest = output(&bucket, "list", json!({ "prefix": "n/", "after": first["next"] }));
 	assert_eq!(rest, json!({ "objects": [{ "name": "n/01000", "size": 4 }] }));
 }
+
+#[test]
+fn a_write_whose_commit_fails_leaves_no_file_behind() {
+	let (directory, bucket) = bucket("refused", None);
+	// A trigger of the test's own makes the index refuse one name, after its content is put.
+	let other = rusqlite::Connection::open(directory.path().join(INDEX)).unwrap();
+	other
+		.execute_batch(
+			"CREATE TRIGGER refused BEFORE INSERT ON objects WHEN NEW.name = X'726566' \
+			BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+		)
+		.unwrap();
+	drop(other);
+	let answer = call(&bucket, "write", &json!({ "name": "ref", "content": encoded(b"lost") }), None);
+	assert_eq!(answer["reason"], "fault", "{answer}");
+	assert!(files(directory.path()).is_empty());
+	assert_eq!(std::fs::read_dir(directory.path().join(WRITING)).unwrap().count(), 0);
+	assert_eq!(output(&bucket, "describe", json!({ "name": "ref" })), json!({}));
+}
+
+#[test]
+fn a_write_whose_rename_fails_leaves_nothing_being_written() {
+	let (directory, bucket) = bucket("unrenamed", None);
+	// A directory where the content's file would go, so the rename into place fails.
+	let content = b"blocked";
+	let hash = blake3::hash(content).to_hex();
+	std::fs::create_dir(directory.path().join(CONTENTS).join(hash.as_str())).unwrap();
+	std::fs::write(directory.path().join(CONTENTS).join(hash.as_str()).join("in"), b"").unwrap();
+	let answer = call(&bucket, "write", &json!({ "name": "a", "content": encoded(content) }), None);
+	assert_eq!(answer["reason"], "fault", "{answer}");
+	assert_eq!(std::fs::read_dir(directory.path().join(WRITING)).unwrap().count(), 0);
+}
+
+#[test]
+fn an_object_whose_content_file_is_lost_is_gone_once_opened_again() {
+	let (directory, held) = bucket("lost", Some(10));
+	write(&held, "a", b"hello");
+	write(&held, "b", b"hello");
+	write(&held, "c", b"kept");
+	drop(held);
+	let hash = blake3::hash(b"hello").to_hex();
+	std::fs::remove_file(directory.path().join(CONTENTS).join(hash.as_str())).unwrap();
+	let bucket = Bucket::open(directory.path(), Some(10)).unwrap();
+	assert_eq!(output(&bucket, "describe", json!({ "name": "a" })), json!({}));
+	assert_eq!(call(&bucket, "read", &json!({ "name": "b" }), None)["reason"], "not_found");
+	assert_eq!(names(&output(&bucket, "list", json!({ "prefix": "" }))), ["c"]);
+	// The five bytes lost are no longer held, so six more fit beside the four kept.
+	write(&bucket, "d", b"world!");
+	output(&bucket, "delete", json!({ "name": "d" }));
+	// The same bytes written again are put again rather than taken for held.
+	write(&bucket, "a", b"hello");
+	let read = output(&bucket, "read", json!({ "name": "a" }));
+	assert_eq!(read, json!({ "content": encoded(b"hello"), "size": 5 }));
+}

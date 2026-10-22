@@ -160,12 +160,21 @@ impl Quota for Share {
 	}
 }
 
+/// Two fetches put in order, the first held after it wrote until the test lets it answer.
+#[derive(Default)]
+struct Gate {
+	written: tokio::sync::Notify,
+	go: tokio::sync::Notify,
+}
+
 /// What an address serves.
 #[derive(Clone)]
 enum Served {
 	Bytes(&'static [u8]),
 	TooLarge,
 	Nothing,
+	/// Its bytes, written and then held at the gate before it answers.
+	Held(&'static [u8], Arc<Gate>),
 }
 
 struct Artifacts {
@@ -179,6 +188,12 @@ impl Fetch for Artifacts {
 		match self.served.get(address).cloned().unwrap_or(Served::Nothing) {
 			Served::Bytes(bytes) => {
 				std::fs::write(into, bytes).unwrap();
+				Ok(Sha256::digest(bytes).into())
+			}
+			Served::Held(bytes, gate) => {
+				std::fs::write(into, bytes).unwrap();
+				gate.written.notify_one();
+				gate.go.notified().await;
 				Ok(Sha256::digest(bytes).into())
 			}
 			Served::TooLarge => Err(Unfetched::TooLarge),
@@ -785,4 +800,47 @@ async fn an_artifact_fetched_for_another_kind_is_held_to_its_hash_and_not_kept()
 	let mismatched = DeploymentArtifact { hash: hash(ECHO_TWO), ..artifact };
 	assert_eq!(driver.fetch("b1", &mismatched).await.map_err(reason), Err("hash_mismatch"));
 	assert_eq!(std::fs::read_dir(driver.state.join("artifacts")).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn two_fetches_of_one_artifact_at_once_each_read_what_they_checked() {
+	let (mut driver, _) = driver("fetched-twice", shell(), false);
+	let gate = Arc::new(Gate::default());
+	driver.fetch.served.insert("file:///held.tar", Served::Held(ECHO, gate.clone()));
+	let held = DeploymentArtifact { address: "file:///held.tar".into(), ..echo().artifact };
+	// The second serves other bytes under the same hash, so it is refused and its file removed.
+	let other = DeploymentArtifact { address: "file:///echo-two.tar".into(), ..echo().artifact };
+	let second = async {
+		gate.written.notified().await;
+		let refused = driver.fetch("b1", &other).await.map_err(reason);
+		gate.go.notify_one();
+		refused
+	};
+	let (first, second) = tokio::join!(driver.fetch("b1", &held), second);
+	assert_eq!(second, Err("hash_mismatch"));
+	assert_eq!(first.unwrap(), ECHO);
+	assert_eq!(std::fs::read_dir(driver.state.join("artifacts")).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn components_whose_names_clean_alike_run_in_containers_apart() {
+	let (driver, _) = driver("components", shell(), false);
+	let component = |name: &str| DeploymentDeploy {
+		runs: DeploymentRuns::Component { component: name.into() },
+		..echo()
+	};
+	for name in ["a.b", "a-b", "a..b"] {
+		driver.deploy(&binding(), component(name)).await.unwrap();
+	}
+	let long = "x.".repeat(100);
+	driver.deploy(&binding(), component(&long)).await.unwrap();
+	let ids: Vec<String> =
+		driver.containerd.held.lock().unwrap().keys().map(|k| k.1.clone()).collect();
+	assert_eq!(ids.len(), 4);
+	// Each id is one containerd takes, at most 76 of its letters, digits and lone separators.
+	for id in ids {
+		assert!(id.len() <= 76, "{id}");
+		let taken = |p: &str| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric());
+		assert!(id.split(['-', '.', '_']).all(taken), "{id}");
+	}
 }

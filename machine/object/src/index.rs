@@ -158,6 +158,21 @@ pub(crate) fn release(c: &Connection, hash: &[u8; 32]) -> Result<bool> {
 	Ok(gone > 0)
 }
 
+/// Every content held, its hash and its size.
+pub(crate) fn contents(c: &Connection) -> Result<Vec<([u8; 32], u64)>> {
+	let mut statement = c.prepare("SELECT hash, size FROM contents")?;
+	let read = |r: &rusqlite::Row<'_>| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, i64>(1)?));
+	let rows: rusqlite::Result<Vec<(Vec<u8>, i64)>> = statement.query_map([], read)?.collect();
+	rows?.into_iter().map(|(h, s)| Ok((hash(&h)?, size(s)?))).collect()
+}
+
+/// A content's row removed with every name holding it, as when its file is lost.
+pub(crate) fn lose(c: &Connection, hash: &[u8; 32]) -> Result<()> {
+	c.execute("DELETE FROM objects WHERE hash = ?1", [hash.as_slice()])?;
+	c.execute("DELETE FROM contents WHERE hash = ?1", [hash.as_slice()])?;
+	Ok(())
+}
+
 /// Whether any row names a content.
 pub(crate) fn known(c: &Connection, hash: &[u8; 32]) -> Result<bool> {
 	Ok(names(c, hash)?.is_some())

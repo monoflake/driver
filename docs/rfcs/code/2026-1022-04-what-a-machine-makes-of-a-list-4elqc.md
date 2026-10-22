@@ -37,6 +37,10 @@ so an `apply` naming any item new or changed waits on this RFC, `todo!("4elqc")`
    the control sends its list again, while what was made stays on the machine unnamed.
 6. **When a binding is ended**, so its tokens are forgotten, RFC 3d3nt: `end` takes an item's id,
    and nothing yet says which call ends the binding itself.
+7. **The lists' lock**: `made` and `unmade` will block on btrfs and SQLite with every binding's
+   list locked, found by the review of 2026-10-22.
+8. **Tokens across a restart**: those an `apply` gives are held in memory alone and a restart
+   forgets them, found by the review of 2026-10-22.
 
 ## Options
 

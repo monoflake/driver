@@ -4,7 +4,7 @@
 use std::any::Any;
 use std::collections::BTreeMap;
 use std::process::ExitCode;
-use std::sync::{Arc, PoisonError, RwLock};
+use std::sync::{Arc, PoisonError, RwLock, Weak};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use axum::Router;
@@ -20,8 +20,8 @@ use driver_machine_management::{Binding, Hold, Tokens, Unread};
 use driver_machine_object::{MOST, Objects as _, Unwritten};
 use envelope::contracts::interface::{deployments, management, object};
 use envelope::contracts::{
-	DeploymentDeleted, DeploymentForm, DeploymentRuntime, Error, Failure, ObjectDeleted,
-	ObjectDescribed, ObjectListed,
+	DeploymentDeleted, DeploymentForm, DeploymentRuns, DeploymentRuntime, Error, Failure,
+	ObjectDeleted, ObjectDescribed, ObjectListed,
 };
 use envelope::{Called, Encoded, Operation};
 
@@ -149,6 +149,45 @@ async fn managed(
 	}
 }
 
+/// One deployment of a binding, by what it runs as a label writes it.
+type Deployment = (Binding, String);
+
+/// Each deployment's turn, so calls changing one deployment run one after another however long a
+/// fetch takes, while no lock of every binding's is held through it.
+struct Turns(std::sync::Mutex<BTreeMap<Deployment, Weak<tokio::sync::Mutex<()>>>>);
+
+/// The turns of this process's one driver.
+static TURNS: Turns = Turns(std::sync::Mutex::new(BTreeMap::new()));
+
+impl Turns {
+	/// The deployment's turn, awaited until every call taking it before is answered.
+	async fn taken(&self, deployment: Deployment) -> tokio::sync::OwnedMutexGuard<()> {
+		let turn = {
+			let mut turns = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+			// A turn nobody holds or awaits is gone, so the map holds only those in use.
+			turns.retain(|_, turn| turn.strong_count() > 0);
+			match turns.get(&deployment).and_then(Weak::upgrade) {
+				Some(turn) => turn,
+				None => {
+					let turn = Arc::new(tokio::sync::Mutex::new(()));
+					turns.insert(deployment, Arc::downgrade(&turn));
+					turn
+				}
+			}
+		};
+		turn.lock_owned().await
+	}
+}
+
+/// The deployment a binding's call names.
+fn deployment(binding: Binding, runs: &DeploymentRuns) -> Deployment {
+	let runs = match runs {
+		DeploymentRuns::App { id } => format!("app/{id}"),
+		DeploymentRuns::Component { component } => format!("component/{component}"),
+	};
+	(binding, runs)
+}
+
 /// A deployments call within what the machine made of its binding, modules for workerd deployed by
 /// the function kind and the rest by the container kind, which holds every form's containers.
 async fn deployed(
@@ -157,6 +196,18 @@ async fn deployed(
 	call: deployments::Call,
 	form: Form,
 ) -> Served {
+	let changes = match &call {
+		deployments::Call::Deploy(i) => Some(&i.runs),
+		deployments::Call::Stop(i) | deployments::Call::Resume(i) | deployments::Call::Delete(i) => {
+			Some(&i.runs)
+		}
+		deployments::Call::Describe(_) => None,
+	};
+	// A describe answers at once, and every other call waits on its deployment's turn.
+	let _turn = match changes {
+		Some(runs) => Some(TURNS.taken(deployment(binding, runs)).await),
+		None => None,
+	};
 	let holding = driver.lists.lock().await.get(&binding).and_then(|l| l.made.clone());
 	let functions = &driver.functions;
 	let containers = &functions.containers;
@@ -414,5 +465,61 @@ pub(crate) async fn run(arguments: Arguments) -> ExitCode {
 			eprintln!("serve: {e}");
 			ExitCode::FAILURE
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use std::pin::pin;
+	use std::task::{Context, Poll, Waker};
+
+	use envelope::contracts::interface::deployments;
+	use envelope::contracts::{DeploymentOf, DeploymentRuns};
+
+	use super::{TURNS, deployed, deployment, started};
+	use crate::Arguments;
+	use crate::answer::Form;
+
+	/// A driver of nothing, reaching no containerd.
+	fn driver() -> super::Driver {
+		let nowhere = std::path::PathBuf::from("/nonexistent");
+		started(Arguments {
+			listen: crate::LISTEN,
+			bindings: Vec::new(),
+			state: nowhere.clone(),
+			containerd: nowhere.clone(),
+			runc: nowhere.clone(),
+			crun: nowhere.clone(),
+			youki: nowhere.clone(),
+			plugins: nowhere.clone(),
+			bridge: "bridge".into(),
+			subnet: "10.88.0.0/16".into(),
+			mount: nowhere.clone(),
+			btrfs: nowhere.clone(),
+			local: None,
+			secrets: nowhere.clone(),
+			largest: 1,
+			workerd: nowhere,
+		})
+	}
+
+	#[tokio::test]
+	async fn a_call_on_a_deployment_waits_for_the_one_before_on_it_to_be_answered() {
+		let driver = std::sync::Arc::new(driver());
+		let runs = DeploymentRuns::App { id: 7 };
+		let held = TURNS.taken(deployment(7, &runs)).await;
+		let stop = deployments::Call::Stop(DeploymentOf { runs: runs.clone() });
+		let mut waiting = pin!(deployed(driver.clone(), 7, stop, Form::Json));
+		let mut context = Context::from_waker(Waker::noop());
+		assert!(waiting.as_mut().poll(&mut context).is_pending(), "it ran while the turn was held");
+		// Another deployment of the binding, or the same of another binding, is not held back.
+		let other = deployments::Call::Stop(DeploymentOf { runs: DeploymentRuns::App { id: 8 } });
+		let apart = pin!(deployed(driver.clone(), 7, other, Form::Json)).poll(&mut context);
+		assert!(matches!(apart, Poll::Ready(_)));
+		let elsewhere = deployments::Call::Stop(DeploymentOf { runs });
+		let apart = pin!(deployed(driver.clone(), 9, elsewhere, Form::Json)).poll(&mut context);
+		assert!(matches!(apart, Poll::Ready(_)));
+		drop(held);
+		assert_eq!(waiting.await.outcome, "error rejected not_found");
 	}
 }
