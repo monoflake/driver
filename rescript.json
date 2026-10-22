@@ -1,6 +1,6 @@
 {
 	"name": "@monoflake/driver",
-	"sources": [{ "dir": "model", "subdirs": true }],
+	"sources": [{ "dir": "model", "subdirs": true }, { "dir": "scripts" }],
 	"dependencies": ["@monoflake/platform"],
 	"package-specs": [{ "module": "esmodule", "in-source": true }],
 	"suffix": ".res.mjs",

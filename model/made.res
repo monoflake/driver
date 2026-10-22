@@ -16,8 +16,20 @@ type implementation = {
   takes?: array<Libraries.taken>,
 }
 
-/** The one binary serving the management and every kind, RFC 8c0rg. */
-type program = {language: language, takes: array<Libraries.taken>}
+/**
+ * The one binary serving the management and every kind, released with a version of its own, RFC
+ * 8c0rg.
+ */
+type program = {
+  language: language,
+  /** monoflake/platform's libraries it may depend on, by its model's names. */
+  uses: array<string>,
+  takes: array<Libraries.taken>,
+  /** The blocks of this driver it serves, by their packages. */
+  serves: array<string>,
+  /** The samples its tests read, from this repository's root. */
+  samples: array<string>,
+}
 
 /** A driver, its implementations, its management and the runtimes it gives compute by. */
 type driver = {
@@ -33,14 +45,25 @@ type driver = {
 /** A driver's directory, the vendor in its role's parentheses, `driver(machine)` at `machine`. */
 let dirOf = role => role->String.replace("driver(", "")->String.replace(")", "")
 
-let held = (name, package, language: language, ~uses=[], ~takes=[]): Blocks.held => {
+let held = (
+  name,
+  package,
+  language: language,
+  ~uses=[],
+  ~takes=[],
+  ~blocks=?,
+  ~released=?,
+  ~samples=[],
+): Blocks.held => {
   name,
   languages: [(language :> Blocks.lang)],
   package,
   license: Components.permissive,
   uses,
   takes,
-  samples: [],
+  samples,
+  ?blocks,
+  ?released,
 }
 
 /**
@@ -73,7 +96,21 @@ let blocks = (role, d: driver) => {
     ),
   )
   let program =
-    d.program->Option.mapOr([], p => [(dir, held(role, package, p.language, ~takes=p.takes))])
+    d.program->Option.mapOr([], p => [
+      (
+        dir,
+        held(
+          role,
+          package,
+          p.language,
+          ~uses=p.uses,
+          ~takes=p.takes,
+          ~blocks=p.serves,
+          ~released=true,
+          ~samples=p.samples,
+        ),
+      ),
+    ])
   Array.concatMany(kinds, [[management], program])
 }
 

@@ -50,6 +50,17 @@ let driver: Made.driver = {
     {name: "crun", takes: "image", stands: ["kernel"]},
     {name: "youki", takes: "image", stands: ["kernel"]},
   ],
-  // driver-machine, a binary serving plain HTTP by axum, RFC 8c0rg.
-  program: {language: #rust, takes: [rust("axum", "0.8"), rust("tokio", "1")]},
+  // driver-machine, a binary serving plain HTTP by axum, its arguments parsed by clap, RFC 8c0rg.
+  program: {
+    language: #rust,
+    uses: ["envelope*", "codec*"],
+    takes: [rust("axum", "0.8"), rust("tokio", "1"), rust("clap", "4"), rust("serde_json", "1")],
+    serves: ["driver-machine-container", "driver-machine-management"],
+    samples: [
+      "../platform/tests/kinds/management/lists.json",
+      "../platform/tests/kinds/management/graces.json",
+      "../platform/tests/kinds/management/ends.json",
+      "../platform/tests/kinds/deployments/lifecycle.json",
+    ],
+  },
 }

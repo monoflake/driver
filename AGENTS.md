@@ -16,8 +16,9 @@ the roles with it; [docs/rfcs/](docs/rfcs/) holds what is decided here alone.
 ## The tree
 
 ```
-machine/    driver(machine): each kind's crate, container/ and management/ now, and later the
-            program driver-machine itself, RFC 8c0rg
+machine/    driver(machine): the program driver-machine, RFC 8c0rg, and beneath it each kind's
+            crate, container/ and management/ now
+scripts/    archive.res, the program built static for both architectures and archived
 model/      each driver, machine.res and cloudflare.res, in made.res's types; filling.res, its blocks
             and the fill; tasks.res, the tasks; plan/progress.res, each written block's state
 docs/       rfcs/, what is decided here alone
@@ -44,3 +45,4 @@ workspace's configuration as platform's do.
 | `mise run accept <name>` | one block held to its brief, alone                       |
 | `mise run built <name>`  | one block built, formatted, linted and tested alone      |
 | `mise run blocks`        | every written block built alone, as verify asks          |
+| `mise run archive`       | driver-machine built for linux-x86_64 and linux-aarch64  |

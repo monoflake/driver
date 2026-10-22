@@ -6,6 +6,9 @@ _.path = ["{{config_root}}/node_modules/.bin"]
 cargo-deny = "0.20"
 # containerd-client's build compiles containerd's protobufs, driver(machine)'s container.
 protoc = "36.2"
+# What `archive` links the program's two static Linux binaries with, RFC 8c0rg.
+zig = "0.17" # pre-1.0, where a minor is the breaking release
+"aqua:rust-cross/cargo-zigbuild" = "0.23" # pre-1.0, where a minor is the breaking release
 
 # What oxfmt formats here; ReScript's formatter takes its sources from rescript.json.
 [vars]
@@ -55,6 +58,11 @@ d=$(node model/tasks.res.mjs brief "$usage_package" --path) && p="$usage_package
 [tasks.blocks]
 description = "Build, format, lint and test every written block alone; one in work fails nothing"
 run = "rescript build > /dev/null && node model/tasks.res.mjs built"
+
+[tasks.archive]
+description = "Build driver-machine static for linux-x86_64 and linux-aarch64 and archive each with the licenses: `archive [--dry-run]`"
+usage = 'flag "-n --dry-run" help="Say what would be built and written, and build nothing"'
+run = 'rescript build > /dev/null && node scripts/archive.res.mjs ${usage_dry_run:+--dry-run}'
 
 [tasks.clean]
 description = "Remove what cargo and ReScript built, never an installed dependency or local state: `clean [--dry-run]`"
