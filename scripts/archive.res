@@ -16,6 +16,9 @@ type stats = {size: float}
 @module("node:fs") external rmSync: (string, removed) => unit = "rmSync"
 @module("node:fs") external copyFileSync: (string, string) => unit = "copyFileSync"
 @module("node:fs") external chmodSync: (string, int) => unit = "chmodSync"
+@module("node:fs") external utimesSync: (string, int, int) => unit = "utimesSync"
+@module("node:fs") external writeBytes: (string, Uint8Array.t) => unit = "writeFileSync"
+@module("node:zlib") external gzipSync: Uint8Array.t => Uint8Array.t = "gzipSync"
 @module("node:fs") external statSync: string => stats = "statSync"
 type hash
 @module("node:crypto") external createHash: string => hash = "createHash"
@@ -24,6 +27,7 @@ type hash
 @module("node:path") @variadic external join: array<string> => string = "join"
 @module("node:url") external fileURLToPath: string => string = "fileURLToPath"
 @val external importMetaUrl: string = "import.meta.url"
+@val external isMain: bool = "import.meta.main"
 @val external env: Dict.t<string> = "process.env"
 @val external copy: (@as(json`{}`) _, Dict.t<string>) => Dict.t<string> = "Object.assign"
 
@@ -62,6 +66,32 @@ let ran = (command, arguments, ~environment=?) =>
     {cwd: root, stdio: "inherit", env: ?environment},
   ).status->Nullable.toOption == Some(0)
 
+/** The flags for an archive with no extended attributes, root its owner and group and ustar its
+ * format, as GNU tar on Linux and bsdtar on macOS each spell them. */
+let plain = () =>
+  switch spawnSync("tar", ["--version"], {cwd: root, encoding: "utf8"}).stdout->Nullable.toOption {
+  | Some(said) if said->String.includes("GNU tar") => [
+      "--format=ustar",
+      "--no-xattrs",
+      "--owner=root:0",
+      "--group=root:0",
+      "--mtime=@0",
+    ]
+  | _ => [
+      "--format=ustar",
+      "--no-xattrs",
+      "--no-mac-metadata",
+      "--uid",
+      "0",
+      "--gid",
+      "0",
+      "--uname",
+      "root",
+      "--gname",
+      "root",
+    ]
+  }
+
 /** What `file` says of a binary. */
 let described = binary =>
   spawnSync("file", ["-b", binary], {cwd: root, encoding: "utf8"}).stdout
@@ -94,33 +124,43 @@ let archived = (~version, (target, machine, named)) => {
       let quiet = copy(env)
       quiet->Dict.set("COPYFILE_DISABLE", "1")
       let files = [package, "LICENSE-MIT", "LICENSE-APACHE"]
-      let packed = ran("tar", ["-czf", archive, "-C", staged, ...files], ~environment=quiet)
+      // Every file dated the epoch, so a binary built again the same gives the same archive.
+      files->Array.forEach(file => utimesSync(join([staged, file]), 0, 0))
+      let tar = join([directory, `${name}.tar`])
+      let packed = ran("tar", ["-cf", tar, ...plain(), "-C", staged, ...files], ~environment=quiet)
       rmSync(staged, {recursive: true, force: true})
+      if packed {
+        // zlib's header carries no time or name, as either tar's own gzip might.
+        writeBytes(archive, gzipSync(readBytes(tar)))
+      }
+      rmSync(tar, {force: true, recursive: false})
       packed ? Ok(archive) : Error(`${archive}: tar failed`)
     }
   }
 }
 
 let dry = Base.args->Array.includes("--dry-run")
-switch version() {
-| None =>
-  Console.error("machine/Cargo.toml: no [package] version")
-  Base.process->Base.setExitCode(1)
-| Some(version) if dry =>
-  targets->Array.forEach(((target, machine, _)) => {
-    Console.log(`would run cargo zigbuild --release --locked -p ${package} --target ${target}`)
-    Console.log(`would write target/archives/${package}-${version}-linux-${machine}.tar.gz`)
-  })
-| Some(version) =>
-  targets->Array.forEach(target =>
-    switch archived(~version, target) {
-    | Ok(archive) =>
-      let sha256 = createHash("sha256")->update(readBytes(archive))->digest
-      let size = statSync(archive).size->Float.toString
-      Console.log(`${sha256}  ${archive->String.replace(root ++ "/", "")}  ${size} bytes`)
-    | Error(why) =>
-      Console.error(why)
-      Base.process->Base.setExitCode(1)
-    }
-  )
+if isMain {
+  switch version() {
+  | None =>
+    Console.error("machine/Cargo.toml: no [package] version")
+    Base.process->Base.setExitCode(1)
+  | Some(version) if dry =>
+    targets->Array.forEach(((target, machine, _)) => {
+      Console.log(`would run cargo zigbuild --release --locked -p ${package} --target ${target}`)
+      Console.log(`would write target/archives/${package}-${version}-linux-${machine}.tar.gz`)
+    })
+  | Some(version) =>
+    targets->Array.forEach(target =>
+      switch archived(~version, target) {
+      | Ok(archive) =>
+        let sha256 = createHash("sha256")->update(readBytes(archive))->digest
+        let size = statSync(archive).size->Float.toString
+        Console.log(`${sha256}  ${archive->String.replace(root ++ "/", "")}  ${size} bytes`)
+      | Error(why) =>
+        Console.error(why)
+        Base.process->Base.setExitCode(1)
+      }
+    )
+  }
 }

@@ -1,0 +1,51 @@
+# On a push to main or by hand, builds driver-machine for both machines and releases it here by the
+# workspace's scripts/release, unless both archives are the last release's, RFC 8c0rg.
+name: release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A run started while another builds waits behind it in order, up to a hundred deep, and none is
+# canceled, so two never race to release one day, as runtime's publish queues.
+concurrency:
+  group: release
+  queue: max
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      # The workspace above the repository, as it is checked out at home, its scripts compiled.
+      - uses: canmi21/canmi/.github/actions/workspace@main
+        with:
+          path: monoflake/driver
+          scripts: true
+      # The platform's crates and contracts the driver is built on, reached as ../platform.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: monoflake/platform
+          path: repos/monoflake/platform
+          persist-credentials: false
+      - name: build
+        working-directory: repos/monoflake/driver
+        run: |
+          rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+          (cd ../platform && pnpm install --frozen-lockfile)
+          pnpm install --frozen-lockfile
+          mise run archive
+      - name: version
+        working-directory: repos/monoflake/driver
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: mise exec -- node .github/release/versioned.res.mjs
+      - name: release
+        working-directory: repos/monoflake/driver
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: mise run release

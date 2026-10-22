@@ -64,6 +64,13 @@ description = "Build driver-machine static for linux-x86_64 and linux-aarch64 an
 usage = 'flag "-n --dry-run" help="Say what would be built and written, and build nothing"'
 run = 'rescript build > /dev/null && node scripts/archive.res.mjs ${usage_dry_run:+--dry-run}'
 
+# The day's release on GitHub, the workspace's scripts/release reading workspace.toml's [release].
+[tasks.release]
+description = "Put what target/archives/built.json names into the UTC day's release here: `release [--dry-run]`"
+usage = 'flag "-n --dry-run" help="Say what would be released and change nothing on GitHub"'
+depends = ["//:build"]
+run = 'node {{env.WORKSPACE}}/scripts/release/release.res.mjs ${usage_dry_run:+--dry-run}'
+
 [tasks.clean]
 description = "Remove what cargo and ReScript built, never an installed dependency or local state: `clean [--dry-run]`"
 usage = '''
