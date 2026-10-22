@@ -24,10 +24,12 @@ jobs:
         with:
           path: monoflake/driver
           scripts: true
-      # The platform's crates and contracts the driver is built on, reached as ../platform.
+      # The platform's crates and contracts the driver is built on, reached as ../platform at the
+      # commit update last moved it to.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: monoflake/platform
+          ref: 0ae9cea166b8849d61ccaccfc5c73d330d4e38b9 # monoflake/platform@main
           path: repos/monoflake/platform
           persist-credentials: false
       - name: build
