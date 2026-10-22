@@ -1,0 +1,47 @@
+# What a crate may depend on, RFC fhg6w, checked by `cargo deny check` in verify, each license one
+# every component allows it to be linked into.
+[graph]
+all-features = true
+# The targets a crate is built for, the machines' two and the author's own. A crate only another
+# target pulls in is linked into nothing shipped.
+targets = [
+	"x86_64-unknown-linux-gnu",
+	"aarch64-unknown-linux-gnu",
+	"aarch64-apple-darwin",
+]
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+allow = [
+	"0BSD",
+	"Apache-2.0",
+	"Apache-2.0 WITH LLVM-exception",
+	"BSD-2-Clause",
+	"BSD-3-Clause",
+	# minicbor's, RFC fhg6w, permissive and OSI approved, read 2026-10-19 in
+	# docs/lessons/languages.md.
+	"BlueOak-1.0.0",
+	"CC0-1.0",
+	"ISC",
+	"MIT",
+	"Unicode-3.0",
+	"Zlib",
+]
+confidence-threshold = 0.93
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

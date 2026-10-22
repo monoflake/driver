@@ -1,0 +1,55 @@
+/**
+ * driver(machine), what a machine of a provider's or at home gives, RFC vr5lw. A machine's NixOS
+ * is monoflake/machine's and its isolate runtimes' images monoflake/runtime's, RFC m7rkq.
+ */
+let rust = (name, major): Libraries.taken => {language: #rust, name, major}
+
+let driver: Made.driver = {
+  grounds: [#provider, #home],
+  management: #rust,
+  managementTakes: [rust("rustix", "1"), rust("blake3", "1")],
+  implements: [
+    {
+      kind: #function,
+      contract: "deployments",
+      language: #rust,
+      as_: "workerd, run for each deployment",
+    },
+    {kind: #instance, contract: "deployments", language: #rust, as_: "a process"},
+    {
+      kind: #container,
+      contract: "deployments",
+      language: #rust,
+      as_: "a container, by containerd",
+      uses: ["envelope*"],
+      takes: [
+        rust("containerd-client", "0.9"),
+        rust("tokio", "1"),
+        rust("serde_json", "1"),
+        rust("sha2", "0.11"),
+        rust("prost-types", "0.14"),
+        rust("tonic", "0.14"),
+        rust("reqwest", "0.13"),
+        rust("chacha20poly1305", "0.11"),
+      ],
+    },
+    {
+      kind: #object,
+      contract: "object",
+      language: #rust,
+      as_: "objects on the machine's file system",
+    },
+    {kind: #volume, language: #rust, as_: "a btrfs subvolume"},
+    {kind: #database, contract: "database", language: #rust, as_: "SQLite on a volume"},
+  ],
+  // An isolate runs inside its organization's container, which keeps bindings apart, v7v3w.
+  runtimes: [
+    {name: "workerd", takes: "modules", stands: ["isolate", "kernel"]},
+    {name: "wasmtime", takes: "component", stands: ["isolate", "kernel"]},
+    {name: "runc", takes: "image", stands: ["kernel"]},
+    {name: "crun", takes: "image", stands: ["kernel"]},
+    {name: "youki", takes: "image", stands: ["kernel"]},
+  ],
+  // driver-machine, a binary serving plain HTTP by axum, RFC 8c0rg.
+  program: {language: #rust, takes: [rust("axum", "0.8"), rust("tokio", "1")]},
+}

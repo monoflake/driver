@@ -1,0 +1,24 @@
+# The drivers' Rust, a virtual manifest listing every crate beneath machine/ one by one, RFC 7ykg6.
+# The platform's crates are reached by path through the checkout beside this one, `../platform`.
+[workspace]
+resolver = "3"
+members = ["machine/container", "machine/management"]
+
+[workspace.package]
+edition = "2024"
+publish = false
+
+# Every crate takes these by `[lints] workspace = true`, monoflake/platform's docs/code.md.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+as_conversions = "deny"
+unimplemented = "deny"
+wildcard_enum_match_arm = "deny"
+dbg_macro = "deny"

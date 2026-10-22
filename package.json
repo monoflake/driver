@@ -1,0 +1,12 @@
+{
+	"name": "@monoflake/driver",
+	"private": true,
+	"type": "module",
+	"dependencies": {
+		"@monoflake/platform": "link:../platform"
+	},
+	"devDependencies": {
+		"@rescript/runtime": "^12.3.1",
+		"rescript": "^12.3.1"
+	}
+}

@@ -1,0 +1,69 @@
+# This repository's own tasks; its tools are the workspace's, read by walking up.
+[env]
+_.path = ["{{config_root}}/node_modules/.bin"]
+
+[tools]
+cargo-deny = "0.20"
+# containerd-client's build compiles containerd's protobufs, driver(machine)'s container.
+protoc = "36.2"
+
+# What oxfmt formats here; ReScript's formatter takes its sources from rescript.json.
+[vars]
+formatted = "'*.md' '*.json' 'docs/**/*.md'"
+
+[tasks.fmt]
+description = "Format the model with ReScript's formatter and the prose with oxfmt: `fmt [--dry-run]`"
+usage = 'flag "-n --dry-run" help="List what is not formatted and write nothing"'
+run = """
+if [ -z "${usage_dry_run:-}" ]; then rescript format && oxfmt {{vars.formatted}}; exit; fi
+rescript format --check; oxfmt --list-different {{vars.formatted}}; exit 0
+"""
+
+[tasks.formatted]
+description = "Fail where anything is not formatted, as verify asks"
+run = "rescript format --check && oxfmt --check {{vars.formatted}}"
+
+[tasks.check]
+description = "monoflake/platform's check run with the drivers filled in, then this repository's blocks"
+run = "rescript build && node model/tasks.res.mjs check"
+
+[tasks.brief]
+description = "Print one block's brief, read from the model: `brief <package> [--path]`"
+usage = '''
+arg "<package>" help="The block, by its package name"
+flag "--path" help="Its directory alone"
+'''
+run = 'rescript build > /dev/null && node model/tasks.res.mjs brief "$usage_package" ${usage_path:+--path}'
+
+[tasks.accept]
+description = "Hold one block to its brief, alone, the model compiled before: `accept <package> [--from <revision>]`"
+usage = '''
+arg "<package>" help="The block, by its package name"
+flag "--from <revision>" help="The revision its work began at"
+'''
+run = 'node model/tasks.res.mjs accept "$usage_package" ${usage_from:+--from "$usage_from"} && mise run built "$usage_package"'
+
+[tasks.built]
+description = "Build, format, lint and test one block alone, as accept and verify each ask: `built <package>`"
+usage = 'arg "<package>" help="The block, by its package name"'
+run = """
+d=$(node model/tasks.res.mjs brief "$usage_package" --path) && p="$usage_package" || exit 1
+[ ! -f "$d/Cargo.toml" ] || { cargo fmt --check -p "$p" && cargo clippy -p "$p" --all-targets -- -D warnings && cargo test -p "$p"; } || exit 1
+[ ! -f "$d/rescript.json" ] || { rescript build "$d" && cd "$d" && rescript format --check && node --test 'tests/**/*.mjs'; }
+"""
+
+[tasks.blocks]
+description = "Build, format, lint and test every written block alone; one in work fails nothing"
+run = "rescript build > /dev/null && node model/tasks.res.mjs built"
+
+[tasks.clean]
+description = "Remove what cargo and ReScript built, never an installed dependency or local state: `clean [--dry-run]`"
+usage = '''
+flag "-n --dry-run" help="List what would go and remove nothing"
+'''
+depends = ["//:build"]
+run = "node {{env.WORKSPACE}}/scripts/clean.res.mjs"
+
+[tasks.verify]
+description = "What a commit has to pass: everything formatted, the check, every block alone, and the crates' dependencies"
+run = ["mise run formatted", "mise run check", "mise run blocks", "cargo deny check"]
