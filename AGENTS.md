@@ -3,8 +3,8 @@
 The drivers, what each vendor gives the platform through a kind's contract, MIT OR Apache-2.0,
 RFC 7ykg6. Read it after the workspace's `AGENTS.md`; it holds only what is the drivers' own.
 
-It is public at `monoflake/driver`, listed in the workspace's `repos/registry.toml` as
-`monoflake/driver`, beside `monoflake/platform`, whose checkout `../platform` it is built on.
+It builds on the sibling checkout `../platform`, the workspace placing both under
+`repos/monoflake/`.
 
 ## Start here
 
