@@ -1,10 +1,8 @@
-# On a push to main or by hand, builds driver-machine for both machines and releases it here by the
-# workspace's scripts/release, unless both archives are the last release's, RFC 8c0rg.
+# By hand only, builds driver-machine for both machines and releases it here by the workspace's
+# scripts/release, unless both archives are the last release's, RFC 8c0rg.
 name: release
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 # A run started while another builds waits behind it in order, up to a hundred deep, and none is

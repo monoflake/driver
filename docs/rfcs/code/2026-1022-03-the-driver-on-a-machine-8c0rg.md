@@ -43,10 +43,11 @@ Decided by the author on 2026-10-22.
   workspace's release script a repository's `[release]` declares: a table of what each day released
   with the downloads below it, and one `manifest.json` appended to by each release, recording every
   interface the release serves and its version, so a build reads the minor and patch to take from
-  the last release. A build is released on a push to main that changes what the driver is built
-  from. Until the author pushes the first, the driver is built by hand on the author's machine and
-  copied to a test machine to be tried, run there as a transient systemd unit, which an upgrade's
-  switch leaves running.
+  the last release. A build is released only by hand, the workflow run from GitHub, until how the
+  repositories pin one another is decided, RFC 7ykg6; then on a push to main that changes what the
+  driver is built from. Until the first, the driver is built on the author's machine and copied to
+  a test machine to be tried, run there as a transient systemd unit, which an upgrade's switch
+  leaves running.
 - **One shape of `manifest.json` for every release**, `{release, artifacts}`, each artifact its
   `name`, `version`, `commit` and `assets`, each asset its `target`, `kind`, `file`, `size` and
   `sha256`, and an image's `digest`, the driver's `kind` being `binary` and an image's `oci`, so
