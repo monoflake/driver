@@ -84,13 +84,17 @@ let timed = (name, run, said) => {
 }
 
 /** The target built for the machine's architecture, as `uname -m` names it; the binary copied in
- * last is kept beside it as `.new`, so rsync sends only what changed. */
+ * last is kept beside it as `.new`, so rsync sends only what changed. A machine whose driver runs
+ * a store path, as cloud's `switch --driver` leaves it, is refused, RFC ehm48. */
 let asked = host =>
   switch remote(
     host,
-    `uname -m && mkdir -p ${directory} && { [ ! -f ${installed} ] || cp ${installed} ${installed}.new; }`,
+    `systemctl show -p ExecStart --value ${service} | grep -qF "path=${installed} " || { echo store; exit; }
+uname -m && mkdir -p ${directory} && { [ ! -f ${installed} ] || cp ${installed} ${installed}.new; }`,
   ) {
   | None => Error(`${host} did not answer`)
+  | Some("store") =>
+    Error(`${service} runs a store path, not ${installed}; a switch without --driver returns to it`)
   | Some(machine) =>
     switch Archive.targets->Array.find(((_, named, _)) => named == machine) {
     | Some(target) => Ok(target)
@@ -193,7 +197,7 @@ if isMain {
     if name == "local" {
       Console.log(`would reach the local machine as ${host} on port 2222, its host key unchecked`)
     }
-    Console.log(`would ask ${host} its architecture by uname -m`)
+    Console.log(`would ask ${host} its architecture by uname -m, refusing a driver on a store path`)
     Console.log(`would run cargo zigbuild --release --locked -p ${Archive.package} --target <it>`)
     Console.log(`would rsync it to ${host}:${installed}.new and rename it into place`)
     Console.log(`would restart ${service} there, then ${entry} where it runs, and wait on both`)

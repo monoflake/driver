@@ -72,7 +72,8 @@ let driver: Made.driver = {
     {name: "crun", takes: "image", stands: ["kernel"]},
     {name: "youki", takes: "image", stands: ["kernel"]},
   ],
-  // driver-machine, a binary serving plain HTTP by axum, its arguments parsed by clap, RFC 8c0rg.
+  // driver-machine, a binary serving plain HTTP by axum, its arguments parsed by clap, RFC 8c0rg,
+  // and its entry served by hyper on a listener taken from systemd by listenfd, RFC ehm48.
   program: {
     language: #rust,
     uses: ["envelope*", "codec*"],
@@ -81,7 +82,9 @@ let driver: Made.driver = {
       rust("tokio", "1"),
       rust("clap", "4"),
       rust("serde_json", "1"),
+      rust("hyper", "1"),
       rust("hyper-util", "0.1"),
+      rust("listenfd", "1"),
     ],
     serves: [
       "driver-machine-container",

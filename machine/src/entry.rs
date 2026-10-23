@@ -1,15 +1,16 @@
 //! The entry, a request for a host handed to the deployment its name is bound to and carried
-//! unread both ways, a process of its own reading containerd alone, RFCs vr5lw, n0o4l and rmll5.
+//! unread both ways, a process of its own reading containerd alone, RFCs vr5lw, n0o4l and rmll5;
+//! its listener taken from its socket unit and what it has begun answered before it stops, ehm48.
 
+use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use axum::Router;
 use axum::body::Body;
-use axum::extract::{ConnectInfo, Request, State};
+use axum::extract::Request;
 use axum::http::uri::{Authority, Scheme};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri, Version, header};
 use axum::response::{IntoResponse, Response};
@@ -18,7 +19,7 @@ use driver_machine_management::Binding;
 use envelope::contracts::DeploymentRuns;
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
-use hyper_util::rt::TokioExecutor;
+use hyper_util::rt::{TokioExecutor, TokioIo};
 
 /// The entry's port, ENTRY on a keypad, as the driver's is DRIVE.
 const PORT: u16 = 36879;
@@ -30,7 +31,8 @@ const LISTEN: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), PORT
 /// What the entry is started with, its address and containerd's socket, and nothing of the driver.
 #[derive(Debug, Clone, clap::Args)]
 pub(crate) struct Arguments {
-	/// The address and port it listens on, plain HTTP, TLS the tunnel's in front of it now.
+	/// The address and port it listens on, plain HTTP, TLS the tunnel's in front of it now, unless
+	/// systemd passes it a listener.
 	#[arg(long, value_name = "address:port", default_value_t = LISTEN)]
 	listen: SocketAddr,
 	/// containerd's socket.
@@ -40,6 +42,17 @@ pub(crate) struct Arguments {
 
 /// How long a deployment's address is given to accept a connection before it is taken as down.
 const CONNECTING: Duration = Duration::from_secs(5);
+
+/// How long the requests begun when it is told to stop are given to be answered before it exits.
+const DRAIN: Duration = Duration::from_secs(10);
+
+/// How long a connection that has sent nothing yet when it is told to stop is given to send its
+/// first request, as one closed before it is read is lost to its client.
+const FIRST: Duration = Duration::from_secs(1);
+
+/// How long an address containerd last gave is answered from while containerd cannot be reached,
+/// as while it restarts its shims keep each task running.
+const KEPT: Duration = Duration::from_secs(60);
 
 /// The headers of one connection alone, never carried past it, RFC 9110 section 7.6.1.
 const HOP: [HeaderName; 6] = [
@@ -105,24 +118,56 @@ pub(crate) trait Find: Send + Sync + 'static {
 	fn find(&self, named: Named) -> impl Future<Output = Found> + Send;
 }
 
+/// The address each deployment was last found running at, and when.
+#[derive(Debug, Default)]
+struct Last(Mutex<BTreeMap<Named, (SocketAddr, Instant)>>);
+
+impl Last {
+	/// What containerd answered of a deployment kept, its address while it runs, nothing else.
+	fn found(&self, named: Named, found: Found, at: Instant) {
+		let mut last = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+		match found {
+			Found::Running(address) => last.insert(named, (address, at)),
+			Found::Down | Found::Absent => last.remove(&named),
+		};
+	}
+
+	/// The address last found, where it was found within [`KEPT`] of `at`.
+	fn recalled(&self, named: Named, at: Instant) -> Option<SocketAddr> {
+		let last = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+		let (address, found) = last.get(&named)?;
+		(at.saturating_duration_since(*found) <= KEPT).then_some(*address)
+	}
+}
+
 /// What finds a deployment from containerd's labels, in its binding's namespace as the driver names
-/// it, with no call to the driver.
-struct Labels<C>(C);
+/// it, with no call to the driver, and what it last found.
+struct Labels<C> {
+	containerd: C,
+	last: Last,
+}
 
 impl<C: Containerd + 'static> Find for Labels<C> {
-	/// Read at each request, as the container kind reads them at a start.
+	/// Read at each request, as the container kind reads them at a start; while containerd cannot
+	/// be reached, the address last found, never once containerd has said it is gone.
 	async fn find(&self, named: Named) -> Found {
 		let namespace = crate::listed::namespace(named.binding);
 		let runs = DeploymentRuns::App { id: named.app };
-		match self.0.list(&namespace).await {
-			Ok(listed) => match driver_machine_container::reached(&listed, &runs) {
-				Reached::Running(address) => address.parse().map_or(Found::Down, Found::Running),
-				Reached::Down => Found::Down,
-				Reached::Absent => Found::Absent,
-			},
+		match self.containerd.list(&namespace).await {
+			Ok(listed) => {
+				let found = match driver_machine_container::reached(&listed, &runs) {
+					Reached::Running(address) => address.parse().map_or(Found::Down, Found::Running),
+					Reached::Down => Found::Down,
+					Reached::Absent => Found::Absent,
+				};
+				self.last.found(named, found, Instant::now());
+				found
+			}
 			Err(Fault(why)) => {
-				eprintln!("entry {namespace}: {why}");
-				Found::Down
+				let recalled = self.last.recalled(named, Instant::now());
+				let from = if recalled.is_some() { ", the address last found taken" } else { "" };
+				eprintln!("entry {namespace}: {why}{from}");
+				recalled.map_or(Found::Down, Found::Running)
 			}
 		}
 	}
@@ -209,11 +254,7 @@ async fn forwarded<F>(
 
 /// Every request, whatever its method and path, handed to the deployment its host names, and one
 /// line to stderr once its head is answered.
-async fn entered<F: Find>(
-	State(entry): State<Arc<Entry<F>>>,
-	ConnectInfo(peer): ConnectInfo<SocketAddr>,
-	request: Request,
-) -> Response {
+async fn entered<F: Find>(entry: &Entry<F>, peer: SocketAddr, request: Request) -> Response {
 	// The challenge path of RFC vr5lw is not answered here yet, RFC n0o4l.
 	let started = Instant::now();
 	let host = host(&request);
@@ -222,7 +263,7 @@ async fn entered<F: Find>(
 		(Some(named), Some(host)) => {
 			let name = format!("app-{}.b{}", named.app, named.binding);
 			let answer = match entry.find.find(named).await {
-				Found::Running(address) => forwarded(&entry, address, peer, &host, request).await,
+				Found::Running(address) => forwarded(entry, address, peer, &host, request).await,
 				Found::Down => own(StatusCode::SERVICE_UNAVAILABLE, "the deployment is not running\n"),
 				Found::Absent => own(StatusCode::NOT_FOUND, "nothing is deployed by this name\n"),
 			};
@@ -237,23 +278,126 @@ async fn entered<F: Find>(
 	answer
 }
 
-/// The entry served on its listener until the process is stopped.
+/// One connection served over HTTP/1.1 until it closes, or until it is told to stop, when the
+/// request it has begun, or the first it is sent within [`FIRST`], is answered before it closes.
+async fn connected<F: Find>(
+	entry: Arc<Entry<F>>,
+	stream: tokio::net::TcpStream,
+	peer: SocketAddr,
+	mut stopping: tokio::sync::watch::Receiver<bool>,
+) {
+	// A permit kept once any request has begun, so a stop waits for none on such a connection.
+	let begun = Arc::new(tokio::sync::Notify::new());
+	let began = Arc::clone(&begun);
+	let service = hyper::service::service_fn(move |request: Request<hyper::body::Incoming>| {
+		began.notify_one();
+		let entry = Arc::clone(&entry);
+		async move { Ok::<_, std::convert::Infallible>(entered(&entry, peer, request.map(Body::new)).await) }
+	});
+	// HTTP/1 alone, as a connection still reading which version it speaks is dropped at a stop.
+	let connection =
+		hyper::server::conn::http1::Builder::new().serve_connection(TokioIo::new(stream), service);
+	let mut connection = std::pin::pin!(connection);
+	let served = tokio::select! {
+		served = connection.as_mut() => served,
+		() = async { drop(stopping.wait_for(|stopped| *stopped).await) } => {
+			let ended = tokio::select! {
+				served = connection.as_mut() => Some(served),
+				() = begun.notified() => None,
+				() = tokio::time::sleep(FIRST) => None,
+			};
+			match ended {
+				Some(served) => served,
+				None => {
+					connection.as_mut().graceful_shutdown();
+					connection.await
+				}
+			}
+		}
+	};
+	if let Err(e) = served {
+		eprintln!("entry {peer}: {e}");
+	}
+}
+
+/// The entry served on its listener until `stopped` is ready, then no connection accepted and
+/// every one open answered and closed.
 pub(crate) async fn serve<F: Find>(
 	listener: tokio::net::TcpListener,
 	find: Arc<F>,
+	stopped: impl Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
 	let mut connector = HttpConnector::new();
 	connector.set_nodelay(true);
 	connector.set_connect_timeout(Some(CONNECTING));
 	let client = Client::builder(TokioExecutor::new()).build(connector);
-	let router = Router::new().fallback(entered::<F>).with_state(Arc::new(Entry { find, client }));
-	axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await
+	let entry = Arc::new(Entry { find, client });
+	let (stop, stopping) = tokio::sync::watch::channel(false);
+	// Each connection holds a receiver, so every one has closed once none is left.
+	let (closed, open) = tokio::sync::watch::channel(());
+	let mut stopped = std::pin::pin!(stopped);
+	loop {
+		let accepted = tokio::select! {
+			accepted = listener.accept() => accepted,
+			() = &mut stopped => break,
+		};
+		match accepted {
+			Ok((stream, peer)) => {
+				let (entry, stopping, open) = (Arc::clone(&entry), stopping.clone(), open.clone());
+				tokio::spawn(async move {
+					connected(entry, stream, peer, stopping).await;
+					drop(open);
+				});
+			}
+			// Out of descriptors or memory for a moment, as a connection closed before it is
+			// taken is no fault of the entry's.
+			Err(e) => {
+				eprintln!("entry: {e}");
+				tokio::time::sleep(Duration::from_millis(100)).await;
+			}
+		}
+	}
+	drop(listener);
+	drop(open);
+	let _ = stop.send(true);
+	closed.closed().await;
+	Ok(())
 }
 
-/// The entry served at its address until the process is stopped.
+/// The listener systemd passed, its socket unit's, held across a restart so a connection waits
+/// rather than being refused, or else one bound at `listen`, as `dev` and a test start it.
+async fn listener(listen: SocketAddr) -> std::io::Result<(tokio::net::TcpListener, &'static str)> {
+	match listenfd::ListenFd::from_env().take_tcp_listener(0)? {
+		Some(passed) => {
+			passed.set_nonblocking(true)?;
+			Ok((tokio::net::TcpListener::from_std(passed)?, ", its socket unit's"))
+		}
+		None => Ok((tokio::net::TcpListener::bind(listen).await?, "")),
+	}
+}
+
+/// SIGTERM, as systemd stops it, or SIGINT, as a terminal does.
+async fn terminated() {
+	use tokio::signal::unix::{SignalKind, signal};
+	match signal(SignalKind::terminate()) {
+		Ok(mut term) => {
+			tokio::select! {
+				_ = term.recv() => {}
+				_ = tokio::signal::ctrl_c() => {}
+			}
+		}
+		Err(e) => {
+			eprintln!("entry: SIGTERM not watched, {e}");
+			let _ = tokio::signal::ctrl_c().await;
+		}
+	}
+}
+
+/// The entry served at its address until the process is told to stop, then what it has begun
+/// answered within [`DRAIN`].
 pub(crate) async fn run(arguments: Arguments) -> ExitCode {
 	let listen = arguments.listen;
-	let listener = match tokio::net::TcpListener::bind(listen).await {
+	let (listener, whose) = match listener(listen).await {
 		Ok(listener) => listener,
 		Err(e) => {
 			eprintln!("entry {listen}: {e}");
@@ -261,11 +405,32 @@ pub(crate) async fn run(arguments: Arguments) -> ExitCode {
 		}
 	};
 	match listener.local_addr() {
-		Ok(address) => eprintln!("entry on {address}"),
+		Ok(address) => eprintln!("entry on {address}{whose}"),
 		Err(e) => eprintln!("entry on an address not read: {e}"),
 	}
-	let find = Arc::new(Labels(Socket { path: arguments.containerd }));
-	match serve(listener, find).await {
+	let find =
+		Arc::new(Labels { containerd: Socket { path: arguments.containerd }, last: Last::default() });
+	let (stop, mut stopping) = tokio::sync::watch::channel(false);
+	let stopped = async move {
+		let _ = stopping.wait_for(|stopped| *stopped).await;
+	};
+	let mut serving = std::pin::pin!(serve(listener, find, stopped));
+	let served = tokio::select! {
+		served = &mut serving => Some(served),
+		() = terminated() => None,
+	};
+	let served = match served {
+		Some(served) => served,
+		None => {
+			eprintln!("entry stopping, answering what it has begun");
+			let _ = stop.send(true);
+			tokio::time::timeout(DRAIN, serving).await.unwrap_or_else(|_| {
+				eprintln!("entry: requests still open after {}s, left", DRAIN.as_secs());
+				Ok(())
+			})
+		}
+	};
+	match served {
 		Ok(()) => ExitCode::SUCCESS,
 		Err(e) => {
 			eprintln!("entry: {e}");
@@ -286,7 +451,9 @@ mod tests {
 	use axum::extract::Request;
 	use axum::http::{HeaderMap, StatusCode};
 
-	use super::{Find, Found, Named, named, serve};
+	use std::time::{Duration, Instant};
+
+	use super::{Find, Found, KEPT, Last, Named, named, serve};
 
 	/// Deployments found as the test says, none but those named.
 	struct Stub(BTreeMap<Named, Found>);
@@ -351,7 +518,7 @@ mod tests {
 	/// The entry started on loopback over the deployments given, and its address.
 	async fn entry(found: BTreeMap<Named, Found>) -> SocketAddr {
 		let (listener, address) = listening().await;
-		tokio::spawn(serve(listener, Arc::new(Stub(found))));
+		tokio::spawn(serve(listener, Arc::new(Stub(found)), std::future::pending()));
 		address
 	}
 
@@ -418,5 +585,69 @@ mod tests {
 		}
 		let (head, _) = sent(at, "GET / HTTP/1.0\r\n\r\n".to_owned()).await;
 		assert!(head.starts_with("HTTP/1.0 404 "), "{head}");
+	}
+
+	#[test]
+	fn an_address_is_recalled_while_kept_and_never_once_containerd_says_it_is_gone() {
+		let last = Last::default();
+		let (at, address) = (Instant::now(), SocketAddr::from((Ipv4Addr::LOCALHOST, 8080)));
+		assert_eq!(last.recalled(of(1, 1), at), None);
+		last.found(of(1, 1), Found::Running(address), at);
+		assert_eq!(last.recalled(of(1, 1), at + KEPT), Some(address));
+		assert_eq!(last.recalled(of(1, 1), at + KEPT + Duration::from_millis(1)), None);
+		assert_eq!(last.recalled(of(1, 2), at), None);
+		for gone in [Found::Down, Found::Absent] {
+			last.found(of(1, 1), Found::Running(address), at);
+			last.found(of(1, 1), gone, at);
+			assert_eq!(last.recalled(of(1, 1), at), None, "{gone:?}");
+		}
+	}
+
+	#[tokio::test]
+	async fn a_request_begun_before_the_stop_is_answered_and_then_the_entry_ends() {
+		let (listener, upstream) = listening().await;
+		let slow = Router::new().fallback(|| async {
+			tokio::time::sleep(Duration::from_millis(300)).await;
+			"slow"
+		});
+		tokio::spawn(async move { axum::serve(listener, slow).await });
+		let (listener, at) = listening().await;
+		let (stop, mut stopping) = tokio::sync::watch::channel(false);
+		let stopped = async move {
+			let _ = stopping.wait_for(|s| *s).await;
+		};
+		let found = Arc::new(Stub(BTreeMap::from([(of(1, 1), Found::Running(upstream))])));
+		let serving = tokio::spawn(serve(listener, found, stopped));
+		let asked = tokio::spawn(sent(at, get("app-1.b1")));
+		tokio::time::sleep(Duration::from_millis(100)).await;
+		stop.send(true).unwrap();
+		let (head, body) = asked.await.unwrap();
+		assert!(head.starts_with("HTTP/1.1 200 "), "{head}");
+		assert_eq!(body, "slow");
+		tokio::time::timeout(Duration::from_secs(2), serving).await.unwrap().unwrap().unwrap();
+	}
+
+	#[tokio::test]
+	async fn a_connection_open_at_the_stop_is_answered_its_first_request() {
+		let (listener, at) = listening().await;
+		let (stop, mut stopping) = tokio::sync::watch::channel(false);
+		let stopped = async move {
+			let _ = stopping.wait_for(|s| *s).await;
+		};
+		let serving = tokio::spawn(serve(listener, Arc::new(Stub(BTreeMap::new())), stopped));
+		let mut stream = TcpStream::connect(at).unwrap();
+		tokio::time::sleep(Duration::from_millis(100)).await;
+		stop.send(true).unwrap();
+		tokio::time::sleep(Duration::from_millis(100)).await;
+		let read = tokio::task::spawn_blocking(move || {
+			stream.write_all(get("localhost").as_bytes()).unwrap();
+			let mut read = String::new();
+			stream.read_to_string(&mut read).unwrap();
+			read
+		})
+		.await
+		.unwrap();
+		assert!(read.starts_with("HTTP/1.1 404 "), "{read}");
+		tokio::time::timeout(Duration::from_secs(2), serving).await.unwrap().unwrap().unwrap();
 	}
 }
