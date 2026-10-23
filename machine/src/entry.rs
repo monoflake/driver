@@ -198,14 +198,20 @@ fn unhopped(headers: &mut HeaderMap) {
 	}
 }
 
-/// The host a request was sent to, its `X-Forwarded-Host`, else its target's authority, else its
-/// `Host`, as workerd's fetch writes the gateway's host into the first alone, RFC rxmd9.
+/// The host a request was sent to, the first of its `X-Forwarded-Host`, its target's authority and
+/// its `Host` that names a deployment, else the first it has, RFC rxmd9.
 fn host(request: &Request) -> Option<String> {
 	// Trusted, as only loopback, the private address and the tunnel reach it, never the public.
 	let text = |name| request.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_owned);
-	text(FORWARDED_HOST)
-		.or_else(|| request.uri().authority().map(|a| a.as_str().to_owned()))
-		.or_else(|| text(header::HOST))
+	// workerd writes the gateway's host into the first alone, and an edge writes its own name there.
+	let given = [
+		text(FORWARDED_HOST),
+		request.uri().authority().map(|a| a.as_str().to_owned()),
+		text(header::HOST),
+	];
+	let mut given = given.into_iter().flatten().peekable();
+	let first = given.peek().cloned();
+	given.find(|host| named(host).is_some()).or(first)
 }
 
 /// The request carried to the deployment at its address, as it came but for the headers of its
@@ -496,7 +502,7 @@ mod tests {
 	}
 
 	#[test]
-	fn x_forwarded_host_names_the_deployment_before_the_authority_and_host() {
+	fn the_first_forwarded_name_naming_a_deployment_is_taken() {
 		let forwarded = Request::builder()
 			.uri("http://10.200.0.1:36879/")
 			.header("host", "10.200.0.1:36879")
@@ -510,6 +516,13 @@ mod tests {
 			.body(axum::body::Body::empty())
 			.unwrap();
 		assert_eq!(host(&hosted).as_deref().and_then(named), Some(of(3, 2)));
+		let edged = Request::builder()
+			.uri("/")
+			.header("host", "app-4.b5")
+			.header("x-forwarded-host", "tunnel.example.com")
+			.body(axum::body::Body::empty())
+			.unwrap();
+		assert_eq!(host(&edged).as_deref().and_then(named), Some(of(5, 4)));
 	}
 
 	/// What the stub upstream was sent, written back as its body, and its own header and status.
