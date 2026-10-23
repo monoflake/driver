@@ -26,7 +26,10 @@ first container rather than its first item, and what an apply forgot of a bindin
 its list's file. Of item 3 the `container` item alone is built, made at once at the address the
 driver listens on, and the other three still wait on `todo!("4elqc")`. A deployment is kept by
 containerd's labels as before, and a container whose task a reboot ended is started again when the
-driver starts. Items 4, 6 and 7 stand as written.
+driver starts. Items 4, 6 and 7 stand as written. Run against the samples on a test machine, RFC
+n0o4l's sixth step, a list holding an item other than a container reaches `todo!("4elqc")` before
+the bound is asked, so the sample of a list the host cannot hold answers `fault`, not
+`beyond_host`.
 
 The questions, each as it was asked:
 
