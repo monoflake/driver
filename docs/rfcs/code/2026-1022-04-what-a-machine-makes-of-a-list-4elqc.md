@@ -19,7 +19,7 @@ program does all of that. What it cannot do without deciding is what a machine m
 so an `apply` naming any item new or changed waits on this RFC, `todo!("4elqc")` in
 `machine/src/listed.rs`, and is answered `fault` with that message.
 
-Built provisionally for RFC n0o4l's second step, in commit `pending`, and open to what running
+Built provisionally for RFC n0o4l's second step, in monoflake/driver@cfdb8e31, and open to what running
 shows. Items 1, 2, 5 and 8 are built as the Options propose, the bound counting a list's
 `container` items alone against the machine's cores and memory, the qgroup made with the binding's
 first container rather than its first item, and what an apply forgot of a binding's tokens kept in
