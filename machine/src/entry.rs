@@ -1,7 +1,9 @@
 //! The entry, a request for a host handed to the deployment its name is bound to and carried
-//! unread both ways, RFCs vr5lw and n0o4l.
+//! unread both ways, a process of its own reading containerd alone, RFCs vr5lw, n0o4l and rmll5.
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::PathBuf;
+use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -11,14 +13,30 @@ use axum::extract::{ConnectInfo, Request, State};
 use axum::http::uri::{Authority, Scheme};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri, Version, header};
 use axum::response::{IntoResponse, Response};
-use driver_machine_container::Deployments as _;
+use driver_machine_container::{Containerd, Fault, Reached, Socket};
 use driver_machine_management::Binding;
-use envelope::contracts::{DeploymentOf, DeploymentRuns, DeploymentState};
+use envelope::contracts::DeploymentRuns;
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 
-use crate::Driver;
+/// The entry's port, ENTRY on a keypad, as the driver's is DRIVE.
+const PORT: u16 = 36879;
+
+/// Where the entry listens unless told, loopback alone, so only what is put in front of it reaches
+/// it and nothing is opened by a default.
+const LISTEN: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), PORT);
+
+/// What the entry is started with, its address and containerd's socket, and nothing of the driver.
+#[derive(Debug, Clone, clap::Args)]
+pub(crate) struct Arguments {
+	/// The address and port it listens on, plain HTTP, TLS the tunnel's in front of it now.
+	#[arg(long, value_name = "address:port", default_value_t = LISTEN)]
+	listen: SocketAddr,
+	/// containerd's socket.
+	#[arg(long, value_name = "socket", default_value = "/run/containerd/containerd.sock")]
+	containerd: PathBuf,
+}
 
 /// How long a deployment's address is given to accept a connection before it is taken as down.
 const CONNECTING: Duration = Duration::from_secs(5);
@@ -87,25 +105,25 @@ pub(crate) trait Find: Send + Sync + 'static {
 	fn find(&self, named: Named) -> impl Future<Output = Found> + Send;
 }
 
-impl Find for Driver {
-	/// Read from containerd's labels at each request, as the container kind reads them at a start.
+/// What finds a deployment from containerd's labels, in its binding's namespace as the driver names
+/// it, with no call to the driver.
+struct Labels<C>(C);
+
+impl<C: Containerd + 'static> Find for Labels<C> {
+	/// Read at each request, as the container kind reads them at a start.
 	async fn find(&self, named: Named) -> Found {
-		let made = self.lists.lock().await.get(&named.binding).and_then(|l| l.made.clone());
-		let Some(made) = made else {
-			return Found::Absent;
-		};
-		let of = DeploymentOf { runs: DeploymentRuns::App { id: named.app } };
-		match self.functions.containers.describe(&made, of).await {
-			Ok(described) => match described.state {
-				DeploymentState::Running { address, .. } => {
-					address.parse().map_or(Found::Down, Found::Running)
-				}
-				DeploymentState::Making | DeploymentState::Stopped | DeploymentState::Failed { .. } => {
-					Found::Down
-				}
+		let namespace = crate::listed::namespace(named.binding);
+		let runs = DeploymentRuns::App { id: named.app };
+		match self.0.list(&namespace).await {
+			Ok(listed) => match driver_machine_container::reached(&listed, &runs) {
+				Reached::Running(address) => address.parse().map_or(Found::Down, Found::Running),
+				Reached::Down => Found::Down,
+				Reached::Absent => Found::Absent,
 			},
-			Err(refused) if refused.reason == "not_found" => Found::Absent,
-			Err(_) => Found::Down,
+			Err(Fault(why)) => {
+				eprintln!("entry {namespace}: {why}");
+				Found::Down
+			}
 		}
 	}
 }
@@ -230,6 +248,30 @@ pub(crate) async fn serve<F: Find>(
 	let client = Client::builder(TokioExecutor::new()).build(connector);
 	let router = Router::new().fallback(entered::<F>).with_state(Arc::new(Entry { find, client }));
 	axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await
+}
+
+/// The entry served at its address until the process is stopped.
+pub(crate) async fn run(arguments: Arguments) -> ExitCode {
+	let listen = arguments.listen;
+	let listener = match tokio::net::TcpListener::bind(listen).await {
+		Ok(listener) => listener,
+		Err(e) => {
+			eprintln!("entry {listen}: {e}");
+			return ExitCode::FAILURE;
+		}
+	};
+	match listener.local_addr() {
+		Ok(address) => eprintln!("entry on {address}"),
+		Err(e) => eprintln!("entry on an address not read: {e}"),
+	}
+	let find = Arc::new(Labels(Socket { path: arguments.containerd }));
+	match serve(listener, find).await {
+		Ok(()) => ExitCode::SUCCESS,
+		Err(e) => {
+			eprintln!("entry: {e}");
+			ExitCode::FAILURE
+		}
+	}
 }
 
 #[cfg(test)]

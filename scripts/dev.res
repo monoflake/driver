@@ -12,6 +12,8 @@ external spawnSync: (string, array<string>, spawnOptions) => spawned = "spawnSyn
 let directory = "/var/lib/monoflake/dev"
 let installed = `${directory}/${Archive.package}`
 let service = "monoflake-driver"
+/** The entry's unit, running the same binary, RFC rmll5. */
+let entry = "monoflake-entry"
 /** driver-machine's port, its `PORT`, asked on the machine itself. */
 let address = "http://localhost:37483"
 
@@ -112,13 +114,23 @@ let copied = (host, binary) =>
     Ok(installed)
   }
 
+/** The driver restarted on the binary copied in, then the entry where the machine runs one, each
+ * waited on until active. */
+let restart = `systemctl restart ${service} || exit 1
+units=${service}
+if systemctl cat ${entry} > /dev/null 2>&1; then systemctl restart ${entry} || exit 1; units="$units ${entry}"; fi
+for _ in $(seq 50); do
+  all=1; for u in $units; do systemctl is-active --quiet "$u" || all=; done
+  [ -n "$all" ] && { echo "$units"; exit; }
+  sleep 0.2
+done
+exit 1
+`
+
 let restarted = host =>
-  switch remote(
-    host,
-    `systemctl restart ${service} && for _ in $(seq 50); do systemctl is-active --quiet ${service} && exit; sleep 0.2; done; exit 1`,
-  ) {
-  | Some(_) => Ok(service)
-  | None => Error(`${service} not active, journalctl -u ${service} says why`)
+  switch remote(host, restart) {
+  | Some(units) => Ok(units->String.split(" ")->Array.join(" and "))
+  | None => Error(`${service} or ${entry} not active, journalctl -u <unit> says why`)
   }
 
 /** A call with no token refused `denied`, 403 by `answer.rs`, which proves it serves while needing
@@ -140,7 +152,7 @@ let once = host => {
     // The release profile, a change rebuilt in seconds, so the machine runs what a release would.
     ->Result.flatMap(target => timed("build", () => Archive.built(target), _ => "release profile"))
     ->Result.flatMap(binary => timed("copy", () => copied(host, binary), path => `to ${path}`))
-    ->Result.flatMap(_ => timed("restart", () => restarted(host), unit => `${unit} active`))
+    ->Result.flatMap(_ => timed("restart", () => restarted(host), units => `${units} active`))
     ->Result.flatMap(_ => timed("check", () => answered(host), code => `no token answered ${code}`))
   let took = ((Date.now() -. started) /. 1000.)->Float.toFixed(~digits=1)
   switch result {
@@ -184,7 +196,7 @@ if isMain {
     Console.log(`would ask ${host} its architecture by uname -m`)
     Console.log(`would run cargo zigbuild --release --locked -p ${Archive.package} --target <it>`)
     Console.log(`would rsync it to ${host}:${installed}.new and rename it into place`)
-    Console.log(`would restart ${service} there and wait until it is active`)
+    Console.log(`would restart ${service} there, then ${entry} where it runs, and wait on both`)
     Console.log(`would POST ${address}/management/describe there with no token, and want 403`)
     if watch {
       Console.log(`would do it again on every save under ${watched->Array.join(", ")}`)

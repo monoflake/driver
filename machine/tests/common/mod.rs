@@ -64,8 +64,6 @@ impl Started {
 		command
 			.arg("--listen")
 			.arg(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)).to_string())
-			.arg("--entry")
-			.arg(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)).to_string())
 			.args(["--state".as_ref(), at("state").as_os_str()])
 			.args(["--containerd".as_ref(), at("containerd.sock").as_os_str()])
 			.args(["--runc".as_ref(), at("runc").as_os_str()])

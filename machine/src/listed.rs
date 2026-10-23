@@ -35,11 +35,16 @@ impl Listed {
 	}
 }
 
-/// What the machine makes of a binding, its namespace `b<binding>` and its qgroup `1/<binding>`,
-/// as RFC 4elqc proposes.
+/// A binding's containerd namespace, `b<binding>`, as RFC 4elqc proposes, which the entry reads.
+pub(crate) fn namespace(binding: Binding) -> String {
+	format!("b{binding}")
+}
+
+/// What the machine makes of a binding, its namespace and its qgroup `1/<binding>`, as RFC 4elqc
+/// proposes.
 fn named(binding: Binding) -> driver_machine_container::Binding {
 	driver_machine_container::Binding {
-		namespace: format!("b{binding}"),
+		namespace: namespace(binding),
 		qgroup: format!("1/{binding}"),
 		capacities: BTreeMap::new(),
 	}

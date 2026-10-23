@@ -16,8 +16,9 @@ the roles with it; [docs/rfcs/](docs/rfcs/) holds what is decided here alone.
 ## The tree
 
 ```
-machine/    driver(machine): the program driver-machine, RFC 8c0rg, and beneath it each kind's
-            crate, container/ and management/ now
+machine/    driver(machine): the program driver-machine, RFC 8c0rg, the entry its command `entry`
+            run as a unit of its own, RFC rmll5, and beneath it each kind's crate, container/ and
+            management/ now
 scripts/    archive.res, the program built static for both architectures and archived; dev.res, one
             built for a test machine, copied in, restarted and checked
 .github/    release.yml and release/, what CI alone runs, its version and what it releases

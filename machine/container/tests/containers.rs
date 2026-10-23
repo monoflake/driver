@@ -11,8 +11,8 @@ use std::sync::{Arc, Mutex};
 
 use driver_machine_container::{
 	Attachment, Binding, Capacity, Chosen, Containerd, Containers, Deployments, Fault, Fetch, Host,
-	Hosted, Image, ImageConfig, Listed, Mount, Network, Quota, Refused, Runtimes, Spec, Task,
-	Unfetched,
+	Hosted, Image, ImageConfig, Listed, Mount, Network, Quota, Reached, Refused, Runtimes, Spec,
+	Task, Unfetched, reached,
 };
 use envelope::contracts::{
 	Architecture, DeploymentArtifact, DeploymentDeploy, DeploymentDescribed, DeploymentForm,
@@ -660,6 +660,18 @@ async fn a_deployment_stopped_is_stopped_and_resumed_runs_again() {
 		"resuming makes its network where it is gone"
 	);
 	assert_eq!(log.iter().filter(|l| l.starts_with("start ")).count(), 2);
+}
+
+#[tokio::test]
+async fn the_labels_alone_say_where_a_deployment_runs_as_the_entry_reads_them() {
+	let (driver, _) = driver("reached", shell(), false);
+	let listed = async || driver.containerd.list("b1").await.unwrap();
+	assert_eq!(reached(&listed().await, &app()), Reached::Absent);
+	driver.deploy(&binding(), echo()).await.unwrap();
+	assert_eq!(reached(&listed().await, &app()), Reached::Running("10.88.0.2:8080".into()));
+	assert_eq!(reached(&listed().await, &DeploymentRuns::App { id: 2 }), Reached::Absent);
+	driver.stop(&binding(), of()).await.unwrap();
+	assert_eq!(reached(&listed().await, &app()), Reached::Down);
 }
 
 #[tokio::test]

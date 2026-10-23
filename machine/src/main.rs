@@ -1,5 +1,5 @@
-//! `driver-machine`, serving a machine's management and kinds at `POST /{interface}/{operation}`,
-//! RFCs 8c0rg and vr5lw. This file is its interface, the model's, `docs/code.md`.
+//! `driver-machine`, serving a machine's management and kinds, and as its command `entry` the
+//! entry, RFCs 8c0rg, vr5lw and rmll5; this file is its interface, the model's, `docs/code.md`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::{Arc, RwLock};
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use driver_machine_container::{Bridge, Btrfs, Containers, Https, Refused, Socket};
 use driver_machine_function::Functions;
 use driver_machine_management::{Binding, Tokens};
@@ -29,13 +29,6 @@ const PORT: u16 = 37483;
 /// the tailnet's interface alone.
 const LISTEN: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), PORT);
 
-/// The entry's port, ENTRY on a keypad, as the driver's is DRIVE.
-const ENTRY_PORT: u16 = 36879;
-
-/// Where the entry listens unless told, loopback alone, so only what is put in front of it reaches
-/// it and nothing is opened by a default.
-const ENTRY: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), ENTRY_PORT);
-
 /// The palette its help is painted in, cargo's, the workspace's `docs/toolchain.md`.
 const STYLES: clap::builder::Styles = clap::builder::Styles::styled()
 	.header(clap::builder::styling::AnsiColor::Green.on_default().bold())
@@ -46,17 +39,31 @@ const STYLES: clap::builder::Styles = clap::builder::Styles::styled()
 	.valid(clap::builder::styling::AnsiColor::Cyan.on_default().bold())
 	.invalid(clap::builder::styling::AnsiColor::Yellow.on_default().bold());
 
-/// What it is started with, its address, its bindings' tokens, its state, and what the container
-/// kind reaches, each named as `driver-machine-container` names it.
+/// The program, the driver unless a command names the entry.
 #[derive(Debug, Clone, Parser)]
 #[command(version, about, styles = STYLES)]
+#[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
+struct Program {
+	#[command(subcommand)]
+	command: Option<Command>,
+	#[command(flatten)]
+	driver: Option<Arguments>,
+}
+
+/// What it runs in place of the driver.
+#[derive(Debug, Clone, Subcommand)]
+enum Command {
+	/// The entry alone, a request for a host handed to its deployment, found from containerd.
+	Entry(entry::Arguments),
+}
+
+/// What the driver is started with, its address, its bindings' tokens, its state, and what the
+/// container kind reaches, each named as `driver-machine-container` names it.
+#[derive(Debug, Clone, clap::Args)]
 struct Arguments {
 	/// The address and port it listens on, plain HTTP, TLS a reverse proxy's.
 	#[arg(long, value_name = "address:port", default_value_t = LISTEN)]
 	listen: SocketAddr,
-	/// The address and port the entry listens on, plain HTTP, TLS the tunnel's in front of it now.
-	#[arg(long, value_name = "address:port", default_value_t = ENTRY)]
-	entry: SocketAddr,
 	/// A binding token's file, `<id>.<secret>`, read at start and again on SIGHUP; repeated.
 	#[arg(long = "bindings", value_name = "file")]
 	bindings: Vec<PathBuf>,
@@ -169,5 +176,13 @@ struct Driver {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-	served::run(Arguments::parse()).await
+	match Program::parse() {
+		Program { command: Some(Command::Entry(arguments)), .. } => entry::run(arguments).await,
+		Program { driver: Some(arguments), .. } => served::run(arguments).await,
+		Program { command: None, driver: None } => {
+			let mut program = <Program as clap::CommandFactory>::command();
+			let missing = clap::error::ErrorKind::MissingRequiredArgument;
+			program.error(missing, "the driver's arguments, or the command entry").exit()
+		}
+	}
 }

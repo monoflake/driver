@@ -19,7 +19,7 @@ use sha2::{Digest as _, Sha256};
 
 use crate::{
 	Binding, Chosen, Containerd, Containers, Deployments, Fault, Fetch, Host, Hosted, Image, Listed,
-	Network, Quota, Refused, Restart, Runtimes, Spec, Task, Unfetched,
+	Network, Quota, Reached, Refused, Restart, Runtimes, Spec, Task, Unfetched,
 };
 use labels::Kept;
 use secrets::{KeyFile, Places};
@@ -239,6 +239,20 @@ fn of_runs(listed: Vec<Listed>, runs: &str) -> Vec<Listed> {
 /// The one container a deployment is answered by, a running one before any other.
 fn chosen(mine: &[Listed]) -> Option<&Listed> {
 	mine.iter().find(|l| l.task == Some(Task::Running)).or_else(|| mine.first())
+}
+
+/// Where a deployment runs, its chosen container read as `state` reads a running one.
+pub(crate) fn reached(listed: &[Listed], runs: &DeploymentRuns) -> Reached {
+	let runs = labels::runs(runs);
+	let mine: Vec<Listed> =
+		listed.iter().filter(|l| l.labels.get(labels::RUNS) == Some(&runs)).cloned().collect();
+	match chosen(&mine) {
+		None => Reached::Absent,
+		Some(l) if l.task == Some(Task::Running) => {
+			Kept::read(&l.labels).map_or(Reached::Down, |kept| Reached::Running(kept.address))
+		}
+		Some(_) => Reached::Down,
+	}
 }
 
 /// A container's state, as its task and its labels say, and whether its stop was asked for.

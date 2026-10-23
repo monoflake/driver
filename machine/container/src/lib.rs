@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use envelope::contracts::{
 	DeploymentArtifact, DeploymentDeleted, DeploymentDeploy, DeploymentDescribed,
-	DeploymentIsolation, DeploymentOf, DeploymentRuntime,
+	DeploymentIsolation, DeploymentOf, DeploymentRuns, DeploymentRuntime,
 };
 
 mod containerd;
@@ -219,6 +219,25 @@ pub struct Listed {
 	pub labels: BTreeMap<String, String>,
 	/// Its task.
 	pub task: Option<Task>,
+}
+
+/// Where a deployment runs as its containers' labels say, read from containerd alone, so the entry
+/// finds it with no call to the driver, RFC rmll5.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Reached {
+	/// Running, at the address its labels hold.
+	Running(String),
+	/// Held, and not running now.
+	Down,
+	/// No container runs it.
+	Absent,
+}
+
+/// Where a deployment runs, of the containers listed in its binding's namespace, a running one
+/// chosen before any other as `describe` chooses.
+#[must_use]
+pub fn reached(listed: &[Listed], runs: &DeploymentRuns) -> Reached {
+	containers::reached(listed, runs)
 }
 
 /// What the driver asks of containerd, over its gRPC API by `containerd-client`; implemented for

@@ -1,7 +1,7 @@
 [package]
 name = "driver-machine"
 version = "0.0.0"
-description = "driver(machine), the one program a machine runs as its driver, serving its management and its kinds over plain HTTP, RFC 8c0rg"
+description = "driver(machine), the one program a machine runs as its driver, serving its management and its kinds over plain HTTP, and as its command entry the entry, RFCs 8c0rg and rmll5"
 edition.workspace = true
 publish.workspace = true
 license = "MIT OR Apache-2.0"
