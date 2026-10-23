@@ -1,0 +1,174 @@
+/***
+ * driver-machine built for a test machine's architecture, copied in, restarted and asked, RFC
+ * n0o4l; each phase is timed, and `--watch` does it again on every save.
+ */
+
+type spawned = {status: Nullable.t<int>, stdout: Nullable.t<string>}
+type spawnOptions = {cwd: string, stdio: array<string>, encoding: string}
+@module("node:child_process")
+external spawnSync: (string, array<string>, spawnOptions) => spawned = "spawnSync"
+@val external isMain: bool = "import.meta.main"
+
+let directory = "/var/lib/monoflake/dev"
+let installed = `${directory}/${Archive.package}`
+let service = "monoflake-driver"
+/** driver-machine's port, its `PORT`, asked on the machine itself. */
+let address = "http://localhost:37483"
+
+/** What the program is built from, the platform's crates and contracts among it. */
+let watched = [
+  "machine",
+  "Cargo.toml",
+  "Cargo.lock",
+  "../platform/code",
+  "../platform/model/contracts.json",
+]
+
+/** One connection to the machine, kept open between the phases so each costs no handshake. */
+let ssh = [
+  "-o",
+  "BatchMode=yes",
+  "-o",
+  "ControlMaster=auto",
+  "-o",
+  // Under the home, as the system's own temporary directory is too long a path for a socket.
+  "ControlPath=~/.ssh/monoflake-dev-%C",
+  "-o",
+  "ControlPersist=120",
+]
+
+/** A command run on the machine, its error shown, and what it wrote, or none when it failed. */
+let remote = (host, command) => {
+  let ran = spawnSync(
+    "ssh",
+    [...ssh, host, command],
+    {cwd: Archive.root, stdio: ["ignore", "pipe", "inherit"], encoding: "utf8"},
+  )
+  ran.status->Nullable.toOption == Some(0)
+    ? Some(ran.stdout->Nullable.toOption->Option.getOr("")->String.trim)
+    : None
+}
+
+/** A phase run and its time printed, beside what `said` makes of its value or why it failed. */
+let timed = (name, run, said) => {
+  let started = Date.now()
+  let result = run()
+  let took = ((Date.now() -. started) /. 1000.)->Float.toFixed(~digits=1)
+  switch result {
+  | Ok(value) => Console.log(`dev: ${name} ${took}s, ${said(value)}`)
+  | Error(why) => Console.error(`dev: ${name} failed after ${took}s, ${why}`)
+  }
+  result
+}
+
+/** The target built for the machine's architecture, as `uname -m` names it; the binary copied in
+ * last is kept beside it as `.new`, so rsync sends only what changed. */
+let asked = host =>
+  switch remote(
+    host,
+    `uname -m && mkdir -p ${directory} && { [ ! -f ${installed} ] || cp ${installed} ${installed}.new; }`,
+  ) {
+  | None => Error(`${host} did not answer`)
+  | Some(machine) =>
+    switch Archive.targets->Array.find(((_, named, _)) => named == machine) {
+    | Some(target) => Ok(target)
+    | None => Error(`${host} is ${machine}, which no target builds`)
+    }
+  }
+
+let copied = (host, binary) =>
+  if (
+    !Archive.ran(
+      "rsync",
+      ["-tz", "-e", ["ssh", ...ssh]->Array.join(" "), binary, `${host}:${installed}.new`],
+    )
+  ) {
+    Error("rsync failed")
+  } else if (
+    remote(host, `chmod 755 ${installed}.new && mv -f ${installed}.new ${installed}`) == None
+  ) {
+    Error(`${installed} not renamed into place`)
+  } else {
+    Ok(installed)
+  }
+
+let restarted = host =>
+  switch remote(
+    host,
+    `systemctl restart ${service} && for _ in $(seq 50); do systemctl is-active --quiet ${service} && exit; sleep 0.2; done; exit 1`,
+  ) {
+  | Some(_) => Ok(service)
+  | None => Error(`${service} not active, journalctl -u ${service} says why`)
+  }
+
+/** A call with no token refused `denied`, 403 by `answer.rs`, which proves it serves while needing
+ * no token to ask. */
+let answered = host => {
+  let asked = `curl -s -o /dev/null -w '%{http_code}' -X POST ${address}/management/describe`
+  let waited = `for _ in $(seq 50); do c=$(${asked}) && [ "$c" != 000 ] && break; sleep 0.2; done; echo "$c"`
+  switch remote(host, waited) {
+  | Some("403") => Ok("403")
+  | Some(code) => Error(`POST /management/describe with no token answered ${code}, not 403`)
+  | None => Error(`${host} did not answer`)
+  }
+}
+
+let once = host => {
+  let started = Date.now()
+  let result =
+    timed("ask", () => asked(host), ((_, machine, _)) => machine)
+    // The release profile, a change rebuilt in seconds, so the machine runs what a release would.
+    ->Result.flatMap(target => timed("build", () => Archive.built(target), _ => "release profile"))
+    ->Result.flatMap(binary => timed("copy", () => copied(host, binary), path => `to ${path}`))
+    ->Result.flatMap(_ => timed("restart", () => restarted(host), unit => `${unit} active`))
+    ->Result.flatMap(_ => timed("check", () => answered(host), code => `no token answered ${code}`))
+  let took = ((Date.now() -. started) /. 1000.)->Float.toFixed(~digits=1)
+  switch result {
+  | Ok(_) => Console.log(`dev: ${host} serves the build, ${took}s in all`)
+  | Error(_) => Base.process->Base.setExitCode(1)
+  }
+}
+
+/** watchexec runs this again without `--watch`, a save during a run queued for after it. */
+let watching = host =>
+  Archive.ran(
+    "watchexec",
+    [
+      // The project this repository, as the workspace's ignore holds everything under repos/.
+      "--project-origin",
+      ".",
+      ...watched->Array.flatMap(path => ["--watch", path]),
+      "--exts",
+      "rs,toml,lock,json",
+      "--on-busy-update",
+      "queue",
+      "--",
+      "node",
+      "scripts/dev.res.mjs",
+      host,
+    ],
+  )
+
+let dry = Base.args->Array.includes("--dry-run")
+let watch = Base.args->Array.includes("--watch")
+if isMain {
+  switch Base.args->Array.slice(~start=2)->Array.find(a => !(a->String.startsWith("--"))) {
+  | None =>
+    Console.error("dev: name the machine as ssh reaches it, `dev root@buf`")
+    Base.process->Base.setExitCode(1)
+  | Some(host) if dry =>
+    Console.log(`would ask ${host} its architecture by uname -m`)
+    Console.log(`would run cargo zigbuild --release --locked -p ${Archive.package} --target <it>`)
+    Console.log(`would rsync it to ${host}:${installed}.new and rename it into place`)
+    Console.log(`would restart ${service} there and wait until it is active`)
+    Console.log(`would POST ${address}/management/describe there with no token, and want 403`)
+    if watch {
+      Console.log(`would do it again on every save under ${watched->Array.join(", ")}`)
+    }
+  | Some(host) if watch =>
+    if !watching(host) {
+      Base.process->Base.setExitCode(1)
+    }
+  | Some(host) => once(host)
+  }
+}

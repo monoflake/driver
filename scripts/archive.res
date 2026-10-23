@@ -98,44 +98,54 @@ let described = binary =>
   ->Nullable.toOption
   ->Option.getOr("")
 
+/** Where cargo writes the program built for a target. */
+let binary = target => join([root, "target", target, "release", package])
+
+/** The program built for one target, and held static and of its machine, its path or why not. */
+let built = ((target, _, named)) => {
+  let binary = binary(target)
+  if !ran("cargo", ["zigbuild", "--release", "--locked", "-p", package, "--target", target]) {
+    Error(`${target}: cargo zigbuild failed`)
+  } else {
+    let said = described(binary)
+    said->String.includes("statically linked") && said->String.includes(named)
+      ? Ok(binary)
+      : Error(`${binary}: ${said->String.trim}, not a static ${named} binary`)
+  }
+}
+
 /** One target built, held static and of its machine, and archived, its path or why not. */
 let archived = (~version, (target, machine, named)) => {
   let directory = join([root, "target", "archives"])
   let name = `${package}-${version}-linux-${machine}`
   let archive = join([directory, `${name}.tar.gz`])
-  let binary = join([root, "target", target, "release", package])
-  if !ran("cargo", ["zigbuild", "--release", "--locked", "-p", package, "--target", target]) {
-    Error(`${target}: cargo zigbuild failed`)
-  } else {
-    let said = described(binary)
-    if !(said->String.includes("statically linked") && said->String.includes(named)) {
-      Error(`${binary}: ${said->String.trim}, not a static ${named} binary`)
-    } else {
-      let staged = join([directory, name])
-      rmSync(staged, {recursive: true, force: true})
-      mkdirSync(staged, {recursive: true})
-      copyFileSync(binary, join([staged, package]))
-      chmodSync(join([staged, package]), 0o755)
-      ["LICENSE-MIT", "LICENSE-APACHE"]->Array.forEach(text => {
-        copyFileSync(join([root, text]), join([staged, text]))
-        chmodSync(join([staged, text]), 0o644)
-      })
-      // macOS's tar writes no metadata of its own beside each file with this set.
-      let quiet = copy(env)
-      quiet->Dict.set("COPYFILE_DISABLE", "1")
-      let files = [package, "LICENSE-MIT", "LICENSE-APACHE"]
-      // Every file dated the epoch, so a binary built again the same gives the same archive.
-      files->Array.forEach(file => utimesSync(join([staged, file]), 0, 0))
-      let tar = join([directory, `${name}.tar`])
-      let packed = ran("tar", ["-cf", tar, ...plain(), "-C", staged, ...files], ~environment=quiet)
-      rmSync(staged, {recursive: true, force: true})
-      if packed {
-        // zlib's header carries no time or name, as either tar's own gzip might.
-        writeBytes(archive, gzipSync(readBytes(tar)))
-      }
-      rmSync(tar, {force: true, recursive: false})
-      packed ? Ok(archive) : Error(`${archive}: tar failed`)
+  switch built((target, machine, named)) {
+  | Error(_) as failed => failed
+  | Ok(binary) =>
+    let staged = join([directory, name])
+    rmSync(staged, {recursive: true, force: true})
+    mkdirSync(staged, {recursive: true})
+    copyFileSync(binary, join([staged, package]))
+    chmodSync(join([staged, package]), 0o755)
+    ["LICENSE-MIT", "LICENSE-APACHE"]->Array.forEach(text => {
+      copyFileSync(join([root, text]), join([staged, text]))
+      chmodSync(join([staged, text]), 0o644)
+    })
+    // macOS's tar writes no metadata of its own beside each file with this set.
+    let quiet = copy(env)
+    quiet->Dict.set("COPYFILE_DISABLE", "1")
+    let files = [package, "LICENSE-MIT", "LICENSE-APACHE"]
+    // Every file dated the epoch, so a binary built again the same gives the same archive.
+    files->Array.forEach(file => utimesSync(join([staged, file]), 0, 0))
+    let tar = join([directory, `${name}.tar`])
+    let packed = ran("tar", ["-cf", tar, ...plain(), "-C", staged, ...files], ~environment=quiet)
+    rmSync(staged, {recursive: true, force: true})
+    if packed {
+      // zlib's header carries no time or name, as either tar's own gzip might.
+      writeBytes(archive, gzipSync(readBytes(tar)))
     }
+    rmSync(tar, {force: true, recursive: false})
+    packed ? Ok(archive) : Error(`${archive}: tar failed`)
   }
 }
 

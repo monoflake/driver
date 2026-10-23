@@ -18,7 +18,8 @@ the roles with it; [docs/rfcs/](docs/rfcs/) holds what is decided here alone.
 ```
 machine/    driver(machine): the program driver-machine, RFC 8c0rg, and beneath it each kind's
             crate, container/ and management/ now
-scripts/    archive.res, the program built static for both architectures and archived
+scripts/    archive.res, the program built static for both architectures and archived; dev.res, one
+            built for a test machine, copied in, restarted and checked
 .github/    release.yml and release/, what CI alone runs, its version and what it releases
 model/      each driver, machine.res and cloudflare.res, in made.res's types; filling.res, its blocks
             and the fill; tasks.res, the tasks; plan/progress.res, each written block's state
@@ -48,3 +49,4 @@ workspace's configuration as platform's do.
 | `mise run blocks`        | every written block built alone, as verify asks          |
 | `mise run archive`       | driver-machine built for linux-x86_64 and linux-aarch64  |
 | `mise run release`       | what built.json names put into the day's release         |
+| `mise run dev <host>`    | built for a test machine, copied in, restarted, checked  |

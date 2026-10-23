@@ -9,6 +9,8 @@ protoc = "36.2"
 # What `archive` links the program's two static Linux binaries with, RFC 8c0rg.
 zig = "0.17" # pre-1.0, where a minor is the breaking release
 "aqua:rust-cross/cargo-zigbuild" = "0.23" # pre-1.0, where a minor is the breaking release
+# What `dev --watch` runs a test machine's loop again with on every save.
+watchexec = "2"
 
 # What oxfmt formats here; ReScript's formatter takes its sources from rescript.json.
 [vars]
@@ -63,6 +65,15 @@ run = "rescript build > /dev/null && node model/tasks.res.mjs built"
 description = "Build driver-machine static for linux-x86_64 and linux-aarch64 and archive each with the licenses: `archive [--dry-run]`"
 usage = 'flag "-n --dry-run" help="Say what would be built and written, and build nothing"'
 run = 'rescript build > /dev/null && node scripts/archive.res.mjs ${usage_dry_run:+--dry-run}'
+
+[tasks.dev]
+description = "Build driver-machine for a test machine, copy it in, restart and check it: `dev <host> [--watch] [--dry-run]`"
+usage = '''
+arg "<host>" help="The test machine as ssh reaches it, `root@buf`"
+flag "--watch" help="Do it again on every save of what the program is built from"
+flag "-n --dry-run" help="Say what would be done and change nothing"
+'''
+run = 'rescript build > /dev/null && node scripts/dev.res.mjs "$usage_host" ${usage_watch:+--watch} ${usage_dry_run:+--dry-run}'
 
 # The day's release on GitHub, the workspace's scripts/release reading workspace.toml's [release].
 [tasks.release]
