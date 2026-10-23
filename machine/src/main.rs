@@ -11,6 +11,7 @@ use clap::{Parser, Subcommand};
 use driver_machine_container::{Bridge, Btrfs, Containers, Https, Refused, Socket};
 use driver_machine_function::Functions;
 use driver_machine_management::{Binding, Tokens};
+use driver_machine_volume::Volume;
 use envelope::contracts::{
 	ManagementApply, ManagementCapacity, ManagementDescribed, ManagementEnd, ManagementEnded,
 	ManagementHeld, ManagementPolicy, ManagementState,
@@ -122,7 +123,7 @@ struct Item {
 }
 
 /// A binding's list, its generations, grace and items, the hashes of its tokens an apply forgot,
-/// and what the machine made of it, which its deployments run within, and its bucket.
+/// and what the machine made of it, which its deployments run within, and its bucket by its item.
 #[derive(Debug, Clone)]
 struct Listed {
 	binding: Binding,
@@ -132,7 +133,7 @@ struct Listed {
 	items: BTreeMap<u32, Item>,
 	forgotten: BTreeSet<[u8; 32]>,
 	made: Option<driver_machine_container::Binding>,
-	bucket: Option<Arc<driver_machine_object::Bucket>>,
+	bucket: Option<(u32, Arc<driver_machine_object::Bucket>)>,
 }
 
 /// What the machine holds whole, every core in thousandths and its memory in bytes, read at start,
@@ -144,8 +145,24 @@ struct Machine {
 	address: String,
 }
 
-/// Management's operations on one binding's list, RFC vr5lw; implemented for [`Listed`]. A time is
-/// in milliseconds since the epoch.
+/// What an item is made of on the machine and unmade from, past what its list records, each
+/// failure its message; implemented for [`Driver`], from a thread that may block.
+trait Make {
+	/// The bytes free on the workloads' btrfs.
+	fn free(&self) -> Result<u64, String>;
+	/// A volume made, or limited again, to `size` bytes under `under`, `volumes` or `buckets`; its
+	/// directory.
+	fn volume(&self, under: &str, volume: Volume, size: u64) -> Result<PathBuf, String>;
+	/// A volume removed; one absent is no failure.
+	fn unvolume(&self, under: &str, volume: Volume) -> Result<(), String>;
+	/// Every container run in a `container` item's capacity removed.
+	fn emptied(&self, binding: &driver_machine_container::Binding, item: u32) -> Result<(), String>;
+	/// A binding holding no item now, its qgroup removed where it can be, a failure only told.
+	fn released(&self, binding: Binding);
+}
+
+/// Management's operations on one binding's list, RFC vr5lw, what each item is made of made and
+/// unmade by `make`; implemented for [`Listed`]. A time is in milliseconds since the epoch.
 trait Manage {
 	/// The list taken where it is not older than the one held and fits the machine, answered with
 	/// the generation held.
@@ -153,24 +170,27 @@ trait Manage {
 		&mut self,
 		input: &ManagementApply,
 		machine: &Machine,
+		make: &impl Make,
 		now: u64,
 	) -> Result<ManagementHeld, Refused>;
 	/// The grace taken where its policy is not older than the one held.
 	fn set_policy(&mut self, input: &ManagementPolicy) -> Result<ManagementHeld, Refused>;
 	/// What is held, once every item past its grace is removed.
-	fn describe(&mut self, now: u64) -> Result<ManagementDescribed, Refused>;
+	fn describe(&mut self, make: &impl Make, now: u64) -> Result<ManagementDescribed, Refused>;
 	/// An item the list no longer asks removed at once; one absent is no failure.
-	fn end(&mut self, input: &ManagementEnd) -> Result<ManagementEnded, Refused>;
+	fn end(&mut self, input: &ManagementEnd, make: &impl Make) -> Result<ManagementEnded, Refused>;
 }
 
 /// What every call is served with, the tokens and their files, the machine, each binding's list and
-/// where it is kept, and the function kind over the container kind, each bucket a list's.
+/// where it is kept, the volume kind, and the function kind over the container kind, each bucket a
+/// list's.
 struct Driver {
 	files: Vec<PathBuf>,
 	tokens: RwLock<Tokens>,
 	machine: Machine,
 	lists: tokio::sync::Mutex<BTreeMap<Binding, Listed>>,
 	kept: PathBuf,
+	volumes: Btrfs,
 	functions: Functions<Containers<Socket, Bridge, Btrfs, Https>>,
 }
 

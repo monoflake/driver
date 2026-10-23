@@ -8,4 +8,5 @@ let blocks: dict<Work.state> = dict{
   "driver-machine-function": Accepted,
   "driver-machine-management": Accepted,
   "driver-machine-object": Accepted,
+  "driver-machine-volume": Accepted,
 }

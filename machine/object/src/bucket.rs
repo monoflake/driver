@@ -4,7 +4,7 @@
 use std::fs::{self, File};
 use std::io::{self, Read as _, Seek as _, SeekFrom, Write as _};
 use std::path::{Path, PathBuf};
-use std::sync::{MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use envelope::contracts::{
 	ObjectContent, ObjectDeleted, ObjectDescribed, ObjectList, ObjectListed, ObjectListedOne,
@@ -138,7 +138,12 @@ impl Open for Bucket {
 		emptied(&directory.join(WRITING))?;
 		swept(&index, &directory.join(CONTENTS))?;
 		healed(&mut index, &directory.join(CONTENTS))?;
-		Ok(Self { directory: directory.to_owned(), capacity, index: std::sync::Mutex::new(index) })
+		let (directory, capacity) = (directory.to_owned(), Mutex::new(capacity));
+		Ok(Self { directory, capacity, index: Mutex::new(index) })
+	}
+
+	fn resize(&self, capacity: Option<u64>) {
+		*self.capacity.lock().unwrap_or_else(PoisonError::into_inner) = capacity;
 	}
 }
 
@@ -200,7 +205,8 @@ impl Objects for Bucket {
 		};
 		let added = if present { 0 } else { size };
 		let after = index::held(&transaction)?.saturating_add(added).saturating_sub(freed);
-		if self.capacity.is_some_and(|c| after > c) {
+		let capacity = *self.capacity.lock().unwrap_or_else(PoisonError::into_inner);
+		if capacity.is_some_and(|c| after > c) {
 			return Err(Unwritten::StorageFull);
 		}
 		// A content put here is named by no row but this transaction's, so a failure removes it.

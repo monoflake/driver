@@ -13,6 +13,7 @@ const ADDRESS: &str = "monoflake.address";
 const PORT: &str = "monoflake.port";
 const USER: &str = "monoflake.user";
 const ISOLATION: &str = "monoflake.isolation";
+const INTO: &str = "monoflake.into";
 
 /// A deployment's runs as a label holds it, `app/<id>` or `component/<name>`.
 pub(super) fn runs(runs: &DeploymentRuns) -> String {
@@ -87,11 +88,13 @@ pub(super) struct Kept {
 	pub(super) user: (u32, u32),
 	/// The isolation it stands on.
 	pub(super) isolation: Vec<DeploymentIsolation>,
+	/// The container of capacity it runs in, by its item's id, none on one labelled before it was.
+	pub(super) into: Option<u32>,
 }
 
 impl Kept {
 	pub(super) fn write(&self) -> BTreeMap<String, String> {
-		BTreeMap::from([
+		let mut labels = BTreeMap::from([
 			(RUNS.to_owned(), self.runs.clone()),
 			(VERSION.to_owned(), self.version.clone()),
 			(RUNTIME.to_owned(), runtime_name(self.runtime).to_owned()),
@@ -102,7 +105,11 @@ impl Kept {
 				ISOLATION.to_owned(),
 				self.isolation.iter().map(|i| isolation_name(*i)).collect::<Vec<_>>().join(","),
 			),
-		])
+		]);
+		if let Some(into) = self.into {
+			labels.insert(INTO.to_owned(), into.to_string());
+		}
+		labels
 	}
 
 	/// What the labels hold, or which is missing or spoiled.
@@ -127,6 +134,10 @@ impl Kept {
 					.map(|n| isolation_named(n).ok_or_else(|| format!("the label {ISOLATION} names {n:?}")))
 					.collect::<Result<_, _>>()?,
 			},
+			into: labels
+				.get(INTO)
+				.map(|n| n.parse().map_err(|_| format!("the label {INTO} is no item's id")))
+				.transpose()?,
 		})
 	}
 }

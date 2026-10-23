@@ -39,6 +39,13 @@ impl Started {
 		let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
 			.join(format!("driver-machine-{name}-{}-{nanos}", std::process::id()));
 		std::fs::create_dir_all(&directory).unwrap();
+		// The workloads' mount, and a btrfs keeping each subvolume as a marked directory of it.
+		std::fs::create_dir_all(directory.join("data")).unwrap();
+		std::fs::write(directory.join("data/.subvolume"), b"").unwrap();
+		let btrfs = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("volume/tests/btrfs.sh");
+		std::fs::copy(btrfs, directory.join("btrfs")).unwrap();
+		let executable = std::os::unix::fs::PermissionsExt::from_mode(0o755);
+		std::fs::set_permissions(directory.join("btrfs"), executable).unwrap();
 		for binding in 1..=bindings {
 			let file = directory.join(format!("binding-{binding}"));
 			std::fs::write(&file, format!("{}\n", token(binding))).unwrap();
@@ -91,6 +98,11 @@ impl Started {
 		let listening = started.logged("listening on ");
 		started.address = listening.trim_start_matches("listening on ").parse().unwrap();
 		started
+	}
+
+	/// The mount the workloads' btrfs lies on.
+	pub fn mount(&self) -> PathBuf {
+		self.directory.join("data")
 	}
 
 	/// The first line written from now on that holds `wanted`, waited on for five seconds.

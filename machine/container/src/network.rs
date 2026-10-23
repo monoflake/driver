@@ -11,6 +11,9 @@ use tokio::io::AsyncWriteExt;
 
 use crate::{Attachment, Bridge, Fault, Network};
 
+/// How long one connection to a container's address is waited on.
+const CONNECT: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// The CNI version the configuration is written in.
 const VERSION: &str = "1.0.0";
 
@@ -200,6 +203,11 @@ impl Network for Bridge {
 			self.ip(&["netns", "delete", id]).await?;
 		}
 		Ok(())
+	}
+
+	async fn reached(&self, address: SocketAddr) -> bool {
+		let connected = tokio::net::TcpStream::connect(address);
+		matches!(tokio::time::timeout(CONNECT, connected).await, Ok(Ok(_)))
 	}
 }
 

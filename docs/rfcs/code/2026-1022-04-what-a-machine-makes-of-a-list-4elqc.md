@@ -23,13 +23,23 @@ Built provisionally for RFC n0o4l's second step, in monoflake/driver@cfdb8e31, a
 shows. Items 1, 2, 5 and 8 are built as the Options propose, the bound counting a list's
 `container` items alone against the machine's cores and memory, the qgroup made with the binding's
 first container rather than its first item, and what an apply forgot of a binding's tokens kept in
-its list's file. Of item 3 the `container` item alone is built, made at once at the address the
-driver listens on, and the other three still wait on `todo!("4elqc")`. A deployment is kept by
-containerd's labels as before, and a container whose task a reboot ended is started again when the
-driver starts. Items 4, 6 and 7 stand as written. Run against the samples on a test machine, RFC
-n0o4l's sixth step, a list holding an item other than a container reaches `todo!("4elqc")` before
-the bound is asked, so the sample of a list the host cannot hold answers `fault`, not
-`beyond_host`.
+its list's file. A deployment is kept by containerd's labels as before, and a container whose task
+a reboot ended is started again when the driver starts. Items 6 and 7 stand as written.
+
+Built further for RFC 54q45's first step, as its author took the rest of item 3 and the least of
+item 4. The block `driver-machine-volume` owns every subvolume and qgroup: a `volume` item is a
+subvolume at `<mount>/volumes/<binding>/<item>` whose own qgroup is limited to its size and is a
+member of `1/<binding>`, made at once, its address that path; an `object` item is the binding's one
+bucket, such a volume at `<mount>/buckets/<binding>/<item>` holding the object store, its capacity
+the item's size and its qgroup's limit that and the most an object holds, so a write replacing one
+has room, its address the driver's. A second `object` item is `failed` with `beyond_host`. The bound
+counts what the volume and object items ask past what is made of them against the free space of the
+mount, so a list sent again fits however full its volumes are. A making that fails is the item's
+`failed` with `fault`, made again by the next list. An item past its grace, or ended, is unmade at
+the call that finds it so, its volume deleted and waited on until btrfs cleans it, or its containers,
+labelled with the item they run in, removed with its capacity; the binding's qgroup goes with its
+last item. No timer sweeps yet, item 4. At start each made bucket is opened again and a volume or
+bucket not found is `failed`. A `database` item still reaches `todo!("4elqc")`.
 
 The questions, each as it was asked:
 

@@ -11,7 +11,6 @@ use envelope::contracts::{
 
 mod bucket;
 mod index;
-mod subvolume;
 
 /// The most an object holds in bytes, the contract's `most`, a parcel's 16 MiB, RFC b8f35.
 pub const MOST: usize = 16 * 1024 * 1024;
@@ -53,11 +52,11 @@ pub enum Unread {
 }
 
 /// A bucket open at its directory, the index's one connection and the capacity it holds; opened by
-/// [`Open`] alone, and one open at a time for a directory.
+/// [`Open`] alone, and one open at a time for a directory, which a volume of the machine's holds.
 #[derive(Debug)]
 pub struct Bucket {
 	directory: PathBuf,
-	capacity: Option<u64>,
+	capacity: Mutex<Option<u64>>,
 	index: Mutex<rusqlite::Connection>,
 }
 
@@ -66,6 +65,8 @@ pub trait Open: Sized {
 	/// The bucket at `directory`, at most `capacity` bytes of content, none for no bound but the
 	/// file system's; what no row names is removed, as a write cut short leaves it.
 	fn open(directory: &Path, capacity: Option<u64>) -> Result<Self, Fault>;
+	/// Its capacity changed, held from the next write on; what it holds past it stays.
+	fn resize(&self, capacity: Option<u64>);
 }
 
 /// The `object` interface, RFC vr5lw, implemented for [`Bucket`]. Each read sees every write
@@ -81,19 +82,4 @@ pub trait Objects {
 	fn delete(&self, input: &ObjectName) -> Result<ObjectDeleted, Fault>;
 	/// The names under the prefix after `after` in byte order, at most `limit` and [`PAGE`].
 	fn list(&self, input: &ObjectList) -> Result<ObjectListed, Fault>;
-}
-
-/// btrfs, by its `btrfs` command.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Btrfs {
-	/// The `btrfs` binary.
-	pub binary: PathBuf,
-}
-
-/// A bucket's subvolume made and removed; implemented for [`Btrfs`].
-pub trait Subvolumes {
-	/// A subvolume made at `at`, its parent a directory of a btrfs mount.
-	fn create(&self, at: &Path) -> Result<(), Fault>;
-	/// The subvolume at `at` removed, with everything in it.
-	fn delete(&self, at: &Path) -> Result<(), Fault>;
 }

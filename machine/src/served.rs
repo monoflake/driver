@@ -4,7 +4,7 @@
 use std::any::Any;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::{Arc, PoisonError, RwLock, Weak};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -16,10 +16,12 @@ use axum::http::{HeaderMap, Method, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use driver_machine_container::{
 	Bridge, Btrfs, Containers, Deployments, Https, Refused, Restart as _, Runtimes, Socket,
+	Unmake as _,
 };
 use driver_machine_function::Functions;
 use driver_machine_management::{Binding, Hold, Memory, Parse, Processor, Tokens, Unread};
 use driver_machine_object::{MOST, Objects as _, Unwritten};
+use driver_machine_volume::{Quotas as _, Volume, Volumes as _, qgroup};
 use envelope::contracts::interface::{deployments, management, object};
 use envelope::contracts::{
 	DeploymentDeleted, DeploymentForm, DeploymentRuns, DeploymentRuntime, Error, Failure,
@@ -28,7 +30,7 @@ use envelope::contracts::{
 use envelope::{Called, Encoded, Operation};
 
 use crate::answer::{self, Form, Forms};
-use crate::{Arguments, Driver, Listed, Machine, Manage, kept};
+use crate::{Arguments, Driver, Listed, Machine, Make, Manage, kept};
 
 /// The most a call's body may be, axum's own default bound.
 const LARGEST: usize = 2 * 1024 * 1024;
@@ -125,6 +127,40 @@ fn read<C: Called>(form: Form, operation: &str, body: &[u8]) -> Result<C, Error>
 	}
 }
 
+impl Make for Driver {
+	fn free(&self) -> Result<u64, String> {
+		self.volumes.free().map_err(|f| f.0)
+	}
+
+	fn volume(&self, under: &str, volume: Volume, size: u64) -> Result<PathBuf, String> {
+		self.volumes.make(under, volume, size).map_err(|f| f.0)
+	}
+
+	fn unvolume(&self, under: &str, volume: Volume) -> Result<(), String> {
+		self.volumes.remove(under, volume).map_err(|f| f.0)
+	}
+
+	fn emptied(&self, binding: &driver_machine_container::Binding, item: u32) -> Result<(), String> {
+		let emptied = self.functions.containers.emptied(binding, item);
+		match tokio::runtime::Handle::current().block_on(emptied) {
+			Ok(removed) => {
+				for id in removed {
+					eprintln!("removed {} {id}", binding.namespace);
+				}
+				Ok(())
+			}
+			Err(e) => Err(format!("{} {}", e.reason, e.message.unwrap_or_default())),
+		}
+	}
+
+	fn released(&self, binding: Binding) {
+		let qgroup = qgroup(binding);
+		if let Err(f) = self.volumes.destroy(&qgroup) {
+			eprintln!("the qgroup {qgroup} stays, {}", f.0);
+		}
+	}
+}
+
 /// A management call on its binding's list, the list kept again wherever the call changed it, and
 /// a list that could not be kept answered `fault`.
 async fn managed(
@@ -133,35 +169,41 @@ async fn managed(
 	call: management::Call,
 	form: Form,
 ) -> Served {
-	// Every list is locked while its file is written, as through btrfs calls, RFC 4elqc item 7.
 	let mut lists = driver.lists.lock().await;
-	let listed = lists.entry(binding).or_insert_with(|| Listed::new(binding));
-	let before = kept::written(listed);
-	let served = match call {
-		management::Call::Apply(input) => {
-			let result = listed.apply(&input, &driver.machine, now());
-			if result.as_ref().is_ok_and(|held| held.generation == input.generation) {
-				let mut tokens = driver.tokens.write().unwrap_or_else(PoisonError::into_inner);
-				listed.forgotten.extend(tokens.apply(binding, input.tokens.as_deref()));
+	// Every list is locked through btrfs and containerd and while its file is written, RFC 4elqc
+	// item 7, on a thread that may block.
+	tokio::task::block_in_place(|| {
+		let listed = lists.entry(binding).or_insert_with(|| Listed::new(binding));
+		let make = &*driver;
+		let before = kept::written(listed);
+		let served = match call {
+			management::Call::Apply(input) => {
+				let result = listed.apply(&input, &driver.machine, make, now());
+				if result.as_ref().is_ok_and(|held| held.generation == input.generation) {
+					let mut tokens = driver.tokens.write().unwrap_or_else(PoisonError::into_inner);
+					listed.forgotten.extend(tokens.apply(binding, input.tokens.as_deref()));
+				}
+				answered::<management::Apply>(result, form)
 			}
-			answered::<management::Apply>(result, form)
+			management::Call::SetPolicy(input) => {
+				answered::<management::SetPolicy>(listed.set_policy(&input), form)
+			}
+			management::Call::Describe(_) => {
+				answered::<management::Describe>(listed.describe(make, now()), form)
+			}
+			management::Call::End(input) => answered::<management::End>(listed.end(&input, make), form),
+		};
+		if kept::written(listed) == before {
+			return served;
 		}
-		management::Call::SetPolicy(input) => {
-			answered::<management::SetPolicy>(listed.set_policy(&input), form)
+		match kept::write(&driver.kept, listed) {
+			Ok(()) => served,
+			Err(why) => {
+				let message = Some(format!("the list could not be kept, {why}"));
+				Served::of::<ManagementHeld>(Err(answer::error(&[], "fault", message)), form)
+			}
 		}
-		management::Call::Describe(_) => answered::<management::Describe>(listed.describe(now()), form),
-		management::Call::End(input) => answered::<management::End>(listed.end(&input), form),
-	};
-	if kept::written(listed) == before {
-		return served;
-	}
-	match kept::write(&driver.kept, listed) {
-		Ok(()) => served,
-		Err(why) => {
-			let message = Some(format!("the list could not be kept, {why}"));
-			Served::of::<ManagementHeld>(Err(answer::error(&[], "fault", message)), form)
-		}
-	}
+	})
 }
 
 /// One deployment of a binding, by what it runs as a label writes it.
@@ -296,6 +338,7 @@ fn faulted(fault: driver_machine_object::Fault) -> Refused {
 /// system do.
 async fn stored(driver: Arc<Driver>, binding: Binding, call: object::Call, form: Form) -> Served {
 	let holding = driver.lists.lock().await.get(&binding).and_then(|l| l.bucket.clone());
+	let holding = holding.map(|(_, bucket)| bucket);
 	let Some(bucket) = holding else {
 		// A binding the machine made no bucket of holds no object and has room for none.
 		return match call {
@@ -426,7 +469,8 @@ fn machine(listen: SocketAddr) -> Machine {
 fn started(arguments: Arguments) -> Driver {
 	let state = arguments.state;
 	let kept = state.join("lists");
-	let (lists, unread) = kept::read(&kept);
+	let volumes = Btrfs { mount: arguments.mount, binary: arguments.btrfs };
+	let (lists, unread) = kept::read(&kept, &volumes.mount);
 	for why in unread {
 		eprintln!("lists {why}");
 	}
@@ -440,6 +484,7 @@ fn started(arguments: Arguments) -> Driver {
 		machine: machine(arguments.listen),
 		lists: tokio::sync::Mutex::new(lists),
 		kept,
+		volumes: volumes.clone(),
 		functions: Functions {
 			containers: Containers {
 				containerd: Socket { path: arguments.containerd },
@@ -449,7 +494,7 @@ fn started(arguments: Arguments) -> Driver {
 					subnet: arguments.subnet,
 					state: state.join("network"),
 				},
-				quota: Btrfs { mount: arguments.mount, binary: arguments.btrfs },
+				quota: volumes,
 				fetch: Https { local: arguments.local },
 				runtimes: Runtimes { runc: arguments.runc, crun: arguments.crun, youki: arguments.youki },
 				state: state.join("containers"),

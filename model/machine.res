@@ -30,12 +30,14 @@ let driver: Made.driver = {
       ],
     },
     {kind: #instance, contract: "deployments", language: #rust, as_: "a process"},
+    // A container's layer joins its binding's qgroup through the volume, which owns btrfs.
     {
       kind: #container,
       contract: "deployments",
       language: #rust,
       as_: "a container, by containerd",
       uses: ["envelope*"],
+      blocks: ["driver-machine-volume"],
       takes: [
         rust("containerd-client", "0.9"),
         rust("tokio", "1"),
@@ -61,7 +63,8 @@ let driver: Made.driver = {
         "../platform/tests/kinds/objects/writes.json",
       ],
     },
-    {kind: #volume, language: #rust, as_: "a btrfs subvolume"},
+    // A binding's item as a subvolume under a qgroup's limit, which a bucket stands on, RFC 54q45.
+    {kind: #volume, language: #rust, as_: "a btrfs subvolume", takes: [rust("rustix", "1")]},
     {kind: #database, contract: "database", language: #rust, as_: "SQLite on a volume"},
   ],
   // An isolate runs inside its organization's container, which keeps bindings apart, v7v3w.
@@ -91,12 +94,15 @@ let driver: Made.driver = {
       "driver-machine-function",
       "driver-machine-management",
       "driver-machine-object",
+      "driver-machine-volume",
     ],
     samples: [
       "../platform/tests/kinds/management/lists.json",
       "../platform/tests/kinds/management/graces.json",
       "../platform/tests/kinds/management/ends.json",
       "../platform/tests/kinds/deployments/lifecycle.json",
+      "../platform/tests/kinds/objects/listing.json",
+      "../platform/tests/kinds/objects/ranges.json",
       "../platform/tests/kinds/objects/writes.json",
     ],
     released: false,

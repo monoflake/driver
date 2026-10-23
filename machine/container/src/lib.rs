@@ -130,6 +130,17 @@ pub trait Host {
 	) -> impl Future<Output = Result<DeploymentDescribed, Refused>> + Send;
 }
 
+/// What a list dropping a `container` item asks of the containers, implemented for [`Containers`].
+pub trait Unmake {
+	/// Every container run in the container of capacity `into` stopped and removed with everything
+	/// it held; the ids removed.
+	fn emptied(
+		&self,
+		binding: &Binding,
+		into: u32,
+	) -> impl Future<Output = Result<Vec<String>, Refused>> + Send;
+}
+
 /// What a start of the driver asks of the containers, implemented for [`Containers`].
 pub trait Restart {
 	/// Every container of the binding whose task is gone and whose stop no call asked, as after a
@@ -308,6 +319,8 @@ pub trait Network: Send + Sync {
 	fn attach(&self, id: &str, port: u16) -> impl Future<Output = Result<Attachment, Fault>> + Send;
 	/// Its namespace removed and its address given back; none to remove is no failure.
 	fn detach(&self, id: &str) -> impl Future<Output = Result<(), Fault>> + Send;
+	/// Whether its address accepts a connection now, so what runs there is reached.
+	fn reached(&self, address: SocketAddr) -> impl Future<Output = bool> + Send;
 }
 
 /// A bridge, made by the CNI plugins `bridge`, `host-local` and `loopback`, run by their binaries
@@ -341,14 +354,8 @@ pub trait Quota: Send + Sync {
 	) -> impl Future<Output = Result<(), Fault>> + Send;
 }
 
-/// btrfs at the mount its workloads lie on, by its `btrfs` command.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Btrfs {
-	/// The mount, `/data`.
-	pub mount: PathBuf,
-	/// The `btrfs` binary.
-	pub binary: PathBuf,
-}
+/// btrfs at the mount its workloads lie on, the volume kind's, which owns subvolumes and qgroups.
+pub use driver_machine_volume::Btrfs;
 
 /// Why an artifact was not fetched, past its bound or not to be had now.
 #[derive(Debug, Clone, PartialEq, Eq)]

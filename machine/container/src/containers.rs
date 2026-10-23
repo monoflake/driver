@@ -7,8 +7,10 @@ mod secrets;
 mod spec;
 
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use envelope::contracts::{
 	Architecture, DeploymentArtifact, DeploymentDeleted, DeploymentDeploy, DeploymentDescribed,
@@ -19,13 +21,20 @@ use sha2::{Digest as _, Sha256};
 
 use crate::{
 	Binding, Chosen, Containerd, Containers, Deployments, Fault, Fetch, Host, Hosted, Image, Listed,
-	Network, Quota, Reached, Refused, Restart, Runtimes, Spec, Task, Unfetched,
+	Network, Quota, Reached, Refused, Restart, Runtimes, Spec, Task, Unfetched, Unmake,
 };
 use labels::Kept;
 use secrets::{KeyFile, Places};
 
 /// How long a task is given to stop on its signal before it is killed, in milliseconds.
 const GRACE: u64 = 10_000;
+
+/// How long a container's address is given to accept a connection once its task is started, in
+/// milliseconds, before it is failed as unreachable.
+const REACHED: u64 = 30_000;
+
+/// How often a deploy or a resume asks again whether its container is reached, in milliseconds.
+const ASKED: u64 = 100;
 
 /// The most letters containerd takes in an id.
 const ID_MOST: usize = 76;
@@ -84,6 +93,8 @@ struct Wanted<'a> {
 	runtime: DeploymentRuntime,
 	isolation: Vec<DeploymentIsolation>,
 	port: u16,
+	/// The container of capacity it runs in, by its item's id, and that capacity.
+	into: u32,
 	capacity: &'a crate::Capacity,
 	env: Vec<String>,
 	secrets: &'a BTreeMap<String, Vec<u8>>,
@@ -158,9 +169,11 @@ impl<'a> Wanted<'a> {
 		port: u16,
 		files: Option<(&'a BTreeMap<String, Vec<u8>>, &'a str)>,
 	) -> Result<Self, Refused> {
+		// The container it names, or else the binding's first, as the function kind chooses.
 		let into = input
 			.into
-			.ok_or_else(|| Refused::new("malformed", "a deployment runs in a container of capacity"))?;
+			.or_else(|| binding.capacities.keys().next().copied())
+			.ok_or_else(|| Refused::new("beyond_host", "the binding holds no capacity"))?;
 		let capacity = binding.capacities.get(&into).ok_or_else(|| {
 			Refused::new("beyond_host", format!("the binding holds no capacity {into}"))
 		})?;
@@ -174,12 +187,19 @@ impl<'a> Wanted<'a> {
 			runtime,
 			isolation,
 			port,
+			into,
 			capacity,
 			env,
 			secrets: &input.secrets,
 			files,
 		})
 	}
+}
+
+/// The time now in milliseconds since the epoch.
+fn now() -> u64 {
+	let elapsed = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+	u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// A hash in lowercase hex.
@@ -312,15 +332,57 @@ where
 		self.told(binding, runs, listed).await
 	}
 
-	/// A container described, its stop marks read.
+	/// A container described, its stop marks read; one whose task runs is `running` once its
+	/// address accepts a connection, `making` until then, and failed once [`REACHED`] has passed.
 	async fn told(
 		&self,
 		binding: &Binding,
 		runs: &DeploymentRuns,
 		listed: &Listed,
 	) -> Result<DeploymentDescribed, Refused> {
-		let asked = marks::is_set(&self.state, &binding.namespace, &listed.id).await;
-		described(runs, listed, asked)
+		let (namespace, id) = (binding.namespace.as_str(), listed.id.as_str());
+		let asked = marks::is_set(&self.state, namespace, id).await;
+		let mut told = described(runs, listed, asked)?;
+		if let DeploymentState::Running { address, .. } = &told.state {
+			let reached = match address.parse::<SocketAddr>() {
+				Ok(at) => self.network.reached(at).await,
+				Err(_) => false,
+			};
+			if !reached {
+				let since = marks::started_at(&self.state, namespace, id).await;
+				told.state = match since.is_some_and(|at| now() < at.saturating_add(REACHED)) {
+					true => DeploymentState::Making,
+					false => DeploymentState::Failed {
+						reason: "unreachable".into(),
+						message: Some(format!(
+							"{address} accepted no connection within {} s of its start",
+							REACHED / 1000
+						)),
+					},
+				};
+			}
+		}
+		Ok(told)
+	}
+
+	/// A container just started, described once its address accepts a connection or it is no
+	/// longer `making`, asked again until [`REACHED`] has passed.
+	async fn settled(
+		&self,
+		binding: &Binding,
+		runs: &DeploymentRuns,
+		id: &str,
+	) -> Result<DeploymentDescribed, Refused> {
+		let until = Instant::now() + Duration::from_millis(REACHED.saturating_add(1000));
+		loop {
+			let mine = self.mine(binding, runs).await?;
+			let listed = mine.iter().find(|l| l.id == id).ok_or_else(|| Refused::bare("not_found"))?;
+			let told = self.told(binding, runs, listed).await?;
+			if !matches!(told.state, DeploymentState::Making) || Instant::now() >= until {
+				return Ok(told);
+			}
+			tokio::time::sleep(Duration::from_millis(ASKED)).await;
+		}
 	}
 
 	fn places(&self, namespace: &str, id: &str) -> Places {
@@ -397,6 +459,8 @@ where
 			let _ = self.removed(&binding.namespace, &id).await;
 			return Err(refused);
 		}
+		// The new one is reached before the old ones go, so a call finds one or the other.
+		self.settled(binding, &input.runs, &id).await?;
 		for old in &mine {
 			self.containerd.stop(&binding.namespace, &old.id, GRACE).await?;
 			self.removed(&binding.namespace, &old.id).await?;
@@ -450,6 +514,7 @@ where
 			port: wanted.port,
 			user: (user.uid, user.gid),
 			isolation: wanted.isolation.clone(),
+			into: Some(wanted.into),
 		};
 		let spec = Spec {
 			id: id.to_owned(),
@@ -462,7 +527,7 @@ where
 		let output = self.state.join("output").join(namespace).join(format!("{id}.log"));
 		self.containerd.create(namespace, &spec, &mounts, &output).await?;
 		self.containerd.start(namespace, id).await?;
-		Ok(())
+		marks::started(&self.state, namespace, id, now()).await
 	}
 
 	/// A container started again as it was, its secrets and its network put back where a reboot
@@ -477,6 +542,7 @@ where
 		// Its namespace is kept while stopped and made again at its address where a reboot lost it.
 		self.network.attach(&network_id(&binding.namespace, &listed.id), kept.port).await?;
 		self.containerd.start(&binding.namespace, &listed.id).await?;
+		marks::started(&self.state, &binding.namespace, &listed.id, now()).await?;
 		marks::clear(&self.state, &binding.namespace, &listed.id).await
 	}
 
@@ -486,6 +552,7 @@ where
 		self.network.detach(&network_id(namespace, id)).await?;
 		secrets::remove(&self.places(namespace, id)).await?;
 		files::remove(&self.state, namespace, id).await?;
+		marks::unstarted(&self.state, namespace, id).await?;
 		marks::clear(&self.state, namespace, id).await
 	}
 }
@@ -536,7 +603,7 @@ where
 		let mine = self.mine(binding, &input.runs).await?;
 		let listed = chosen(&mine).ok_or_else(|| Refused::bare("not_found"))?;
 		self.started(binding, listed).await?;
-		self.answer(binding, &input.runs).await
+		self.settled(binding, &input.runs, &listed.id).await
 	}
 
 	async fn describe(
@@ -584,6 +651,26 @@ where
 			}
 		}
 		Ok(started)
+	}
+}
+
+impl<C, N, Q, F> Unmake for Containers<C, N, Q, F>
+where
+	C: Containerd,
+	N: Network,
+	Q: Quota,
+	F: Fetch,
+{
+	async fn emptied(&self, binding: &Binding, into: u32) -> Result<Vec<String>, Refused> {
+		let mut removed = Vec::new();
+		for listed in self.containerd.list(&binding.namespace).await? {
+			if Kept::read(&listed.labels).is_ok_and(|kept| kept.into == Some(into)) {
+				self.containerd.stop(&binding.namespace, &listed.id, GRACE).await?;
+				self.removed(&binding.namespace, &listed.id).await?;
+				removed.push(listed.id);
+			}
+		}
+		Ok(removed)
 	}
 }
 

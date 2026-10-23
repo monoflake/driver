@@ -118,6 +118,18 @@ fn a_name_at_the_edges_of_a_string_is_held_and_listed_in_byte_order() {
 }
 
 #[test]
+fn a_bucket_resized_holds_its_new_capacity_from_the_next_write_and_keeps_what_it_held() {
+	let (_directory, bucket) = bucket("resized", Some(10));
+	write(&bucket, "a", b"hello");
+	bucket.resize(Some(4));
+	assert_eq!(output(&bucket, "describe", json!({ "name": "a" })), json!({ "size": 5 }));
+	let answer = call(&bucket, "write", &json!({ "name": "b", "content": encoded(b"!") }), None);
+	assert_eq!(answer["reason"], "storage_full");
+	bucket.resize(None);
+	write(&bucket, "b", b"world, and more");
+}
+
+#[test]
 fn a_content_is_held_once_and_removed_with_its_last_name() {
 	let (directory, bucket) = bucket("once", Some(10));
 	let file = |content: &[u8]| blake3::hash(content).to_hex().to_string();
