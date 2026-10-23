@@ -3,9 +3,9 @@
  * holds its own. A block in work fails nothing, and one written but not named here is refused.
  */
 let blocks: dict<Work.state> = dict{
-  "driver-machine": InWork,
+  "driver-machine": Accepted,
   "driver-machine-container": Accepted,
-  "driver-machine-function": InWork,
+  "driver-machine-function": Accepted,
   "driver-machine-management": Accepted,
-  "driver-machine-object": InWork,
+  "driver-machine-object": Accepted,
 }

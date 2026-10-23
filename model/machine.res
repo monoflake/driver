@@ -76,7 +76,13 @@ let driver: Made.driver = {
   program: {
     language: #rust,
     uses: ["envelope*", "codec*"],
-    takes: [rust("axum", "0.8"), rust("tokio", "1"), rust("clap", "4"), rust("serde_json", "1")],
+    takes: [
+      rust("axum", "0.8"),
+      rust("tokio", "1"),
+      rust("clap", "4"),
+      rust("serde_json", "1"),
+      rust("hyper-util", "0.1"),
+    ],
     serves: [
       "driver-machine-container",
       "driver-machine-function",
