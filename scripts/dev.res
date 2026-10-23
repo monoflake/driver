@@ -25,7 +25,7 @@ let watched = [
 ]
 
 /** One connection to the machine, kept open between the phases so each costs no handshake. */
-let ssh = [
+let kept = [
   "-o",
   "BatchMode=yes",
   "-o",
@@ -36,6 +36,26 @@ let ssh = [
   "-o",
   "ControlPersist=120",
 ]
+
+/** `local` is monoflake/machine's local machine, its sshd on port 2222 of localhost and its host
+ * key made in its container, so it is not checked, as a virtual machine's tools do on localhost. */
+let named =
+  Base.args->Array.slice(~start=2)->Array.find(a => !(a->String.startsWith("--")))
+let ssh =
+  named == Some("local")
+    ? [
+        ...kept,
+        "-p",
+        "2222",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+        "-o",
+        "LogLevel=ERROR",
+      ]
+    : kept
+let reached = name => name == "local" ? "root@localhost" : name
 
 /** A command run on the machine, its error shown, and what it wrote, or none when it failed. */
 let remote = (host, command) => {
@@ -152,11 +172,15 @@ let watching = host =>
 let dry = Base.args->Array.includes("--dry-run")
 let watch = Base.args->Array.includes("--watch")
 if isMain {
-  switch Base.args->Array.slice(~start=2)->Array.find(a => !(a->String.startsWith("--"))) {
+  switch named {
   | None =>
-    Console.error("dev: name the machine as ssh reaches it, `dev root@buf`")
+    Console.error("dev: name the machine as ssh reaches it, `dev root@buf`, or `dev local`")
     Base.process->Base.setExitCode(1)
-  | Some(host) if dry =>
+  | Some(name) if dry =>
+    let host = reached(name)
+    if name == "local" {
+      Console.log(`would reach the local machine as ${host} on port 2222, its host key unchecked`)
+    }
     Console.log(`would ask ${host} its architecture by uname -m`)
     Console.log(`would run cargo zigbuild --release --locked -p ${Archive.package} --target <it>`)
     Console.log(`would rsync it to ${host}:${installed}.new and rename it into place`)
@@ -169,6 +193,6 @@ if isMain {
     if !watching(host) {
       Base.process->Base.setExitCode(1)
     }
-  | Some(host) => once(host)
+  | Some(host) => once(reached(host))
   }
 }
