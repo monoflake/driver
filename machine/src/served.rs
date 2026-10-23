@@ -28,7 +28,7 @@ use envelope::contracts::{
 use envelope::{Called, Encoded, Operation};
 
 use crate::answer::{self, Form, Forms};
-use crate::{Arguments, Driver, Listed, Machine, Manage, kept};
+use crate::{Arguments, Driver, Listed, Machine, Manage, entry, kept};
 
 /// The most a call's body may be, axum's own default bound.
 const LARGEST: usize = 2 * 1024 * 1024;
@@ -500,7 +500,7 @@ pub(crate) async fn run(arguments: Arguments) -> ExitCode {
 		let at = info.location().map(|l| format!(" at {}:{}", l.file(), l.line())).unwrap_or_default();
 		eprintln!("panicked{at}: {}", info.payload_as_str().unwrap_or("a panic"));
 	}));
-	let listen = arguments.listen;
+	let (listen, entered) = (arguments.listen, arguments.entry);
 	let driver = Arc::new(started(arguments));
 	if let Err(e) = reloaded(Arc::clone(&driver)) {
 		eprintln!("SIGHUP: {e}");
@@ -514,15 +514,31 @@ pub(crate) async fn run(arguments: Arguments) -> ExitCode {
 			return ExitCode::FAILURE;
 		}
 	};
+	let entrance = match tokio::net::TcpListener::bind(entered).await {
+		Ok(listener) => listener,
+		Err(e) => {
+			eprintln!("entry {entered}: {e}");
+			return ExitCode::FAILURE;
+		}
+	};
+	match entrance.local_addr() {
+		Ok(address) => eprintln!("entry on {address}"),
+		Err(e) => eprintln!("entry on an address not read: {e}"),
+	}
 	match listener.local_addr() {
 		Ok(address) => eprintln!("listening on {address}"),
 		Err(e) => eprintln!("listening, at an address not read: {e}"),
 	}
-	let router = Router::new().fallback(route).with_state(driver);
-	match axum::serve(listener, router).await {
+	let router = Router::new().fallback(route).with_state(Arc::clone(&driver));
+	// Either ending ends the process, so its service starts both again.
+	let ended = tokio::select! {
+		ended = axum::serve(listener, router) => ended.map_err(|e| format!("serve: {e}")),
+		ended = entry::serve(entrance, driver) => ended.map_err(|e| format!("entry: {e}")),
+	};
+	match ended {
 		Ok(()) => ExitCode::SUCCESS,
 		Err(e) => {
-			eprintln!("serve: {e}");
+			eprintln!("{e}");
 			ExitCode::FAILURE
 		}
 	}
@@ -545,6 +561,7 @@ mod tests {
 		let nowhere = std::path::PathBuf::from("/nonexistent");
 		started(Arguments {
 			listen: crate::LISTEN,
+			entry: crate::ENTRY,
 			bindings: Vec::new(),
 			state: nowhere.clone(),
 			containerd: nowhere.clone(),

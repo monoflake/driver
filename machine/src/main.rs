@@ -17,6 +17,7 @@ use envelope::contracts::{
 };
 
 mod answer;
+mod entry;
 mod kept;
 mod listed;
 mod served;
@@ -27,6 +28,13 @@ const PORT: u16 = 37483;
 /// Where it listens unless told, every address of the machine, its firewall opening the port on
 /// the tailnet's interface alone.
 const LISTEN: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), PORT);
+
+/// The entry's port, ENTRY on a keypad, as the driver's is DRIVE.
+const ENTRY_PORT: u16 = 36879;
+
+/// Where the entry listens unless told, loopback alone, so only what is put in front of it reaches
+/// it and nothing is opened by a default.
+const ENTRY: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), ENTRY_PORT);
 
 /// The palette its help is painted in, cargo's, the workspace's `docs/toolchain.md`.
 const STYLES: clap::builder::Styles = clap::builder::Styles::styled()
@@ -46,6 +54,9 @@ struct Arguments {
 	/// The address and port it listens on, plain HTTP, TLS a reverse proxy's.
 	#[arg(long, value_name = "address:port", default_value_t = LISTEN)]
 	listen: SocketAddr,
+	/// The address and port the entry listens on, plain HTTP, TLS the tunnel's in front of it now.
+	#[arg(long, value_name = "address:port", default_value_t = ENTRY)]
+	entry: SocketAddr,
 	/// A binding token's file, `<id>.<secret>`, read at start and again on SIGHUP; repeated.
 	#[arg(long = "bindings", value_name = "file")]
 	bindings: Vec<PathBuf>,

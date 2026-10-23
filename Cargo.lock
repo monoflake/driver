@@ -471,6 +471,7 @@ dependencies = [
  "driver-machine-management",
  "driver-machine-object",
  "envelope",
+ "hyper-util",
  "serde_json",
  "tokio",
 ]
