@@ -3,14 +3,15 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use driver_machine_container::Refused;
+use driver_machine_container::{Capacity, Refused};
+use driver_machine_management::Binding;
 use envelope::contracts::{
-	ManagementApply, ManagementDescribed, ManagementEnd, ManagementEnded, ManagementHeld,
-	ManagementHolding, ManagementItem, ManagementPolicy, ManagementState,
+	ManagementApply, ManagementCapacity, ManagementDescribed, ManagementEnd, ManagementEnded,
+	ManagementHeld, ManagementHolding, ManagementItem, ManagementPolicy, ManagementState,
 };
 use envelope::{Bounded, Uint53};
 
-use crate::{Item, Listed, Manage};
+use crate::{Item, Listed, Machine, Manage};
 
 /// The grace of a binding that set none, a week in seconds.
 const WEEK: u32 = 604_800;
@@ -18,10 +19,47 @@ const WEEK: u32 = 604_800;
 /// The longest grace, a year of 365 days in seconds.
 const YEAR: u32 = 31_536_000;
 
-impl Default for Listed {
-	fn default() -> Self {
-		Self { generation: 0, policy: 0, grace: WEEK, items: BTreeMap::new(), made: None, bucket: None }
+impl Listed {
+	/// A binding's list before anything is applied.
+	pub(crate) const fn new(binding: Binding) -> Self {
+		Self {
+			binding,
+			generation: 0,
+			policy: 0,
+			grace: WEEK,
+			items: BTreeMap::new(),
+			forgotten: BTreeSet::new(),
+			made: None,
+			bucket: None,
+		}
 	}
+}
+
+/// What the machine makes of a binding, its namespace `b<binding>` and its qgroup `1/<binding>`,
+/// as RFC 4elqc proposes.
+fn named(binding: Binding) -> driver_machine_container::Binding {
+	driver_machine_container::Binding {
+		namespace: format!("b{binding}"),
+		qgroup: format!("1/{binding}"),
+		capacities: BTreeMap::new(),
+	}
+}
+
+/// What the machine made of a binding found again from its items, each `container` item made a
+/// container of capacity, none where it holds no such item.
+pub(crate) fn remade(
+	binding: Binding,
+	items: &BTreeMap<u32, Item>,
+) -> Option<driver_machine_container::Binding> {
+	let mut made = named(binding);
+	for (id, item) in items {
+		if let (ManagementCapacity::Container { millicores, memory }, ManagementState::Made { .. }) =
+			(&item.capacity, &item.state)
+		{
+			made.capacities.insert(*id, Capacity { millicores: *millicores, memory: memory.get() });
+		}
+	}
+	(!made.capacities.is_empty()).then_some(made)
 }
 
 fn refused(reason: &'static str, message: impl Into<String>) -> Refused {
@@ -54,9 +92,55 @@ fn valid(items: &[ManagementItem]) -> Result<(), Refused> {
 	Ok(())
 }
 
-/// An item made on the machine within what it can hold, and its state.
-fn made(_listed: &mut Listed, _item: &ManagementItem) -> Result<ManagementState, Refused> {
-	todo!("4elqc")
+/// A list whose `container` items ask at most the machine's cores and memory, the bound RFC 4elqc
+/// proposes, what other bindings hold not yet counted.
+fn bounded(items: &[ManagementItem], machine: &Machine) -> Result<(), Refused> {
+	let (mut millicores, mut memory) = (0u64, 0u64);
+	for item in items {
+		match &item.capacity {
+			ManagementCapacity::Container { millicores: cores, memory: bytes } => {
+				millicores = millicores.saturating_add(u64::from(*cores));
+				memory = memory.saturating_add(bytes.get());
+			}
+			ManagementCapacity::Volume { .. }
+			| ManagementCapacity::Object { .. }
+			| ManagementCapacity::Database { .. } => {}
+		}
+	}
+	if millicores > machine.millicores || memory > machine.memory {
+		let (cores, bytes) = (machine.millicores, machine.memory);
+		return Err(refused(
+			"beyond_host",
+			format!(
+				"the list asks {millicores} millicores and {memory} bytes, the machine {cores} and {bytes}"
+			),
+		));
+	}
+	Ok(())
+}
+
+/// An item made on the machine, and its state; a `container` item is recorded and made at once,
+/// since the container kind applies its share as it creates each container, RFC 4elqc.
+fn made(
+	listed: &mut Listed,
+	item: &ManagementItem,
+	machine: &Machine,
+) -> Result<ManagementState, Refused> {
+	if let Some(made) = listed.made.as_mut() {
+		made.capacities.remove(&item.id);
+	}
+	match &item.capacity {
+		ManagementCapacity::Container { millicores, memory } => {
+			let binding = listed.binding;
+			let made = listed.made.get_or_insert_with(|| named(binding));
+			made.capacities.insert(item.id, Capacity { millicores: *millicores, memory: memory.get() });
+			Ok(ManagementState::Made { address: machine.address.clone() })
+		}
+		// The other kinds wait for their blocks, RFC 4elqc.
+		ManagementCapacity::Volume { .. }
+		| ManagementCapacity::Object { .. }
+		| ManagementCapacity::Database { .. } => todo!("4elqc"),
+	}
 }
 
 /// An item removed from the machine.
@@ -83,15 +167,21 @@ impl Listed {
 }
 
 impl Manage for Listed {
-	fn apply(&mut self, input: &ManagementApply, now: u64) -> Result<ManagementHeld, Refused> {
+	fn apply(
+		&mut self,
+		input: &ManagementApply,
+		machine: &Machine,
+		now: u64,
+	) -> Result<ManagementHeld, Refused> {
 		valid(&input.items)?;
 		if input.generation.get() < self.generation {
 			return held(self.generation);
 		}
+		bounded(&input.items, machine)?;
 		for item in &input.items {
 			let kept = self.items.get(&item.id).is_some_and(|i| i.capacity == item.capacity);
 			if !kept {
-				let state = made(self, item)?;
+				let state = made(self, item, machine)?;
 				self.items.insert(
 					item.id,
 					Item { capacity: item.capacity.clone(), credentials: Vec::new(), state, unasked: None },

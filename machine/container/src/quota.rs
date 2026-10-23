@@ -33,8 +33,21 @@ fn own_qgroup(rootid: &str) -> Result<String, Fault> {
 	Ok(format!("0/{id}"))
 }
 
+impl Btrfs {
+	/// The qgroup made where it is not yet, so a binding's first container makes it, RFC 4elqc.
+	async fn made(&self, qgroup: &str) -> Result<(), Fault> {
+		let args = ["qgroup".as_ref(), "create".as_ref(), qgroup.as_ref(), self.mount.as_os_str()];
+		match self.run(&args).await {
+			Ok(_) => Ok(()),
+			Err(Fault(why)) if why.contains("File exists") => Ok(()),
+			Err(fault) => Err(fault),
+		}
+	}
+}
+
 impl Quota for Btrfs {
 	async fn assign(&self, subvolume: &Path, qgroup: &str) -> Result<(), Fault> {
+		self.made(qgroup).await?;
 		let rootid =
 			self.run(&["inspect-internal".as_ref(), "rootid".as_ref(), subvolume.as_os_str()]).await?;
 		let own = own_qgroup(&rootid)?;

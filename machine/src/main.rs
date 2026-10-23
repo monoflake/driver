@@ -1,7 +1,7 @@
 //! `driver-machine`, serving a machine's management and kinds at `POST /{interface}/{operation}`,
 //! RFCs 8c0rg and vr5lw. This file is its interface, the model's, `docs/code.md`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -17,6 +17,7 @@ use envelope::contracts::{
 };
 
 mod answer;
+mod kept;
 mod listed;
 mod served;
 
@@ -102,23 +103,40 @@ struct Item {
 	unasked: Option<u64>,
 }
 
-/// A binding's list, the generations of the list and the policy held, the grace and each item, and
-/// what the machine made of the binding, which its deployments run within, and its bucket.
+/// A binding's list, its generations, grace and items, the hashes of its tokens an apply forgot,
+/// and what the machine made of it, which its deployments run within, and its bucket.
 #[derive(Debug, Clone)]
 struct Listed {
+	binding: Binding,
 	generation: u64,
 	policy: u64,
 	grace: u32,
 	items: BTreeMap<u32, Item>,
+	forgotten: BTreeSet<[u8; 32]>,
 	made: Option<driver_machine_container::Binding>,
 	bucket: Option<Arc<driver_machine_object::Bucket>>,
+}
+
+/// What the machine holds whole, every core in thousandths and its memory in bytes, read at start,
+/// and the address it is reached at as a `container` item reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Machine {
+	millicores: u64,
+	memory: u64,
+	address: String,
 }
 
 /// Management's operations on one binding's list, RFC vr5lw; implemented for [`Listed`]. A time is
 /// in milliseconds since the epoch.
 trait Manage {
-	/// The list taken where it is not older than the one held, answered with the generation held.
-	fn apply(&mut self, input: &ManagementApply, now: u64) -> Result<ManagementHeld, Refused>;
+	/// The list taken where it is not older than the one held and fits the machine, answered with
+	/// the generation held.
+	fn apply(
+		&mut self,
+		input: &ManagementApply,
+		machine: &Machine,
+		now: u64,
+	) -> Result<ManagementHeld, Refused>;
 	/// The grace taken where its policy is not older than the one held.
 	fn set_policy(&mut self, input: &ManagementPolicy) -> Result<ManagementHeld, Refused>;
 	/// What is held, once every item past its grace is removed.
@@ -127,12 +145,14 @@ trait Manage {
 	fn end(&mut self, input: &ManagementEnd) -> Result<ManagementEnded, Refused>;
 }
 
-/// What every call is served with, the token files and the tokens they hold, each binding's list,
-/// and the function kind over the container kind; the object kind is each list's bucket.
+/// What every call is served with, the tokens and their files, the machine, each binding's list and
+/// where it is kept, and the function kind over the container kind, each bucket a list's.
 struct Driver {
 	files: Vec<PathBuf>,
 	tokens: RwLock<Tokens>,
+	machine: Machine,
 	lists: tokio::sync::Mutex<BTreeMap<Binding, Listed>>,
+	kept: PathBuf,
 	functions: Functions<Containers<Socket, Bridge, Btrfs, Https>>,
 }
 

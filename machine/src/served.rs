@@ -3,6 +3,8 @@
 
 use std::any::Any;
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
+use std::path::Path;
 use std::process::ExitCode;
 use std::sync::{Arc, PoisonError, RwLock, Weak};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -13,20 +15,20 @@ use axum::extract::State;
 use axum::http::{HeaderMap, Method, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use driver_machine_container::{
-	Bridge, Btrfs, Containers, Deployments, Https, Refused, Runtimes, Socket,
+	Bridge, Btrfs, Containers, Deployments, Https, Refused, Restart as _, Runtimes, Socket,
 };
 use driver_machine_function::Functions;
-use driver_machine_management::{Binding, Hold, Tokens, Unread};
+use driver_machine_management::{Binding, Hold, Memory, Parse, Processor, Tokens, Unread};
 use driver_machine_object::{MOST, Objects as _, Unwritten};
 use envelope::contracts::interface::{deployments, management, object};
 use envelope::contracts::{
 	DeploymentDeleted, DeploymentForm, DeploymentRuns, DeploymentRuntime, Error, Failure,
-	ObjectDeleted, ObjectDescribed, ObjectListed,
+	ManagementHeld, ObjectDeleted, ObjectDescribed, ObjectListed,
 };
 use envelope::{Called, Encoded, Operation};
 
 use crate::answer::{self, Form, Forms};
-use crate::{Arguments, Driver, Listed, Manage};
+use crate::{Arguments, Driver, Listed, Machine, Manage, kept};
 
 /// The most a call's body may be, axum's own default bound.
 const LARGEST: usize = 2 * 1024 * 1024;
@@ -123,21 +125,24 @@ fn read<C: Called>(form: Form, operation: &str, body: &[u8]) -> Result<C, Error>
 	}
 }
 
-/// A management call on its binding's list.
+/// A management call on its binding's list, the list kept again wherever the call changed it, and
+/// a list that could not be kept answered `fault`.
 async fn managed(
 	driver: Arc<Driver>,
 	binding: Binding,
 	call: management::Call,
 	form: Form,
 ) -> Served {
+	// Every list is locked while its file is written, as through btrfs calls, RFC 4elqc item 7.
 	let mut lists = driver.lists.lock().await;
-	let listed = lists.entry(binding).or_insert_with(Listed::default);
-	match call {
+	let listed = lists.entry(binding).or_insert_with(|| Listed::new(binding));
+	let before = kept::written(listed);
+	let served = match call {
 		management::Call::Apply(input) => {
-			let result = listed.apply(&input, now());
+			let result = listed.apply(&input, &driver.machine, now());
 			if result.as_ref().is_ok_and(|held| held.generation == input.generation) {
 				let mut tokens = driver.tokens.write().unwrap_or_else(PoisonError::into_inner);
-				tokens.apply(binding, input.tokens.as_deref());
+				listed.forgotten.extend(tokens.apply(binding, input.tokens.as_deref()));
 			}
 			answered::<management::Apply>(result, form)
 		}
@@ -146,6 +151,16 @@ async fn managed(
 		}
 		management::Call::Describe(_) => answered::<management::Describe>(listed.describe(now()), form),
 		management::Call::End(input) => answered::<management::End>(listed.end(&input), form),
+	};
+	if kept::written(listed) == before {
+		return served;
+	}
+	match kept::write(&driver.kept, listed) {
+		Ok(()) => served,
+		Err(why) => {
+			let message = Some(format!("the list could not be kept, {why}"));
+			Served::of::<ManagementHeld>(Err(answer::error(&[], "fault", message)), form)
+		}
 	}
 }
 
@@ -393,13 +408,38 @@ async fn route(
 	(served.status, [(header::CONTENT_TYPE, served.form.media())], served.bytes).into_response()
 }
 
-/// The driver made from its arguments, its tokens read once.
+/// The machine's cores and memory as the kernel writes them, none where they are not read, so no
+/// list asking any fits; a `container` item's address is the one the driver listens at, RFC 4elqc.
+fn machine(listen: SocketAddr) -> Machine {
+	let read = |file: &str| std::fs::read_to_string(Path::new("/").join(file)).ok();
+	let cores = read(Processor::FILE).and_then(|t| Processor::parse(&t).ok()).map(|p| p.cores.len());
+	let millicores = cores.and_then(|n| u64::try_from(n).ok()).map_or(0, |n| n.saturating_mul(1000));
+	let memory = read(Memory::FILE).and_then(|t| Memory::parse(&t).ok()).map_or(0, |m| m.total);
+	if millicores == 0 || memory == 0 {
+		eprintln!("the machine's cores and memory were not read, so no container item fits");
+	}
+	Machine { millicores, memory, address: listen.to_string() }
+}
+
+/// The driver made from its arguments, each binding's kept list read and its forgotten tokens
+/// forgotten again before the token files are read once.
 fn started(arguments: Arguments) -> Driver {
 	let state = arguments.state;
+	let kept = state.join("lists");
+	let (lists, unread) = kept::read(&kept);
+	for why in unread {
+		eprintln!("lists {why}");
+	}
+	let mut tokens = Tokens::default();
+	for listed in lists.values() {
+		tokens.forget(&listed.forgotten.iter().copied().collect::<Vec<_>>());
+	}
 	let driver = Driver {
 		files: arguments.bindings,
-		tokens: RwLock::new(Tokens::default()),
-		lists: tokio::sync::Mutex::new(BTreeMap::new()),
+		tokens: RwLock::new(tokens),
+		machine: machine(arguments.listen),
+		lists: tokio::sync::Mutex::new(lists),
+		kept,
 		functions: Functions {
 			containers: Containers {
 				containerd: Socket { path: arguments.containerd },
@@ -434,6 +474,25 @@ fn reloaded(driver: Arc<Driver>) -> std::io::Result<()> {
 	Ok(())
 }
 
+/// Every container a reboot ended started again, each found from containerd's labels rather than
+/// kept here, as the container kind writes there all it keeps of a deployment.
+async fn restarted(driver: Arc<Driver>) {
+	let made: Vec<_> = driver.lists.lock().await.values().filter_map(|l| l.made.clone()).collect();
+	for binding in made {
+		match driver.functions.containers.restarted(&binding).await {
+			Ok(started) => {
+				for id in started {
+					eprintln!("restarted {} {id}", binding.namespace);
+				}
+			}
+			Err(e) => {
+				let message = e.message.unwrap_or_default();
+				eprintln!("restart {}: {} {message}", binding.namespace, e.reason);
+			}
+		}
+	}
+}
+
 /// The driver served at its address until the process is stopped.
 pub(crate) async fn run(arguments: Arguments) -> ExitCode {
 	// A panic is answered as a fault, so its own report is one line beside the calls'.
@@ -447,6 +506,7 @@ pub(crate) async fn run(arguments: Arguments) -> ExitCode {
 		eprintln!("SIGHUP: {e}");
 		return ExitCode::FAILURE;
 	}
+	tokio::spawn(restarted(Arc::clone(&driver)));
 	let listener = match tokio::net::TcpListener::bind(listen).await {
 		Ok(listener) => listener,
 		Err(e) => {

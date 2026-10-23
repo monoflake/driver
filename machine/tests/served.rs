@@ -172,3 +172,22 @@ fn a_deployment_is_reached_through_the_container_kind() {
 	assert_eq!((status, &answer["reason"]), (404, &json!("not_found")));
 	driver.logged("deployments describe error rejected not_found");
 }
+
+#[test]
+fn a_list_and_the_tokens_an_apply_forgot_are_kept_across_a_restart() {
+	let driver = Started::with("restart", 2);
+	let policy = json!({ "generation": 1, "grace": 3600 });
+	assert_eq!(driver.call(1, "management", "set_policy", &policy).0, 200);
+	let list = json!({ "generation": 2, "items": [] });
+	assert_eq!(driver.call(1, "management", "apply", &list).0, 200);
+	// Binding 2 keeps none of its tokens in force, so its one is forgotten though its file stands.
+	let none = json!({ "generation": 1, "items": [], "tokens": [] });
+	assert_eq!(driver.call(2, "management", "apply", &none).0, 200);
+	assert_eq!(driver.call(2, "management", "describe", &json!({})).0, 403);
+	let driver = driver.restarted();
+	let (status, answer) = driver.call(1, "management", "describe", &json!({}));
+	assert_eq!(status, 200);
+	let held = json!({ "generation": 2, "policy": 1, "grace": 3600, "items": [] });
+	assert_eq!(answer["data"], held);
+	assert_eq!(driver.call(2, "management", "describe", &json!({})).0, 403);
+}

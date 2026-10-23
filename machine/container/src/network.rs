@@ -20,12 +20,13 @@ const NETNS: &str = "/run/netns";
 /// The interface a container reaches the bridge by.
 const INTERFACE: &str = "eth0";
 
-/// What one plugin is asked, its command and its interface.
+/// What one plugin is asked, its command, its interface and its `CNI_ARGS`.
 struct Call<'a> {
 	command: &'a str,
 	id: &'a str,
 	interface: &'a str,
 	netns: &'a Path,
+	args: &'a str,
 }
 
 impl Bridge {
@@ -67,6 +68,7 @@ impl Bridge {
 			.env("CNI_NETNS", call.netns)
 			.env("CNI_IFNAME", call.interface)
 			.env("CNI_PATH", &self.plugins)
+			.env("CNI_ARGS", call.args)
 			.stdin(Stdio::piped())
 			.stdout(Stdio::piped())
 			.stderr(Stdio::piped())
@@ -117,11 +119,14 @@ impl Bridge {
 			object.insert("prevResult".to_owned(), answered.clone());
 		}
 		self
-			.plugin("bridge", &Call { command: "DEL", id, interface: INTERFACE, netns }, &config)
+			.plugin(
+				"bridge",
+				&Call { command: "DEL", id, interface: INTERFACE, netns, args: "" },
+				&config,
+			)
 			.await?;
-		self
-			.plugin("loopback", &Call { command: "DEL", id, interface: "lo", netns }, &self.loopback())
-			.await?;
+		let lo = Call { command: "DEL", id, interface: "lo", netns, args: "" };
+		self.plugin("loopback", &lo, &self.loopback()).await?;
 		Ok(())
 	}
 }
@@ -148,15 +153,17 @@ impl Network for Bridge {
 		let netns = Path::new(NETNS).join(id);
 		let kept = self.kept(id);
 		let at = |e: std::io::Error, p: &Path| Fault(format!("{}: {e}", p.display()));
+		let mut asked = String::new();
 		if let Ok(text) = tokio::fs::read_to_string(&kept).await {
 			let answered: Value =
 				serde_json::from_str(&text).map_err(|e| Fault(format!("{}: {e}", kept.display())))?;
 			if exists(&netns).await {
 				return Ok(Attachment { address: SocketAddr::new(address(&answered)?, port), netns });
 			}
-			// The namespace went with a restart, so its address is given back and all made again.
+			// The namespace went with a reboot, so all is made again at the address its label holds.
 			self.undone(id, &netns, &answered).await?;
 			tokio::fs::remove_file(&kept).await.map_err(|e| at(e, &kept))?;
+			asked = format!("IgnoreUnknown=1;IP={}", address(&answered)?);
 		}
 		tokio::fs::create_dir_all(&self.state).await.map_err(|e| at(e, &self.state))?;
 		if !exists(&netns).await {
@@ -165,14 +172,14 @@ impl Network for Bridge {
 		self
 			.plugin(
 				"loopback",
-				&Call { command: "ADD", id, interface: "lo", netns: &netns },
+				&Call { command: "ADD", id, interface: "lo", netns: &netns, args: "" },
 				&self.loopback(),
 			)
 			.await?;
 		let answered = self
 			.plugin(
 				"bridge",
-				&Call { command: "ADD", id, interface: INTERFACE, netns: &netns },
+				&Call { command: "ADD", id, interface: INTERFACE, netns: &netns, args: &asked },
 				&self.bridge(),
 			)
 			.await?;

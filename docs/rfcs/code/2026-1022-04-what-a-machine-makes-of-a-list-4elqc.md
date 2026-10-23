@@ -17,7 +17,18 @@ or holding no credential or three `invalid`, a grace of at most a year, a week w
 an item unasked kept until its grace has passed, `end` refusing what the list still asks. The
 program does all of that. What it cannot do without deciding is what a machine makes of an item,
 so an `apply` naming any item new or changed waits on this RFC, `todo!("4elqc")` in
-`machine/src/listed.rs`, and is answered `fault` with that message:
+`machine/src/listed.rs`, and is answered `fault` with that message.
+
+Built provisionally for RFC n0o4l's second step, in commit `pending`, and open to what running
+shows. Items 1, 2, 5 and 8 are built as the Options propose, the bound counting a list's
+`container` items alone against the machine's cores and memory, the qgroup made with the binding's
+first container rather than its first item, and what an apply forgot of a binding's tokens kept in
+its list's file. Of item 3 the `container` item alone is built, made at once at the address the
+driver listens on, and the other three still wait on `todo!("4elqc")`. A deployment is kept by
+containerd's labels as before, and a container whose task a reboot ended is started again when the
+driver starts. Items 4, 6 and 7 stand as written.
+
+The questions, each as it was asked:
 
 1. **What bounds a list**, the `beyond_host` an `apply` answers before anything is held. vr5lw has
    a machine's bound a default its holder may raise or lower by how full the machine is, D8.

@@ -130,6 +130,16 @@ pub trait Host {
 	) -> impl Future<Output = Result<DeploymentDescribed, Refused>> + Send;
 }
 
+/// What a start of the driver asks of the containers, implemented for [`Containers`].
+pub trait Restart {
+	/// Every container of the binding whose task is gone and whose stop no call asked, as after a
+	/// reboot, started again as `resume` starts one; the ids started.
+	fn restarted(
+		&self,
+		binding: &Binding,
+	) -> impl Future<Output = Result<Vec<String>, Refused>> + Send;
+}
+
 /// An image's configuration, as its OCI config gives it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ImageConfig {
@@ -297,7 +307,8 @@ pub struct Bridge {
 
 /// A binding's share of btrfs, RFC vr5lw; implemented for [`Btrfs`].
 pub trait Quota: Send + Sync {
-	/// A subvolume made a member of the binding's qgroup, while nothing is written in it yet.
+	/// A subvolume made a member of the binding's qgroup, the qgroup made first where it is not,
+	/// while nothing is written in the subvolume yet.
 	fn assign(
 		&self,
 		subvolume: &std::path::Path,

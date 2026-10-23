@@ -19,7 +19,7 @@ use sha2::{Digest as _, Sha256};
 
 use crate::{
 	Binding, Chosen, Containerd, Containers, Deployments, Fault, Fetch, Host, Hosted, Image, Listed,
-	Network, Quota, Refused, Runtimes, Spec, Task, Unfetched,
+	Network, Quota, Refused, Restart, Runtimes, Spec, Task, Unfetched,
 };
 use labels::Kept;
 use secrets::{KeyFile, Places};
@@ -451,6 +451,21 @@ where
 		Ok(())
 	}
 
+	/// A container started again as it was, its secrets and its network put back where a reboot
+	/// took them, and its stop mark cleared.
+	async fn started(&self, binding: &Binding, listed: &Listed) -> Result<(), Refused> {
+		let kept = Kept::read(&listed.labels).map_err(|why| Refused::new("fault", why))?;
+		let places = self.places(&binding.namespace, &listed.id);
+		if tokio::fs::try_exists(&places.sealed).await.unwrap_or(false) {
+			let seal = KeyFile::of(&self.state).await?;
+			secrets::restore(&places, &seal, kept.user.0, kept.user.1).await?;
+		}
+		// Its namespace is kept while stopped and made again at its address where a reboot lost it.
+		self.network.attach(&network_id(&binding.namespace, &listed.id), kept.port).await?;
+		self.containerd.start(&binding.namespace, &listed.id).await?;
+		marks::clear(&self.state, &binding.namespace, &listed.id).await
+	}
+
 	/// Everything a container held removed, its network too.
 	async fn removed(&self, namespace: &str, id: &str) -> Result<(), Refused> {
 		self.containerd.remove(namespace, id).await?;
@@ -506,17 +521,7 @@ where
 	) -> Result<DeploymentDescribed, Refused> {
 		let mine = self.mine(binding, &input.runs).await?;
 		let listed = chosen(&mine).ok_or_else(|| Refused::bare("not_found"))?;
-		let kept = Kept::read(&listed.labels).map_err(|why| Refused::new("fault", why))?;
-		let places = self.places(&binding.namespace, &listed.id);
-		if tokio::fs::try_exists(&places.sealed).await.unwrap_or(false) {
-			let seal = KeyFile::of(&self.state).await?;
-			secrets::restore(&places, &seal, kept.user.0, kept.user.1).await?;
-		}
-		// Its namespace is kept while stopped and made again where a restart lost it. A new address is
-		// not yet written back to its label.
-		self.network.attach(&network_id(&binding.namespace, &listed.id), kept.port).await?;
-		self.containerd.start(&binding.namespace, &listed.id).await?;
-		marks::clear(&self.state, &binding.namespace, &listed.id).await?;
+		self.started(binding, listed).await?;
 		self.answer(binding, &input.runs).await
 	}
 
@@ -545,6 +550,26 @@ where
 			self.removed(&binding.namespace, &listed.id).await?;
 		}
 		Ok(DeploymentDeleted {})
+	}
+}
+
+impl<C, N, Q, F> Restart for Containers<C, N, Q, F>
+where
+	C: Containerd,
+	N: Network,
+	Q: Quota,
+	F: Fetch,
+{
+	async fn restarted(&self, binding: &Binding) -> Result<Vec<String>, Refused> {
+		let mut started = Vec::new();
+		for listed in self.containerd.list(&binding.namespace).await? {
+			let gone = listed.task.is_none() && listed.labels.contains_key(labels::RUNS);
+			if gone && !marks::is_set(&self.state, &binding.namespace, &listed.id).await {
+				self.started(binding, &listed).await?;
+				started.push(listed.id);
+			}
+		}
+		Ok(started)
 	}
 }
 

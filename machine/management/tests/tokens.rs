@@ -176,6 +176,19 @@ fn a_token_forgotten_stays_forgotten_though_its_file_stands() {
 }
 
 #[test]
+fn a_hash_an_apply_forgot_is_refused_after_a_restart_told_it() {
+	let directory = Directory::new("restarted");
+	let (mut tokens, files) = held(&directory, &[(7, 1), (7, 2)]);
+	let forgotten = tokens.apply(7, Some(&[hash(2)]));
+	assert_eq!(forgotten, vec![hash(1)]);
+	let mut restarted = Tokens::default();
+	restarted.forget(&forgotten);
+	assert_eq!(restarted.reload(&files), vec![]);
+	assert_eq!(restarted.check(Some(&bearer(7, 1))), Err(Denied));
+	assert_eq!(restarted.check(Some(&bearer(7, 2))), Ok(7));
+}
+
+#[test]
 fn an_apply_without_tokens_leaves_both() {
 	let directory = Directory::new("unnamed");
 	let (mut tokens, _) = held(&directory, &[(7, 1), (7, 2)]);

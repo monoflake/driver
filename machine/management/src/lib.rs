@@ -32,8 +32,10 @@ pub trait Hold {
 	/// compared in constant time with each its binding holds.
 	fn check(&self, authorization: Option<&str>) -> Result<Binding, Denied>;
 	/// A binding's tokens in force by their hashes, as an apply's `tokens` names them; every other
-	/// it holds is forgotten, and none changes where the apply names none.
-	fn apply(&mut self, binding: Binding, tokens: Option<&[[u8; 32]]>);
+	/// it holds is forgotten and answered, and none changes where the apply names none.
+	fn apply(&mut self, binding: Binding, tokens: Option<&[[u8; 32]]>) -> Vec<[u8; 32]>;
+	/// Hashes forgotten before a restart forgotten again, so a file still holding one is refused.
+	fn forget(&mut self, hashes: &[[u8; 32]]);
 	/// A binding its control ended, every token of it forgotten.
 	fn end(&mut self, binding: Binding);
 }

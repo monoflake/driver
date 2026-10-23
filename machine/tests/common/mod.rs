@@ -22,12 +22,14 @@ pub fn token(binding: u32) -> String {
 	format!("{binding}.{}A", character.to_string().repeat(42))
 }
 
-/// The program running, its address, every line it wrote to stderr, and its directory.
+/// The program running, its address, every line it wrote to stderr, its directory, and how many
+/// bindings it holds a token file of.
 pub struct Started {
 	child: Child,
 	pub address: SocketAddr,
 	lines: Receiver<String>,
 	directory: PathBuf,
+	bindings: u32,
 }
 
 impl Started {
@@ -37,11 +39,26 @@ impl Started {
 		let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
 			.join(format!("driver-machine-{name}-{}-{nanos}", std::process::id()));
 		std::fs::create_dir_all(&directory).unwrap();
-		let mut command = Command::new(env!("CARGO_BIN_EXE_driver-machine"));
 		for binding in 1..=bindings {
 			let file = directory.join(format!("binding-{binding}"));
 			std::fs::write(&file, format!("{}\n", token(binding))).unwrap();
-			command.arg("--bindings").arg(file);
+		}
+		Self::in_directory(directory, bindings)
+	}
+
+	/// Stopped and started again on the same state and token files, as a restart of its service.
+	pub fn restarted(mut self) -> Self {
+		let _ = self.child.kill();
+		let _ = self.child.wait();
+		// The directory taken is the new one's, so dropping what it was removes none.
+		let directory = std::mem::take(&mut self.directory);
+		Self::in_directory(directory, self.bindings)
+	}
+
+	fn in_directory(directory: PathBuf, bindings: u32) -> Self {
+		let mut command = Command::new(env!("CARGO_BIN_EXE_driver-machine"));
+		for binding in 1..=bindings {
+			command.arg("--bindings").arg(directory.join(format!("binding-{binding}")));
 		}
 		let at = |name: &str| directory.join(name);
 		command
@@ -69,8 +86,8 @@ impl Started {
 				}
 			}
 		});
-		let mut started =
-			Self { child, address: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)), lines, directory };
+		let address = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+		let mut started = Self { child, address, lines, directory, bindings };
 		let listening = started.logged("listening on ");
 		started.address = listening.trim_start_matches("listening on ").parse().unwrap();
 		started
@@ -133,7 +150,9 @@ impl Drop for Started {
 	fn drop(&mut self) {
 		let _ = self.child.kill();
 		let _ = self.child.wait();
-		let _ = std::fs::remove_dir_all(&self.directory);
+		if !self.directory.as_os_str().is_empty() {
+			let _ = std::fs::remove_dir_all(&self.directory);
+		}
 	}
 }
 

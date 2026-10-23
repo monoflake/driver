@@ -111,14 +111,21 @@ impl Hold for Tokens {
 		(found & !self.forgotten.contains(&bytes)).then_some(binding).ok_or(Denied)
 	}
 
-	fn apply(&mut self, binding: Binding, tokens: Option<&[[u8; 32]]>) {
-		let Some(tokens) = tokens else { return };
-		if let Some(held) = self.held.get_mut(&binding) {
-			let (kept, forgotten): (Vec<_>, Vec<_>) =
-				held.drain(..).partition(|hash| tokens.contains(hash));
-			*held = kept;
-			self.forgotten.extend(forgotten);
+	fn apply(&mut self, binding: Binding, tokens: Option<&[[u8; 32]]>) -> Vec<[u8; 32]> {
+		let Some(tokens) = tokens else { return Vec::new() };
+		let Some(held) = self.held.get_mut(&binding) else { return Vec::new() };
+		let (kept, forgotten): (Vec<_>, Vec<_>) =
+			held.drain(..).partition(|hash| tokens.contains(hash));
+		*held = kept;
+		self.forgotten.extend(forgotten.iter().copied());
+		forgotten
+	}
+
+	fn forget(&mut self, hashes: &[[u8; 32]]) {
+		for held in self.held.values_mut() {
+			held.retain(|hash| !hashes.contains(hash));
 		}
+		self.forgotten.extend(hashes.iter().copied());
 	}
 
 	fn end(&mut self, binding: Binding) {
