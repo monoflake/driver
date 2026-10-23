@@ -37,17 +37,18 @@ Decided by the author on 2026-10-22.
   as `monoflake/platform`'s `docs/code.md` has it. The major is raised by the author alone and says
   how stable the driver is. The minor follows the integer versions of the interfaces it serves, the
   kinds' contracts in `monoflake/platform`: it is raised when any of them is, so one minor reads and
-  writes one set of formats. Any other change, a feature or a fix, raises the patch. The first is
-  `0.1.0`.
+  writes one set of formats. Any other change, a feature or a fix, raises the patch. Until the
+  author opens its releases, as everything of the author's own that is unpublished, it is `0.0.0`
+  and the release refuses it, decided by the author on 2026-10-22; the first release is `0.1.0`.
 - **It is released from this repository**, a UTC day as `monoflake/runtime`'s, RFC m7rkq, by the
   workspace's release script a repository's `[release]` declares: a table of what each day released
   with the downloads below it, and one `manifest.json` appended to by each release, recording every
   interface the release serves and its version, so a build reads the minor and patch to take from
-  the last release. A build is released only by hand, the workflow run from GitHub, on the
-  platform at the commit its checkout pins, RFC x6hf9, until the author turns on a release on a
-  push to main that changes what the driver is built from. Until the first, the driver is built on
-  the author's machine and copied to a test machine to be tried, run there as a transient systemd
-  unit, which an upgrade's switch leaves running.
+  the last release. Once opened, a build is released only by hand, the workflow run from GitHub,
+  on the platform at the commit its checkout pins, RFC x6hf9, until the author turns on a release
+  on a push to main that changes what the driver is built from. Until the first, the driver is
+  built on the author's machine and copied to a test machine to be tried, run there as a transient
+  systemd unit, which an upgrade's switch leaves running.
 - **One shape of `manifest.json` for every release**, `{release, artifacts}`, each artifact its
   `name`, `version`, `commit` and `assets`, each asset its `target`, `kind`, `file`, `size` and
   `sha256`, and an image's `digest`, the driver's `kind` being `binary` and an image's `oci`, so

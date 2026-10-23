@@ -145,6 +145,9 @@ let main = () =>
   switch (Archive.version(), listed()) {
   | (None, _) => refuse("machine/Cargo.toml: no [package] version")
   | (_, Error(why)) => refuse(why)
+  | (Some("0.0.0"), _) =>
+    Console.log("driver-machine is 0.0.0, its releases not opened yet, so nothing is released")
+    write(JSON.Encode.object(dict{"artifacts": JSON.Encode.array([])}))
   | (Some(manifest), Ok(entries)) =>
     let archives =
       Archive.targets->Array.map(((_, machine, _)) => (

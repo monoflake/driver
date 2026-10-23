@@ -90,5 +90,6 @@ let driver: Made.driver = {
       "../platform/tests/kinds/deployments/lifecycle.json",
       "../platform/tests/kinds/objects/writes.json",
     ],
+    released: false,
   },
 }

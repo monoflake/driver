@@ -21,8 +21,8 @@ type implementation = {
 }
 
 /**
- * The one binary serving the management and every kind, released with a version of its own, RFC
- * 8c0rg.
+ * The one binary serving the management and every kind, with a version of its own once its releases
+ * are opened, RFC 8c0rg.
  */
 type program = {
   language: language,
@@ -33,6 +33,8 @@ type program = {
   serves: array<string>,
   /** The samples its tests read, from this repository's root. */
   samples: array<string>,
+  /** Whether the author has opened its releases; until then its version is `0.0.0`. */
+  released: bool,
 }
 
 /** A driver, its implementations, its management and the runtimes it gives compute by. */
@@ -112,7 +114,7 @@ let blocks = (role, d: driver) => {
           ~uses=p.uses,
           ~takes=p.takes,
           ~blocks=p.serves,
-          ~released=true,
+          ~released=p.released,
           ~samples=p.samples,
         ),
       ),

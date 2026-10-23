@@ -1,6 +1,6 @@
 [package]
 name = "driver-machine"
-version = "0.1.0"
+version = "0.0.0"
 description = "driver(machine), the one program a machine runs as its driver, serving its management and its kinds over plain HTTP, RFC 8c0rg"
 edition.workspace = true
 publish.workspace = true
