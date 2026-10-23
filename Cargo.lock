@@ -475,6 +475,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "listenfd",
+ "reqwest",
  "serde_json",
  "tokio",
 ]

@@ -1,9 +1,11 @@
 //! `Https` fetching a `file:` address, copied, hashed and bounded, only a regular file in the named
-//! directory through no link.
+//! directory through no link, and a plain HTTP address at its one origin alone.
 
 // What is here is all a test's, so the lints a test may break by are its helpers' as well.
 #![cfg(test)]
 
+use std::io::{Read as _, Write as _};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 
 use driver_machine_container::{Fetch, Https, Unfetched};
@@ -15,7 +17,7 @@ fn place(test: &str) -> (PathBuf, Https) {
 	// What an earlier run left is not this run's.
 	let _ = std::fs::remove_dir_all(&place);
 	std::fs::create_dir_all(place.join("served/deep")).unwrap();
-	let https = Https { local: Some(place.join("served")) };
+	let https = Https { local: Some(place.join("served")), plain: None };
 	(place, https)
 }
 
@@ -84,7 +86,7 @@ async fn a_file_address_is_refused_where_no_directory_is_named() {
 	let (place, _) = place("unnamed");
 	let served = place.join("served/image.tar");
 	std::fs::write(&served, b"image").unwrap();
-	let https = Https { local: None };
+	let https = Https { local: None, plain: None };
 	refused(https.fetch(&address(&served), &place.join("fetched.tar"), 1024).await, &place);
 }
 
@@ -94,4 +96,51 @@ async fn an_address_of_another_scheme_is_unfetchable() {
 	for address in ["ftp://artifacts.invalid/x.tar", "http://localhost:9/x.tar"] {
 		refused(https.fetch(address, &place.join("fetched.tar"), 1024).await, &place);
 	}
+}
+
+/// A server on a port of its own answering every request with `status` and `body`, its origin.
+fn served(status: &'static str, body: Vec<u8>) -> String {
+	let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+	let origin = format!("http://{}", listener.local_addr().unwrap());
+	std::thread::spawn(move || {
+		for mut stream in listener.incoming().flatten() {
+			let mut request = [0u8; 4096];
+			let _ = stream.read(&mut request);
+			let head = format!(
+				"HTTP/1.1 {status}\r\nContent-Length: {}\r\nLocation: http://127.0.0.1:9/x\r\n\r\n",
+				body.len()
+			);
+			let _ = stream.write_all(head.as_bytes()).and_then(|()| stream.write_all(&body));
+		}
+	});
+	origin
+}
+
+#[tokio::test]
+async fn a_plain_address_at_the_one_origin_is_fetched_whole_and_hashed() {
+	let (place, mut https) = place("plain");
+	let bytes: Vec<u8> = (0..50_000u32).map(|n| n.to_le_bytes()[0]).collect();
+	let origin = served("200 OK", bytes.clone());
+	https.plain = Some(origin.clone());
+	let into = place.join("fetched.tar");
+	let hash = https.fetch(&format!("{origin}/artifacts/ab"), &into, 1 << 20).await.unwrap();
+	assert_eq!(hash, <[u8; 32]>::from(Sha256::digest(&bytes)));
+	assert_eq!(std::fs::read(&into).unwrap(), bytes);
+}
+
+#[tokio::test]
+async fn a_plain_address_past_the_one_origin_or_redirected_from_it_is_unfetchable() {
+	let (place, mut https) = place("plain-elsewhere");
+	let origin = served("200 OK", b"artifact".to_vec());
+	let redirecting = served("302 Found", Vec::new());
+	// The same host on a port the origin's is the start of, and another origin, are not it.
+	https.plain = Some(origin[..origin.len() - 1].to_owned());
+	for address in [format!("{origin}/x.tar"), format!("{redirecting}/x.tar")] {
+		refused(https.fetch(&address, &place.join("fetched.tar"), 1024).await, &place);
+	}
+	https.plain = Some(redirecting.clone());
+	refused(
+		https.fetch(&format!("{redirecting}/x.tar"), &place.join("fetched.tar"), 1024).await,
+		&place,
+	);
 }

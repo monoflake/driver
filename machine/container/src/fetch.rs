@@ -35,18 +35,35 @@ impl Fetch for Https {
 			let file = served(local, path).await.ok_or_else(|| unfetchable(NOT_SERVED))?;
 			return copied(file, into, most).await;
 		}
+		if self.plain.as_deref().is_some_and(|origin| within(address, origin)) {
+			return fetched(address, into, most, false).await;
+		}
 		if address.starts_with("https://") {
-			return fetched(address, into, most).await;
+			return fetched(address, into, most, true).await;
 		}
 		Err(unfetchable("an artifact's address is https: or file:"))
 	}
 }
 
-/// An artifact over HTTPS, followed through no redirect to anything but HTTPS, refused before a
-/// byte is written where it says it is larger than the bound.
-async fn fetched(address: &str, into: &Path, most: u64) -> Result<[u8; 32], Unfetched> {
+/// Whether an address lies at the origin, its path begun right after the origin's port.
+fn within(address: &str, origin: &str) -> bool {
+	let origin = origin.trim_end_matches('/');
+	address.strip_prefix(origin).is_some_and(|path| path.starts_with('/'))
+}
+
+/// An artifact over HTTPS, followed through no redirect to anything but HTTPS, or over plain HTTP
+/// followed through none, refused before a byte is written where it says it is past the bound.
+async fn fetched(
+	address: &str,
+	into: &Path,
+	most: u64,
+	secure: bool,
+) -> Result<[u8; 32], Unfetched> {
+	let redirect =
+		if secure { reqwest::redirect::Policy::default() } else { reqwest::redirect::Policy::none() };
 	let client = reqwest::Client::builder()
-		.https_only(true)
+		.https_only(secure)
+		.redirect(redirect)
 		.connect_timeout(CONNECT)
 		.timeout(WHOLE)
 		.build()

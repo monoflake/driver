@@ -1,5 +1,6 @@
-//! `driver-machine`, serving a machine's management and kinds, and as its command `entry` the
-//! entry, RFCs 8c0rg, vr5lw and rmll5; this file is its interface, the model's, `docs/code.md`.
+//! `driver-machine`, serving a machine's management and kinds, as its command `entry` the entry,
+//! and as its command `bind` a host bound to its control, RFCs 8c0rg, vr5lw, rmll5 and rxmd9; this
+//! file is its interface, the model's, `docs/code.md`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -18,6 +19,7 @@ use envelope::contracts::{
 };
 
 mod answer;
+mod bind;
 mod entry;
 mod kept;
 mod listed;
@@ -30,6 +32,9 @@ const PORT: u16 = 37483;
 /// the tailnet's interface alone.
 const LISTEN: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), PORT);
 
+/// Where it keeps its own state unless told, and where `bind` writes what the control answered.
+const STATE: &str = "/var/lib/driver-machine/state";
+
 /// The palette its help is painted in, cargo's, the workspace's `docs/toolchain.md`.
 const STYLES: clap::builder::Styles = clap::builder::Styles::styled()
 	.header(clap::builder::styling::AnsiColor::Green.on_default().bold())
@@ -40,7 +45,7 @@ const STYLES: clap::builder::Styles = clap::builder::Styles::styled()
 	.valid(clap::builder::styling::AnsiColor::Cyan.on_default().bold())
 	.invalid(clap::builder::styling::AnsiColor::Yellow.on_default().bold());
 
-/// The program, the driver unless a command names the entry.
+/// The program, the driver unless a command names the entry or a bind.
 #[derive(Debug, Clone, Parser)]
 #[command(version, about, styles = STYLES)]
 #[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
@@ -56,6 +61,8 @@ struct Program {
 enum Command {
 	/// The entry alone, a request for a host handed to its deployment, found from containerd.
 	Entry(entry::Arguments),
+	/// The host bound to its control once, by the binding's token read from a file or stdin.
+	Bind(bind::Arguments),
 }
 
 /// What the driver is started with, its address, its bindings' tokens, its state, and what the
@@ -69,7 +76,7 @@ struct Arguments {
 	#[arg(long = "bindings", value_name = "file")]
 	bindings: Vec<PathBuf>,
 	/// Where it keeps its own state, on the host's file system, root's alone.
-	#[arg(long, value_name = "directory", default_value = "/var/lib/driver-machine/state")]
+	#[arg(long, value_name = "directory", default_value = STATE)]
 	state: PathBuf,
 	/// containerd's socket.
 	#[arg(long, value_name = "socket", default_value = "/run/containerd/containerd.sock")]
@@ -101,6 +108,10 @@ struct Arguments {
 	/// The one directory a `file:` artifact's address may name; without it they are refused.
 	#[arg(long, value_name = "directory")]
 	local: Option<PathBuf>,
+	/// The one origin an artifact may be fetched from over plain HTTP, `http://host:port`; without
+	/// it every plain address is refused.
+	#[arg(long, value_name = "origin", value_parser = origin)]
+	plain: Option<String>,
 	/// Where each container's secrets are written as files on tmpfs.
 	#[arg(long, value_name = "directory", default_value = "/run/driver-machine/secrets")]
 	secrets: PathBuf,
@@ -110,6 +121,13 @@ struct Arguments {
 	/// workerd's image, the OCI archive monoflake/runtime releases, which a function runs on.
 	#[arg(long, value_name = "archive", default_value = "/etc/driver-machine/images/workerd.tar")]
 	workerd: PathBuf,
+}
+
+/// An origin as `--plain` takes it, `http://` and an authority with no path, query or user.
+fn origin(text: &str) -> Result<String, String> {
+	let authority = text.strip_prefix("http://").unwrap_or_default().trim_end_matches('/');
+	let bare = !authority.is_empty() && !authority.contains(['/', '?', '#', '@']);
+	bare.then(|| format!("http://{authority}")).ok_or_else(|| "expected http://host:port".to_owned())
 }
 
 /// An item of a binding's list as the driver holds it, its credentials by their hashes.
@@ -198,11 +216,12 @@ struct Driver {
 async fn main() -> ExitCode {
 	match Program::parse() {
 		Program { command: Some(Command::Entry(arguments)), .. } => entry::run(arguments).await,
+		Program { command: Some(Command::Bind(arguments)), .. } => bind::run(arguments).await,
 		Program { driver: Some(arguments), .. } => served::run(arguments).await,
 		Program { command: None, driver: None } => {
 			let mut program = <Program as clap::CommandFactory>::command();
 			let missing = clap::error::ErrorKind::MissingRequiredArgument;
-			program.error(missing, "the driver's arguments, or the command entry").exit()
+			program.error(missing, "the driver's arguments, or the command entry or bind").exit()
 		}
 	}
 }

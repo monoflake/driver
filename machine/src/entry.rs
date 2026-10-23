@@ -198,12 +198,14 @@ fn unhopped(headers: &mut HeaderMap) {
 	}
 }
 
-/// The host a request was sent to, its target's authority or else its `Host`.
+/// The host a request was sent to, its `X-Forwarded-Host`, else its target's authority, else its
+/// `Host`, as workerd's fetch writes the gateway's host into the first alone, RFC rxmd9.
 fn host(request: &Request) -> Option<String> {
-	match request.uri().authority() {
-		Some(authority) => Some(authority.as_str().to_owned()),
-		None => request.headers().get(header::HOST)?.to_str().ok().map(str::to_owned),
-	}
+	// Trusted, as only loopback, the private address and the tunnel reach it, never the public.
+	let text = |name| request.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_owned);
+	text(FORWARDED_HOST)
+		.or_else(|| request.uri().authority().map(|a| a.as_str().to_owned()))
+		.or_else(|| text(header::HOST))
 }
 
 /// The request carried to the deployment at its address, as it came but for the headers of its
@@ -453,7 +455,7 @@ mod tests {
 
 	use std::time::{Duration, Instant};
 
-	use super::{Find, Found, KEPT, Last, Named, named, serve};
+	use super::{Find, Found, KEPT, Last, Named, host, named, serve};
 
 	/// Deployments found as the test says, none but those named.
 	struct Stub(BTreeMap<Named, Found>);
@@ -491,6 +493,23 @@ mod tests {
 		] {
 			assert_eq!(named(bad), None, "{bad}");
 		}
+	}
+
+	#[test]
+	fn x_forwarded_host_names_the_deployment_before_the_authority_and_host() {
+		let forwarded = Request::builder()
+			.uri("http://10.200.0.1:36879/")
+			.header("host", "10.200.0.1:36879")
+			.header("x-forwarded-host", "app-1.b1.example.com")
+			.body(axum::body::Body::empty())
+			.unwrap();
+		assert_eq!(host(&forwarded).as_deref().and_then(named), Some(of(1, 1)));
+		let hosted = Request::builder()
+			.uri("/")
+			.header("host", "app-2.b3.local")
+			.body(axum::body::Body::empty())
+			.unwrap();
+		assert_eq!(host(&hosted).as_deref().and_then(named), Some(of(3, 2)));
 	}
 
 	/// What the stub upstream was sent, written back as its body, and its own header and status.

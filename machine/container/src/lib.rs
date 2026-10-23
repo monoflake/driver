@@ -378,12 +378,15 @@ pub trait Fetch: Send + Sync {
 	) -> impl Future<Output = Result<[u8; 32], Unfetched>> + Send;
 }
 
-/// Fetching over HTTPS, and from a `file:` address only within the directory the machine's holder
-/// named, through no link and saying no path back.
+/// Fetching over HTTPS, from a `file:` address only within the directory the machine's holder
+/// named, through no link and saying no path back, and over plain HTTP from one origin alone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Https {
 	/// The one directory `file:` addresses may name, none where they are refused.
 	pub local: Option<PathBuf>,
+	/// The one origin, `http://` and its host and port, fetched from over plain HTTP, none where
+	/// every plain address is refused.
+	pub plain: Option<String>,
 }
 
 /// The OCI runtime binaries, by their paths.

@@ -76,7 +76,8 @@ let driver: Made.driver = {
     {name: "youki", takes: "image", stands: ["kernel"]},
   ],
   // driver-machine, a binary serving plain HTTP by axum, its arguments parsed by clap, RFC 8c0rg,
-  // and its entry served by hyper on a listener taken from systemd by listenfd, RFC ehm48.
+  // its entry served by hyper on a listener taken from systemd by listenfd, RFC ehm48, and its
+  // bind calling the control once by reqwest, RFC rxmd9.
   program: {
     language: #rust,
     uses: ["envelope*", "codec*"],
@@ -88,6 +89,7 @@ let driver: Made.driver = {
       rust("hyper", "1"),
       rust("hyper-util", "0.1"),
       rust("listenfd", "1"),
+      rust("reqwest", "0.13"),
     ],
     serves: [
       "driver-machine-container",
