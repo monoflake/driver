@@ -69,7 +69,7 @@ struct Arguments {
 	#[arg(long = "bindings", value_name = "file")]
 	bindings: Vec<PathBuf>,
 	/// Where it keeps its own state, on the host's file system, root's alone.
-	#[arg(long, value_name = "directory", default_value = "/var/lib/monoflake/driver")]
+	#[arg(long, value_name = "directory", default_value = "/var/lib/driver-machine/state")]
 	state: PathBuf,
 	/// containerd's socket.
 	#[arg(long, value_name = "socket", default_value = "/run/containerd/containerd.sock")]
@@ -102,13 +102,13 @@ struct Arguments {
 	#[arg(long, value_name = "directory")]
 	local: Option<PathBuf>,
 	/// Where each container's secrets are written as files on tmpfs.
-	#[arg(long, value_name = "directory", default_value = "/run/monoflake/secrets")]
+	#[arg(long, value_name = "directory", default_value = "/run/driver-machine/secrets")]
 	secrets: PathBuf,
 	/// The most an artifact may be, in bytes.
 	#[arg(long, value_name = "bytes")]
 	largest: u64,
 	/// workerd's image, the OCI archive monoflake/runtime releases, which a function runs on.
-	#[arg(long, value_name = "archive", default_value = "/etc/monoflake/images/workerd.tar")]
+	#[arg(long, value_name = "archive", default_value = "/etc/driver-machine/images/workerd.tar")]
 	workerd: PathBuf,
 }
 

@@ -604,13 +604,13 @@ async fn an_image_naming_no_container_runs_in_the_binding_s_first_and_none_held_
 	let mut two = binding();
 	two.capacities.insert(9, Capacity { millicores: 250, memory: 268_435_456 });
 	driver.deploy(&two, DeploymentDeploy { into: None, ..echo() }).await.unwrap();
-	assert_eq!(spec_of(&driver).labels["monoflake.into"], "3");
+	assert_eq!(spec_of(&driver).labels["driver.into"], "3");
 	// One named is the one it runs in.
 	let named = DeploymentDeploy { runs: DeploymentRuns::App { id: 2 }, into: Some(9), ..echo() };
 	driver.deploy(&two, named).await.unwrap();
 	let into: Vec<String> = {
 		let held = driver.containerd.held.lock().unwrap();
-		held.values().map(|h| h.labels["monoflake.into"].clone()).collect()
+		held.values().map(|h| h.labels["driver.into"].clone()).collect()
 	};
 	assert_eq!(into, ["3", "9"]);
 	let none = Binding { capacities: BTreeMap::new(), ..binding() };
@@ -766,7 +766,7 @@ async fn a_container_item_emptied_takes_what_runs_in_it_and_nothing_else() {
 	driver.deploy(&two, other).await.unwrap();
 	let into: Vec<String> = {
 		let held = driver.containerd.held.lock().unwrap();
-		held.values().map(|h| h.labels["monoflake.into"].clone()).collect()
+		held.values().map(|h| h.labels["driver.into"].clone()).collect()
 	};
 	assert_eq!(into, ["3", "4"], "each container is labelled with the capacity it runs in");
 	assert_eq!(driver.emptied(&two, 5).await.unwrap(), Vec::<String>::new());

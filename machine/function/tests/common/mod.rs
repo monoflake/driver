@@ -19,7 +19,7 @@ use sha2::{Digest, Sha256};
 pub const LARGEST: u64 = 64 * 1024;
 
 /// workerd's image, where a machine has it.
-pub const WORKERD: &str = "/etc/monoflake/images/workerd.tar";
+pub const WORKERD: &str = "/etc/driver-machine/images/workerd.tar";
 
 fn refused(reason: &'static str) -> Refused {
 	Refused { reason, message: None }

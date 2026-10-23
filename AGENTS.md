@@ -29,7 +29,7 @@ docs/       rfcs/, what is decided here alone
 
 - **The model is monoflake/platform's code run over this repository**: `tasks.res` hands
   `filling.res`'s tree to its `tree.res`, and runs its check with the `drivers` part of the fill,
-  `MONOFLAKE_FILL`, as cloud's whole model runs it with cloud's.
+  `FILL`, as cloud's whole model runs it with cloud's.
 - **The platform's crates and samples are reached by path**, `../platform/code/libs/...` and
   `../platform/tests/...`, until releases cross repositories, RFC 7ykg6.
 - `cloudflare/` is made once it has code.

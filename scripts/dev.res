@@ -9,11 +9,11 @@ type spawnOptions = {cwd: string, stdio: array<string>, encoding: string}
 external spawnSync: (string, array<string>, spawnOptions) => spawned = "spawnSync"
 @val external isMain: bool = "import.meta.main"
 
-let directory = "/var/lib/monoflake/dev"
+let directory = "/var/lib/driver-machine/dev"
 let installed = `${directory}/${Archive.package}`
-let service = "monoflake-driver"
+let service = "driver-machine"
 /** The entry's unit, running the same binary, RFC rmll5. */
-let entry = "monoflake-entry"
+let entry = "driver-machine-entry"
 /** driver-machine's port, its `PORT`, asked on the machine itself. */
 let address = "http://localhost:37483"
 
@@ -34,7 +34,7 @@ let kept = [
   "ControlMaster=auto",
   "-o",
   // Under the home, as the system's own temporary directory is too long a path for a socket.
-  "ControlPath=~/.ssh/monoflake-dev-%C",
+  "ControlPath=~/.ssh/dev-%C",
   "-o",
   "ControlPersist=120",
 ]

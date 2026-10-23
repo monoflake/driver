@@ -40,7 +40,7 @@ const RUNC_OPTIONS: &str = "containerd.runc.v1.Options";
 /// `containerd.runc.v1.Options`'s `binary_name`, a string, as its protobuf writes field 6.
 const BINARY_NAME: u8 = (6 << 3) | 2;
 /// The label a container's output is kept under, so its task is made again on resuming.
-const OUTPUT: &str = "monoflake.output";
+const OUTPUT: &str = "driver.output";
 const SIGTERM: u32 = 15;
 const SIGKILL: u32 = 9;
 

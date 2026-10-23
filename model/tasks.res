@@ -19,10 +19,10 @@ external spawn: (string, array<string>, options) => spawned = "spawnSync"
 let platform = () => {
   let here = fileURLToPath(importMetaUrl)
   let check = join([here, "..", "..", "..", "platform", "model", "check.res.mjs"])
-  let fill = join([temporary(join([tmpdir(), "monoflake-fill-"])), "fill.json"])
+  let fill = join([temporary(join([tmpdir(), "fill-"])), "fill.json"])
   write(fill, JSON.stringifyAny({"drivers": Filling.given})->Option.getOr("{}"))
   let given = copy(env)
-  given->Dict.set("MONOFLAKE_FILL", fill)
+  given->Dict.set("FILL", fill)
   spawn("node", [check], {env: given, stdio: "inherit"}).status->Nullable.getOr(1)
 }
 

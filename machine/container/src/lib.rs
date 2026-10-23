@@ -414,7 +414,7 @@ pub struct Containers<C, N, Q, F> {
 	/// Where artifacts are fetched to and each container's output is written, on ext4, root's
 	/// alone; each container's secrets kept sealed there too, so a reboot puts them back.
 	pub state: PathBuf,
-	/// Where each container's secrets are written as files on tmpfs, `/run/monoflake/secrets`,
+	/// Where each container's secrets are written as files on tmpfs, `/run/driver-machine/secrets`,
 	/// mounted read-only into it.
 	pub secrets: PathBuf,
 	/// The most an artifact may be.

@@ -5,15 +5,15 @@ use std::collections::BTreeMap;
 use envelope::contracts::{DeploymentIsolation, DeploymentRuns, DeploymentRuntime};
 
 /// What the container runs, as [`runs`] writes it.
-pub(super) const RUNS: &str = "monoflake.runs";
+pub(super) const RUNS: &str = "driver.runs";
 /// The version, its hash in hex.
-pub(super) const VERSION: &str = "monoflake.version";
-const RUNTIME: &str = "monoflake.runtime";
-const ADDRESS: &str = "monoflake.address";
-const PORT: &str = "monoflake.port";
-const USER: &str = "monoflake.user";
-const ISOLATION: &str = "monoflake.isolation";
-const INTO: &str = "monoflake.into";
+pub(super) const VERSION: &str = "driver.version";
+const RUNTIME: &str = "driver.runtime";
+const ADDRESS: &str = "driver.address";
+const PORT: &str = "driver.port";
+const USER: &str = "driver.user";
+const ISOLATION: &str = "driver.isolation";
+const INTO: &str = "driver.into";
 
 /// A deployment's runs as a label holds it, `app/<id>` or `component/<name>`.
 pub(super) fn runs(runs: &DeploymentRuns) -> String {

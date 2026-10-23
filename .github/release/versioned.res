@@ -48,8 +48,8 @@ let next = (~manifest, ~last: option<(string, dict<int>)>, ~serves: dict<int>) =
     Some(`${major->Int.toString}.${minor->Int.toString}.${patch->Int.toString}`)
   }
 
-/** The interfaces the program serves, as served.rs names them, each at the version monoflake
- * platform's contracts give it. */
+/** The interfaces the program serves, as served.rs names them, each at the version
+ * monoflake/platform's contracts give it. */
 let served = () => {
   let source = Archive.readFileSync(Archive.join([root, "machine", "src", "served.rs"]))
   let contracts = JSON.parseOrThrow(

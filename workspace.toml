@@ -15,3 +15,25 @@ ids = "monoflake"
 [release]
 built = "target/archives/built.json"
 columns = ["Program", "Version", "Commit", "Download"]
+
+# Where the project's own name is a variable a user's code reads beside other vendors', the
+# workspace's docs/naming.md.
+[[names.data]]
+file = "machine/container/src/containers.rs"
+spelled = ["MONOFLAKE_FOOTING"]
+
+[[names.data]]
+file = "machine/container/src/containers/secrets.rs"
+spelled = ["MONOFLAKE_FOOTING", "MONOFLAKE_"]
+
+[[names.data]]
+file = "machine/function/src/lib.rs"
+spelled = ["MONOFLAKE_FOOTING"]
+
+[[names.data]]
+file = "machine/container/tests/containers.rs"
+spelled = ["MONOFLAKE_FOOTING"]
+
+[[names.data]]
+file = "machine/function/tests/workerd/echo.capnp"
+spelled = ["MONOFLAKE_FOOTING"]
