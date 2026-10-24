@@ -75,6 +75,17 @@ flag "-n --dry-run" help="Say what would be done and change nothing"
 '''
 run = 'rescript build > /dev/null && node scripts/dev.res.mjs "$usage_host" ${usage_watch:+--watch} ${usage_dry_run:+--dry-run}'
 
+# What a bound account runs of driver(cloudflare), made where absent, nrs5v; its inputs are the
+# environment's and the binding's token on stdin.
+[tasks.install]
+description = "Make driver(cloudflare) on the account wrangler is given, each part where it is absent: `install [--dry-run]`"
+usage = 'flag "-n --dry-run" help="Print each wrangler command it would run, a secret by its name alone, and run none"'
+run = 'rescript build > /dev/null && node scripts/install.res.mjs ${usage_dry_run:+--dry-run}'
+
+[tasks.test]
+description = "Test the scripts, wrangler faked"
+run = "rescript build > /dev/null && node --test 'scripts/tests/*_test.res.mjs'"
+
 # The day's release on GitHub, the workspace's scripts/release reading workspace.toml's [release].
 [tasks.release]
 description = "Put what target/archives/built.json names into the UTC day's release here: `release [--dry-run]`"
@@ -91,5 +102,5 @@ depends = ["//:build"]
 run = "node {{env.WORKSPACE}}/scripts/clean.res.mjs"
 
 [tasks.verify]
-description = "What a commit has to pass: everything formatted, the check, every block alone, and the crates' dependencies"
-run = ["mise run formatted", "mise run check", "mise run blocks", "cargo deny check"]
+description = "What a commit has to pass: everything formatted, the check, every block alone, the scripts' tests, and the crates' dependencies"
+run = ["mise run formatted", "mise run check", "mise run blocks", "mise run test", "cargo deny check"]

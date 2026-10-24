@@ -2,10 +2,10 @@
 	"name": "@monoflake/driver",
 	"sources": [
 		{ "dir": "model", "subdirs": true },
-		{ "dir": "scripts" },
+		{ "dir": "scripts", "subdirs": true },
 		{ "dir": ".github/release" }
 	],
-	"dependencies": ["@monoflake/platform"],
+	"dependencies": ["@monoflake/platform", "@monoflake/keys"],
 	"package-specs": [{ "module": "esmodule", "in-source": true }],
 	"suffix": ".res.mjs",
 	"warnings": { "number": "+4", "error": "+a" }

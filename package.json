@@ -3,6 +3,7 @@
 	"private": true,
 	"type": "module",
 	"dependencies": {
+		"@monoflake/keys": "link:../platform/code/libs/keys",
 		"@monoflake/platform": "link:../platform"
 	},
 	"devDependencies": {

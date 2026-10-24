@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@monoflake/keys':
+        specifier: link:../platform/code/libs/keys
+        version: link:../platform/code/libs/keys
       '@monoflake/platform':
         specifier: link:../platform
         version: link:../platform

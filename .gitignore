@@ -3,3 +3,5 @@ lib/
 *.res.mjs
 .DS_Store
 target/
+wrangler.install.json
+.wrangler/
