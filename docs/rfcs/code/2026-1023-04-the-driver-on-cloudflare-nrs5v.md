@@ -171,6 +171,21 @@ Decided by the author on 2026-10-23, from the research the Options below record.
     object call's body is bounded as driver(machine)'s `LARGEST_OBJECT`, refused as `malformed`
     past it.
 
+  What makes it on an account, provisional, chosen by the advisor on 2026-10-24:
+  - **`mise run install`**, `scripts/install.res` beside `archive` and `dev`, makes what is absent
+    and passes over what is there, as monoflake/cloud's `install` does: the D1 database `driver`
+    and its migrations, the bucket `objects`, the Workers `driver` and `object` with the database's
+    id and the account's in a configuration of the moment, a deploy passed over where nothing
+    changed, and each secret put only where its name is missing; `--dry-run` prints each wrangler
+    command, a secret by its name alone.
+  - **What it is given comes from the environment**, this repository being public: wrangler's own
+    `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, and the Worker `driver`'s `API_TOKEN` as
+    `DRIVER_API_TOKEN`. The binding's token is read on stdin, as `driver-machine bind` reads it,
+    and put as `BINDING` by its BLAKE3; with nothing on stdin that step is passed over, how a
+    binding is made waiting on monoflake/platform's RFC 7i2at.
+  - **The database and the bucket are placed by the hint `wnam`** on the test account alone; a user
+    binding an account of their own chooses where its parts are placed.
+
 Out of date in this repository's neighbors, to be corrected when one is decided: a Worker's size is
 64 MiB uncompressed on every plan, where RFC vr5lw and `monoflake/platform`'s
 `docs/lessons/cloudflare.md` say 3 MB free and 10 MB paid, compressed; D1 keeps seven days of Time
