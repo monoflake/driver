@@ -63,15 +63,23 @@ type kept = {
   replaced?: string,
 }
 
-/** Where deployments are kept, by their Worker's name, D1's `deployments` table in the driver. */
+/** Where deployments are kept, by their Worker's whole name, the driver D1's `deployments`. */
 type store = {
   read: string => promise<option<kept>>,
   write: (string, kept) => promise<unit>,
   forget: string => promise<unit>,
 }
 
-/** What each operation works through, the API, the store and an artifact fetched by address. */
-type through = {api: api, store: store, fetch: string => promise<result<Uint8Array.t, refused>>}
+/**
+ * What each operation works through, the API, the store, an artifact fetched by address and the
+ * install id each Worker's name ends in, RFC nrs5v.
+ */
+type through = {
+  api: api,
+  store: store,
+  fetch: string => promise<result<Uint8Array.t, refused>>,
+  installId: string,
+}
 
 /** The Worker a deployment runs as, `app-<id>-<install id>` or `component-<name>-<install id>`. */
 let workerOf: (Contracts.DeploymentRuns.t, ~installId: string) => string
