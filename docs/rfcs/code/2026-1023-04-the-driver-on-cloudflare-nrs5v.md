@@ -87,33 +87,52 @@ Decided by the author on 2026-10-23, from the research the Options below record.
 
 - **The driver runs as Workers on the bound account**, as RFC vr5lw reads: a driver Worker serving
   management and deployments, an adapter Worker each for object and database.
-- **A binding is an account of its own**, kept apart by Cloudflare: the first is a test account of
-  the author's, apart from the platform's own, which is never bound, RFC v7v3w.
-- **On the paid Workers plan the author holds**, so a request has the paid plan's CPU and D1 keeps
-  thirty days of Time Travel. **Its cost is watched**: whatever a test makes on the account is
-  removed when the test ends, and a run reports what it left.
+- **A binding is an account of its own**, kept apart by Cloudflare, apart from the platform's own,
+  which is never bound, RFC v7v3w.
+- **On an organization's own free account**, amended by the author on 2026-10-24, which struck "on
+  the paid Workers plan the author holds": an organization brings its own free account for light
+  work and front ends. There the driver offers `function`; `object` only where the account has R2
+  enabled, since R2 asks a payment method even on its free tier; and never `database`, an
+  organization's databases going on vendor machines through driver(machine). The free plan's 10 ms
+  of CPU a request is measured on the first deploy. **Its cost is watched**: whatever a test makes
+  on the account is removed when the test ends, and a run reports what it left.
+- **Everything the driver makes is named by an id, on any account**, decided by the author on
+  2026-10-24. Listing, clearing and sweeping treat any resource whose name is not in the driver's id
+  form as absent, never read, changed or removed: the bound account may already hold the
+  organization's own Workers, D1 databases and buckets, and a Cloudflare token cannot be scoped to
+  names, so the driver's own discipline is the guard. A binding stays an account of its own; the id
+  form only makes a shared account safe to bind.
+- **An exception list, decided in principle by the author on 2026-10-24**: an organization's admin
+  may register named resources the driver also manages, each mapped to an item id, so what is
+  managed is the id-form resources and that list, and everything else is ignored. **Pending**, on
+  the author: exact names only or patterns too, and whether a listed resource is only ever updated
+  and never deleted. It is not built.
+- **The order of testing**, decided by the author on 2026-10-24: first an empty test account made
+  for the test; an organization's own free account is bound only after conform passes and clearing
+  is proven on the empty one. What a test makes is still removed when it ends.
 - **Workers, R2 and D1 alone, no Durable Object yet**: the driver's own state, its tokens' hashes,
   its lists and when each item went unasked, is kept in D1, and the grace is swept by a Cron
   Trigger, where the Options had a Durable Object and its alarm; the instance kind waits. **The
   Cron Trigger is struck by monoflake/cloud's RFC rxmd9**, which puts every timer on a machine: the
   grace is swept as each request to the management arrives, never one to a kind, and which machine
   calls the sweep on a timer, and how, is **Pending**.
-- **A database is D1.**
-- **The first slice is management and function**, hello deployed through the platform to the test
-  account; then object on R2; then database on D1.
+- **A database is D1**, where `database` is offered.
+- **The first slice is management and function**, hello deployed through the platform to an empty
+  test account; then object on R2; then database on D1.
 - **Settled as it is built, provisionally, and written here then**: how a deployment's `network` is
   answered where it cannot be enforced; whether the binding's token or its hash is the Worker's
   secret; the account's Workers subdomain or a Custom Domain for a deployment's name; a bucket per object item or a
   prefix in one; how D1's size is held to an item's capacity. The first slice's, each provisional,
-  chosen by the advisor on 2026-10-24:
+  chosen by the advisor on 2026-10-24, each name of a resource since followed by the install id as
+  the Ledger has it:
   - **Names.** The driver's Worker is `driver` and its D1 database `driver`, its tables `held`, one
     row of the generation, the policy and the grace, `items`, `tokens` and `deployments`. Its
     account's token is the secret `API_TOKEN`, an account-owned token holding Workers Scripts Edit
     alone, and the account's id the variable `ACCOUNT_ID`.
   - **The binding's token** is kept as its BLAKE3 in hex, the secret `BINDING`, as RFC 3d3nt keeps
     only a hash; once an `apply` carries `tokens`, the list in D1 stands in its place.
-  - **A deployment's Worker** is `app-<id>`, or `component-<name>` for a component, with no prefix,
-    a binding being an account of its own. Its version is the tag `version-<hash in hex>`, cut
+  - **A deployment's Worker** is `app-<id>`, or `component-<name>` for a component, each followed
+    by the install id. Its version is the tag `version-<hash in hex>`, cut
     short where a tag holds less, the rule written here when it is. Its address is
     `<Worker>.<the account's subdomain>.workers.dev`, a Custom Domain waiting on a domain, RFC
     vr5lw.
@@ -236,8 +255,9 @@ Decided by the author on 2026-10-23, from the research the Options below record.
     id and the account's in a configuration of the moment, a deploy passed over where nothing
     changed, and each secret put only where its name is missing; `--dry-run` prints each wrangler
     command, a secret by its name alone.
-  - **What it is given comes from the environment**, this repository being public: wrangler's own
-    `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, and the Worker `driver`'s `API_TOKEN` as
+  - **What it is given comes from the environment**, this repository being public: since
+    2026-10-24 `DRIVER_ACCOUNT_ID` and `DRIVER_INSTALL_TOKEN` for itself, never the ambient
+    `CLOUDFLARE_*` names, as the Ledger has it, and the Worker `driver`'s `API_TOKEN` as
     `DRIVER_API_TOKEN`. The binding's token is read on stdin, as `driver-machine bind` reads it,
     and put as `BINDING` by its BLAKE3; with nothing on stdin that step is passed over, how a
     binding is made waiting on monoflake/platform's RFC 7i2at.
@@ -251,3 +271,45 @@ Out of date in this repository's neighbors, to be corrected when one is decided:
 `docs/lessons/cloudflare.md` say 3 MB free and 10 MB paid, compressed; D1 keeps seven days of Time
 Travel on free; on a free account Workers, Durable Objects and D1 fail past their limits where R2
 alone bills.
+
+### Ledger
+
+Choices made provisionally while the thread runs, read by the author at its end.
+
+- **The id is an install id**, provisional, chosen by the advisor on 2026-10-24: 8 lowercase hex
+  digits drawn at random by `install`, kept in the driver's state.
+- **Every resource's name is `<name>-<install id>`**, provisional, chosen by the advisor on
+  2026-10-24: the Workers `driver-…`, `object-…` and `database-…`, the D1 `driver-…`, the bucket
+  `objects-…`, and a deployment's Worker `app-<id>-…` or `component-<name>-…`. The id goes last so
+  no name starts with a digit.
+- **An owned resource is one whose name ends in `-<its own install id>`**, provisional, chosen by
+  the advisor on 2026-10-24.
+- **Which kinds the driver offers is chosen at install by the input `DRIVER_KINDS`**, defaulting to
+  `function`, provisional, chosen by the advisor on 2026-10-24. Management describe reports the
+  kinds offered.
+- **`DRIVER_KINDS` is comma-separated values from `function`, `object` and `database`**, the default
+  `function`, recorded as the Worker `driver`'s var `KINDS`, provisional, chosen by the advisor on
+  2026-10-24.
+  - The Worker `driver-…` and the D1 `driver-…` are made whatever the kinds are, since they are
+    management and the driver's state, not `function`'s.
+  - `function` adds no resource. `object` adds its bucket and Worker; `database` adds its D1 and
+    Worker.
+  - On a rerun, install adds what a kind newly listed needs. It never removes what a kind dropped
+    from the list holds; it reports those resources by name instead.
+- **A list naming a kind not offered is refused whole as `beyond_host`**, provisional, chosen by the
+  advisor on 2026-10-24, as `container` and `volume` are refused today.
+- **How install recovers its install id**, provisional, chosen by the advisor on 2026-10-24:
+  - install lists the account's D1 databases by name, reading names alone.
+  - No name of the form `driver-<8 hex>`: it draws a new id. Exactly one: it reuses that one. More
+    than one: it refuses and lists them, since a binding is still an account of its own.
+  - Every Worker gets the var `INSTALL_ID`, and the driver forms every name and address from it.
+- **`DATABASE_API_TOKEN` is asked for only where `database` is offered**, provisional, chosen by the
+  advisor on 2026-10-24.
+- **Install never reads the ambient `CLOUDFLARE_*` names**, provisional, chosen by the advisor on
+  2026-10-24, since a repository's environment may hold the platform's own account, which is never
+  bound, RFC v7v3w.
+  - It reads `DRIVER_ACCOUNT_ID` and `DRIVER_INSTALL_TOKEN` for itself and `DRIVER_API_TOKEN` for
+    the Worker.
+  - It hands wrangler `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` only in the environment of
+    its own child processes, set from those, so an ambient value never reaches wrangler.
+  - It refuses to run when `DRIVER_ACCOUNT_ID` is unset, rather than falling back.
