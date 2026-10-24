@@ -93,6 +93,29 @@ test("a binding new holds nothing, its grace a week, and names the revision give
   )
 })
 
+test("a database item is made at the Worker `database`'s address, as an object is", async () => {
+  let env = envOf()
+  let restore = replaced(Account.make(~artifacts=dict{}))
+  let database = `{"id": 2, "capacity": {"name": "database", "size": 1048576},
+    "credentials": ["af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"]}`
+  let (_, _, applied) = await manage(
+    env,
+    "apply",
+    `{"generation": 1, "items": [${item}, ${database}]}`,
+  )
+  restore()
+  deepEqual(applied, success(`{"generation": 1}`))
+  let (_, _, described) = await manage(env, "describe", "{}")
+  deepEqual(
+    described,
+    success(`{"generation": 1, "policy": 0, "grace": 604800, "items": [{"id": 1,
+    "capacity": {"name": "object", "size": 1048576}, "state": {"name": "made",
+    "address": "object.my-subdomain.workers.dev"}}, {"id": 2,
+    "capacity": {"name": "database", "size": 1048576}, "state": {"name": "made",
+    "address": "database.my-subdomain.workers.dev"}}]}`),
+  )
+})
+
 test(
   "a list is kept in D1, its object made at the Worker's address, unasked, then swept",
   async () => {

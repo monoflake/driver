@@ -205,9 +205,13 @@ Decided by the author on 2026-10-23, from the research the Options below record.
     `copies.json` is left out, since the driver sees one copy of a D1 database and cannot be
     read-only below a majority of copies.
   - **What D1 cannot answer as the contract asks**: an integer and a real alike come back as
-    numbers, so a whole real reads as an integer; and an integer past 2^53 is found once the batch
-    ran, so a write returning one has already happened. A result's columns are read with
-    `raw({columnNames: true})`, so a statement with no rows still names them.
+    numbers, so a whole real reads as an integer; an integer past 2^53 is found once the batch
+    ran, so a write returning one has already happened; and a batch's rows come back as objects,
+    workerd's `batch()` ending in `toArrayOfObjects` (`src/cloudflare/internal/d1-api.ts`), so a
+    result's columns are read from its first row, a statement with no rows names none, and two
+    columns of one name are one. `raw()` keeps them but runs one statement alone with no meta, so
+    a batch stays one transaction with its `size_after` and `changes`. A batch of reads alone is
+    never refused for room.
   - **Implementers' defaults, let stand by the advisor**: a statement of at most 100,000 bytes, D1's
     own; a call's body of at most 100,000,000, a Worker's request's; 10 GB as 10^10 bytes; with no
     `database` item an execute is `storage_full` and a rewind `beyond_window`; only `SELECT`,

@@ -58,24 +58,35 @@ let valid = (items: array<item>) => {
 /** The most an `object` item holds in bytes, 1 TiB, while this driver's cost is watched, nrs5v. */
 let most = 1_099_511_627_776.
 
+/** The most a `database` item holds in bytes, D1's 10 GB a database, nrs5v. */
+let mostDatabase = 10_000_000_000.
+
+let isObject = (item: item) =>
+  switch item.capacity {
+  | Object(_) => true
+  | Container(_) | Volume(_) | Database(_) => false
+  }
+
+let isDatabase = (item: item) =>
+  switch item.capacity {
+  | Database(_) => true
+  | Container(_) | Volume(_) | Object(_) => false
+  }
+
 /**
  * What this driver cannot hold, refused before anything of the list is held, a container, a volume,
- * a second `object` item past the binding's one bucket, or an `object` item past `most`.
+ * a second `object` or `database` item past the binding's one of each, or an item past its most.
  */
 let beyond = (items: array<item>) => {
   let refused = (item: item, message) => {
     reason: "beyond_host",
     message: `item ${Float.toString(item.id)}: ${message}`,
   }
-  let isObject = (item: item) =>
+  let past = (item: item) =>
     switch item.capacity {
-    | Object(_) => true
-    | Container(_) | Volume(_) | Database(_) => false
-    }
-  let sizeOf = (item: item) =>
-    switch item.capacity {
-    | Object({size}) => size
-    | Container(_) | Volume(_) | Database(_) => 0.
+    | Object({size}) => size > most ? Some(most) : None
+    | Database({size}) => size > mostDatabase ? Some(mostDatabase) : None
+    | Container(_) | Volume(_) => None
     }
   let unheld = items->Array.find(item =>
     switch item.capacity {
@@ -84,30 +95,36 @@ let beyond = (items: array<item>) => {
     }
   )
   let second = items->Array.filter(isObject)->Array.get(1)
-  switch (unheld, second, items->Array.find(item => sizeOf(item) > most)) {
-  | (Some(item), _, _) => Some(refused(item, "a Worker's account holds no container or volume"))
-  | (None, Some(second), _) =>
+  let secondDatabase = items->Array.filter(isDatabase)->Array.get(1)
+  let large = items->Array.findMap(item => past(item)->Option.map(most => (item, most)))
+  switch (unheld, second, secondDatabase, large) {
+  | (Some(item), _, _, _) => Some(refused(item, "a Worker's account holds no container or volume"))
+  | (None, Some(second), _, _) =>
     Some(refused(second, "the binding holds one bucket, so a list holds one object item"))
-  | (None, _, Some(item)) =>
+  | (None, None, Some(second), _) =>
+    Some(refused(second, "the binding holds one database, so a list holds one database item"))
+  | (None, None, None, Some((item, most))) =>
     Some(refused(item, `past ${Float.toString(most)} bytes, the most this driver takes`))
-  | (None, _, None) => None
+  | (None, None, None, None) => None
   }
 }
 
-/** What an item is made of here, an object at the Worker `object`'s address, a database waiting. */
-let made = async (capacity: capacity, ~bucket) =>
-  switch capacity {
-  | Object(_) =>
-    switch await bucket() {
+/** What an item is made of here, an object or a database at its Worker's address. */
+let made = async (capacity: capacity, ~bucket, ~database) => {
+  let at = async address =>
+    switch await address() {
     | Ok(address) => Made({address: address})
     | Error({reason, message}) => Failed({reason, message})
     }
-  | Database(_) => Failed({reason: "beyond_host", message: "it waits on RFC nrs5v's next slice"})
+  switch capacity {
+  | Object(_) => await at(bucket)
+  | Database(_) => await at(database)
   | Container(_) | Volume(_) => Failed({reason: "beyond_host"})
   }
+}
 
 /** An item asked again as it is held, kept as it stands, one failed made again with every list. */
-let asked = async (held: option<keptItem>, item: item, ~bucket) =>
+let asked = async (held: option<keptItem>, item: item, ~bucket, ~database) =>
   switch held {
   | Some(k) if k.item.capacity == item.capacity =>
     switch k.state {
@@ -115,11 +132,11 @@ let asked = async (held: option<keptItem>, item: item, ~bucket) =>
     | Unasked(u) =>
       switch u.address {
       | Some(address) => Made({address: address})
-      | None => await made(item.capacity, ~bucket)
+      | None => await made(item.capacity, ~bucket, ~database)
       }
-    | Failed(_) => await made(item.capacity, ~bucket)
+    | Failed(_) => await made(item.capacity, ~bucket, ~database)
     }
-  | Some(_) | None => await made(item.capacity, ~bucket)
+  | Some(_) | None => await made(item.capacity, ~bucket, ~database)
   }
 
 /** An item the list no longer asks, since when it was first found so. */
@@ -130,12 +147,22 @@ let unasked = (held: keptItem, ~now) =>
   | Making | Failed(_) => Unasked({since: now})
   }
 
-/** An `object` item unasked yet holding the bucket, made once and within its grace. */
+/** An item unasked yet holding the bucket or the database, made once and within its grace. */
 let holding = (k: keptItem) =>
   switch (k.item.capacity, k.state) {
-  | (Object(_), Unasked(u)) => u.address != None
-  | (Object(_), Making | Made(_) | Failed(_)) | (Container(_) | Volume(_) | Database(_), _) => false
+  | (Object(_) | Database(_), Unasked(u)) => u.address != None
+  | (Object(_) | Database(_), Making | Made(_) | Failed(_)) | (Container(_) | Volume(_), _) => false
   }
+
+/** The one item a kind's store is held for, failed while an older one unasked still holds it. */
+let heldBy = (holder: option<keptItem>, ~what) =>
+  holder->Option.map(h => {
+    let id = Float.toString(h.item.id)
+    Failed({
+      reason: "beyond_host",
+      message: `the binding holds one ${what}, item ${id}'s, until it is ended or swept`,
+    })
+  })
 
 /** A call asked once at most, its answer kept for every later asking. */
 let once = ask => {
@@ -152,7 +179,7 @@ let once = ask => {
 
 let byId = (a: keptItem, b: keptItem) => Float.compare(a.item.id, b.item.id)
 
-let apply = async (store, ~now, ~generation, ~items: array<item>, ~tokens, ~objects) =>
+let apply = async (store, ~now, ~generation, ~items: array<item>, ~tokens, ~objects, ~databases) =>
   switch valid(items) {
   | Error(_) as refused => refused
   | Ok() =>
@@ -169,17 +196,18 @@ let apply = async (store, ~now, ~generation, ~items: array<item>, ~tokens, ~obje
           ->Array.filter(k => !(items->Array.some(item => item.id == k.item.id)))
           ->Array.map(k => {...k, state: unasked(k, ~now)})
         let bucket = once(objects)
-        // The bucket is its holder's until it is ended or swept, as driver(machine)'s `bucketed`.
-        let holder = left->Array.find(holding)
+        let database = once(databases)
+        // Each store is its holder's until it is ended or swept, as driver(machine)'s `bucketed`.
+        let bucketHeld =
+          left->Array.find(k => holding(k) && isObject(k.item))->heldBy(~what="bucket")
+        let databaseHeld =
+          left->Array.find(k => holding(k) && isDatabase(k.item))->heldBy(~what="database")
         let listed = await Promise.all(
           items->Array.map(async item => {
-            let state = switch (item.capacity, holder) {
-            | (Object(_), Some(h)) =>
-              let id = Float.toString(h.item.id)
-              let message = `the binding holds one bucket, item ${id}'s, until it is ended or swept`
-              Failed({reason: "beyond_host", message})
-            | (Object(_), None) | (Container(_) | Volume(_) | Database(_), _) =>
-              await asked(held(item.id), item, ~bucket)
+            let state = switch (item.capacity, bucketHeld, databaseHeld) {
+            | (Object(_), Some(failed), _) | (Database(_), _, Some(failed)) => failed
+            | (Object(_), None, _) | (Database(_), _, None) | (Container(_) | Volume(_), _, _) =>
+              await asked(held(item.id), item, ~bucket, ~database)
             }
             {item, state}
           }),

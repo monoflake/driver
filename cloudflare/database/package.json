@@ -1,0 +1,15 @@
+{
+	"name": "@monoflake/driver-cloudflare-database",
+	"version": "0.0.0",
+	"private": true,
+	"license": "MIT OR Apache-2.0",
+	"type": "module",
+	"dependencies": {
+		"@monoflake/codec": "link:../../../platform/code/libs/codec",
+		"@monoflake/envelope": "link:../../../platform/code/libs/envelope",
+		"@monoflake/keys": "link:../../../platform/code/libs/keys"
+	},
+	"devDependencies": {
+		"wrangler": "4.151.3"
+	}
+}

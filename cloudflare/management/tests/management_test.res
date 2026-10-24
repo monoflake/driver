@@ -33,15 +33,22 @@ let object = (id, ~credentials=[hash]): Management.item => {
   credentials,
 }
 
-let waiting = Management.Failed({
-  reason: "beyond_host",
-  message: "it waits on RFC nrs5v's next slice",
-})
+/** A database item of a size, by its id. */
+let database = (~size=1024., id): Management.item => {
+  id,
+  capacity: Database({size: size}),
+  credentials: [hash],
+}
 
 /** The Worker `object`'s address. */
 let address = "object.my-subdomain.workers.dev"
 
 let made = Management.Made({address: address})
+
+/** The Worker `database`'s address. */
+let databaseAddress = "database.my-subdomain.workers.dev"
+
+let databaseMade = Management.Made({address: databaseAddress})
 
 /** The Worker `object`'s address as `apply` asks it, each asking counted. */
 let objects = (~answer=Ok(address), asked) =>
@@ -50,8 +57,26 @@ let objects = (~answer=Ok(address), asked) =>
     answer
   }
 
-let apply = (m, ~now=0., ~tokens=?, ~asked=ref(0), ~answer=?, generation, items) =>
-  Management.apply(m.store, ~now, ~generation, ~items, ~tokens, ~objects=objects(~answer?, asked))
+let apply = (
+  m,
+  ~now=0.,
+  ~tokens=?,
+  ~asked=ref(0),
+  ~answer=?,
+  ~databasesAsked=ref(0),
+  ~databaseAnswer=Ok(databaseAddress),
+  generation,
+  items,
+) =>
+  Management.apply(
+    m.store,
+    ~now,
+    ~generation,
+    ~items,
+    ~tokens,
+    ~objects=objects(~answer?, asked),
+    ~databases=objects(~answer=databaseAnswer, databasesAsked),
+  )
 
 let reasonOf = result =>
   switch result {
@@ -81,19 +106,32 @@ test("a container or a volume is beyond the host, and nothing of the list is hel
   deepEqual(m.kept.contents, initial)
 })
 
-test("an object is made at the Worker's address, a database held failed, waiting", async () => {
+test("an object and a database are made each at its Worker's address, asked once", async () => {
   let m = memory()
   let asked = ref(0)
-  let database: Management.item = {id: 2., capacity: Database({size: 1.}), credentials: [hash]}
-  deepEqual(await m->apply(1., [database, object(1.)], ~asked), Ok(1.))
+  let databasesAsked = ref(0)
+  deepEqual(await m->apply(1., [database(2.), object(1.)], ~asked, ~databasesAsked), Ok(1.))
   deepEqual(
     m.kept.contents.items,
-    [{item: object(1.), state: made}, {item: database, state: waiting}],
+    [{item: object(1.), state: made}, {item: database(2.), state: databaseMade}],
   )
-  // Made already, the object is not asked for again, nor where the list holds none.
-  deepEqual(await m->apply(2., [database, object(1.)], ~asked), Ok(2.))
-  deepEqual(await m->apply(3., [database], ~asked), Ok(3.))
-  deepEqual(asked.contents, 1)
+  // Made already, neither is asked for again, nor where the list holds none.
+  deepEqual(await m->apply(2., [database(2.), object(1.)], ~asked, ~databasesAsked), Ok(2.))
+  deepEqual(await m->apply(3., [database(2.)], ~asked, ~databasesAsked), Ok(3.))
+  deepEqual(await m->apply(4., [object(1.)], ~asked, ~databasesAsked), Ok(4.))
+  deepEqual((asked.contents, databasesAsked.contents), (1, 1))
+})
+
+test("a database the address of which was refused is failed so, and made again after", async () => {
+  let m = memory()
+  let refused: Management.refused = {reason: "fault", message: "no subdomain"}
+  deepEqual(await m->apply(1., [database(1.)], ~databaseAnswer=Error(refused)), Ok(1.))
+  deepEqual(
+    m.kept.contents.items,
+    [{item: database(1.), state: Failed({reason: "fault", message: "no subdomain"})}],
+  )
+  deepEqual(await m->apply(2., [database(1.)]), Ok(2.))
+  deepEqual(m.kept.contents.items, [{item: database(1.), state: databaseMade}])
 })
 
 test("an object the address of which was refused is failed so, and made again after", async () => {
@@ -112,16 +150,33 @@ test("two object items, or an object past 1 TiB, are beyond the host, nothing he
   let m = memory()
   let asked = ref(0)
   let past = 1_099_511_627_777.
-  let database: Management.item = {id: 3., capacity: Database({size: past}), credentials: [hash]}
   let large: Management.item = {id: 4., capacity: Object({size: past}), credentials: [hash]}
   let full: Management.item = {...large, capacity: Object({size: past -. 1.})}
   deepEqual(reasonOf(await m->apply(1., [object(1.), object(2.)], ~asked)), Some("beyond_host"))
   deepEqual(reasonOf(await m->apply(1., [large], ~asked)), Some("beyond_host"))
   deepEqual((m.kept.contents, asked.contents), (initial, 0))
-  deepEqual(await m->apply(1., [full, database], ~asked), Ok(1.))
-  // A database past it is held failed as any database is, waiting on the third slice.
-  deepEqual(m.kept.contents.items, [{item: database, state: waiting}, {item: full, state: made}])
+  deepEqual(await m->apply(1., [full], ~asked), Ok(1.))
+  deepEqual(m.kept.contents.items, [{item: full, state: made}])
 })
+
+test(
+  "two database items, or a database past 10 GB, are beyond the host, nothing held",
+  async () => {
+    let m = memory()
+    let databasesAsked = ref(0)
+    let two = [database(1.), database(2.)]
+    deepEqual(reasonOf(await m->apply(1., two, ~databasesAsked)), Some("beyond_host"))
+    let large = database(~size=10_000_000_001., 3.)
+    deepEqual(reasonOf(await m->apply(1., [large], ~databasesAsked)), Some("beyond_host"))
+    deepEqual((m.kept.contents, databasesAsked.contents), (initial, 0))
+    let full = database(~size=10_000_000_000., 3.)
+    deepEqual(await m->apply(1., [full, object(1.)], ~databasesAsked), Ok(1.))
+    deepEqual(
+      m.kept.contents.items,
+      [{item: object(1.), state: made}, {item: full, state: databaseMade}],
+    )
+  },
+)
 
 test("a second object item waits for the bucket until the one holding it is ended", async () => {
   let m = memory()
@@ -144,6 +199,38 @@ test("a second object item waits for the bucket until the one holding it is ende
   deepEqual(await m->apply(3., [object(2.)]), Ok(3.))
   deepEqual(m.kept.contents.items, [{item: object(2.), state: made}])
 })
+
+test(
+  "a second database item waits for the database until the one holding it is ended",
+  async () => {
+    let m = memory()
+    deepEqual(await m->apply(1., [database(1.), object(3.)]), Ok(1.))
+    deepEqual(await m->apply(2., [database(2.), object(3.)], ~now=5.), Ok(2.))
+    deepEqual(
+      m.kept.contents.items,
+      [
+        {item: database(1.), state: Unasked({since: 5., address: databaseAddress})},
+        {
+          item: database(2.),
+          state: Failed({
+            reason: "beyond_host",
+            message: "the binding holds one database, item 1's, until it is ended or swept",
+          }),
+        },
+        {item: object(3.), state: made},
+      ],
+    )
+    deepEqual(await Management.end_(m.store, ~id=1.), Ok())
+    deepEqual(await m->apply(3., [database(2.)]), Ok(3.))
+    deepEqual(
+      m.kept.contents.items,
+      [
+        {item: database(2.), state: databaseMade},
+        {item: object(3.), state: Unasked({since: 0., address})},
+      ],
+    )
+  },
+)
 
 test("a list behind the one held is answered with the generation held, unwritten", async () => {
   let m = memory()

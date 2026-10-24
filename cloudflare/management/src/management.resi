@@ -40,7 +40,7 @@ type store = {read: unit => promise<kept>, write: kept => promise<unit>}
 
 /**
  * The list taken where its generation is not behind, `tokens` the binding's in force by hash, and
- * `objects` the Worker `object`'s address, asked only where the list holds an `object` item.
+ * the Workers `object`'s and `database`'s addresses, each asked only where the list holds its item.
  */
 let apply: (
   store,
@@ -49,6 +49,7 @@ let apply: (
   ~items: array<item>,
   ~tokens: option<array<string>>,
   ~objects: unit => promise<result<string, refused>>,
+  ~databases: unit => promise<result<string, refused>>,
 ) => promise<result<float, refused>>
 
 /** The grace taken where its generation is not behind, 0 removing at once and a year at most. */

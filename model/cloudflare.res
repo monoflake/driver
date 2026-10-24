@@ -29,7 +29,21 @@ let driver: Made.driver = {
         "../platform/tests/kinds/objects/writes.json",
       ],
     },
-    {kind: #database, contract: "database", language: #rescript, as_: "a Worker over D1"},
+    // The Worker `database`, the binding's one D1 database, its item in the driver's D1, nrs5v.
+    {
+      kind: #database,
+      contract: "database",
+      language: #rescript,
+      as_: "a Worker over D1",
+      uses: ["envelope*", "codec*", "keys*"],
+      takes: [{language: #rescript, name: "wrangler", major: "4"}],
+      samples: [
+        "../platform/tests/kinds/databases/statements.json",
+        "../platform/tests/kinds/databases/batches.json",
+        "../platform/tests/kinds/databases/limits.json",
+        "../platform/tests/kinds/databases/rewinds.json",
+      ],
+    },
   ],
   runtimes: [{name: "workers", takes: "modules", stands: ["isolate"]}],
   // The Worker `driver`, serving the management and the function kind, bundled by wrangler, nrs5v.
