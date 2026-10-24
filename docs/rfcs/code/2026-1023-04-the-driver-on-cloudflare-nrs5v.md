@@ -94,14 +94,43 @@ Decided by the author on 2026-10-23, from the research the Options below record.
   removed when the test ends, and a run reports what it left.
 - **Workers, R2 and D1 alone, no Durable Object yet**: the driver's own state, its tokens' hashes,
   its lists and when each item went unasked, is kept in D1, and the grace is swept by a Cron
-  Trigger, where the Options had a Durable Object and its alarm; the instance kind waits.
+  Trigger, where the Options had a Durable Object and its alarm; the instance kind waits. **The
+  Cron Trigger is struck by monoflake/cloud's RFC rxmd9**, which puts every timer on a machine: the
+  grace is swept as each request to the management arrives, never one to a kind, and which machine
+  calls the sweep on a timer, and how, is **Pending**.
 - **A database is D1.**
 - **The first slice is management and function**, hello deployed through the platform to the test
   account; then object on R2; then database on D1.
 - **Settled as it is built, provisionally, and written here then**: how a deployment's `network` is
   answered where it cannot be enforced; whether the binding's token or its hash is the Worker's
   secret; the account's Workers subdomain or a Custom Domain for a deployment's name; a bucket per object item or a
-  prefix in one; how D1's size is held to an item's capacity.
+  prefix in one; how D1's size is held to an item's capacity. The first slice's, each provisional,
+  chosen by the advisor on 2026-10-24:
+  - **Names.** The driver's Worker is `driver` and its D1 database `driver`, its tables `held`, one
+    row of the generation, the policy and the grace, `items`, `tokens` and `deployments`. Its
+    account's token is the secret `API_TOKEN`, an account-owned token holding Workers Scripts Edit
+    alone, and the account's id the variable `ACCOUNT_ID`.
+  - **The binding's token** is kept as its BLAKE3 in hex, the secret `BINDING`, as RFC 3d3nt keeps
+    only a hash; once an `apply` carries `tokens`, the list in D1 stands in its place.
+  - **A deployment's Worker** is `app-<id>`, or `component-<name>` for a component, with no prefix,
+    a binding being an account of its own. Its version is the tag `version-<hash in hex>`, cut
+    short where a tag holds less, the rule written here when it is. Its address is
+    `<Worker>.<the account's subdomain>.workers.dev`, a Custom Domain waiting on a domain, RFC
+    vr5lw.
+  - **Stopping** deploys a stub version answering every request 503 `stopped`, and keeps the
+    version it replaced in D1, which resuming deploys again in whole.
+  - **The footing** is a plain text binding, `MONOFLAKE_FOOTING`, as driver(machine) names it to a
+    worker, and a deployment's secrets are secret text bindings.
+  - **A deployment's `network`** asking less than every way out is refused as `beyond_host`, an
+    ordinary account holding no Worker back from the network; the paid namespace waits.
+  - **The management's state is read and written whole**, its sweep writing only where an item's
+    grace has passed. It rests on the control calling the management one call at a time: D1's batch
+    makes a write one transaction, but leaves a race between a read and the write after it.
+  - **An object or database item** is held `failed` as `beyond_host`, its message that it waits on
+    this RFC's next slice, until that slice is built.
+  - **Its tests** are each block's own, Cloudflare's API answered by fixtures taken from its
+    documents' examples, each naming its address; the kinds' samples run once a live account is
+    bound.
 
 Out of date in this repository's neighbors, to be corrected when one is decided: a Worker's size is
 64 MiB uncompressed on every plan, where RFC vr5lw and `monoflake/platform`'s

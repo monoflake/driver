@@ -3,6 +3,9 @@
  * holds its own. A block in work fails nothing, and one written but not named here is refused.
  */
 let blocks: dict<Work.state> = dict{
+  "driver-cloudflare": InWork,
+  "driver-cloudflare-function": InWork,
+  "driver-cloudflare-management": InWork,
   "driver-machine": Accepted,
   "driver-machine-container": Accepted,
   "driver-machine-function": Accepted,
