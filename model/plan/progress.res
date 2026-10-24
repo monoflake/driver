@@ -6,6 +6,7 @@ let blocks: dict<Work.state> = dict{
   "driver-cloudflare": Accepted,
   "driver-cloudflare-function": Accepted,
   "driver-cloudflare-management": Accepted,
+  "driver-cloudflare-object": Accepted,
   "driver-machine": Accepted,
   "driver-machine-container": Accepted,
   "driver-machine-function": Accepted,

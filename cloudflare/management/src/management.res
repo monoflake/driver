@@ -55,30 +55,59 @@ let valid = (items: array<item>) => {
   )
 }
 
-/** The kinds this driver gives no item of, refused before anything of the list is held. */
-let beyond = (items: array<item>) =>
-  items
-  ->Array.find(item =>
+/** The most an `object` item holds in bytes, 1 TiB, while this driver's cost is watched, nrs5v. */
+let most = 1_099_511_627_776.
+
+/**
+ * What this driver cannot hold, refused before anything of the list is held, a container, a volume,
+ * a second `object` item past the binding's one bucket, or an `object` item past `most`.
+ */
+let beyond = (items: array<item>) => {
+  let refused = (item: item, message) => {
+    reason: "beyond_host",
+    message: `item ${Float.toString(item.id)}: ${message}`,
+  }
+  let isObject = (item: item) =>
+    switch item.capacity {
+    | Object(_) => true
+    | Container(_) | Volume(_) | Database(_) => false
+    }
+  let sizeOf = (item: item) =>
+    switch item.capacity {
+    | Object({size}) => size
+    | Container(_) | Volume(_) | Database(_) => 0.
+    }
+  let unheld = items->Array.find(item =>
     switch item.capacity {
     | Container(_) | Volume(_) => true
     | Object(_) | Database(_) => false
     }
   )
-  ->Option.map(item => {
-    reason: "beyond_host",
-    message: `item ${Float.toString(item.id)}: a Worker's account holds no container or volume`,
-  })
+  let second = items->Array.filter(isObject)->Array.get(1)
+  switch (unheld, second, items->Array.find(item => sizeOf(item) > most)) {
+  | (Some(item), _, _) => Some(refused(item, "a Worker's account holds no container or volume"))
+  | (None, Some(second), _) =>
+    Some(refused(second, "the binding holds one bucket, so a list holds one object item"))
+  | (None, _, Some(item)) =>
+    Some(refused(item, `past ${Float.toString(most)} bytes, the most this driver takes`))
+  | (None, _, None) => None
+  }
+}
 
-/** What an item is made of here, an object or a database waiting on RFC nrs5v's next slice. */
-let made = (capacity: capacity) =>
+/** What an item is made of here, an object at the Worker `object`'s address, a database waiting. */
+let made = async (capacity: capacity, ~bucket) =>
   switch capacity {
-  | Object(_) | Database(_) =>
-    Failed({reason: "beyond_host", message: "it waits on RFC nrs5v's next slice"})
+  | Object(_) =>
+    switch await bucket() {
+    | Ok(address) => Made({address: address})
+    | Error({reason, message}) => Failed({reason, message})
+    }
+  | Database(_) => Failed({reason: "beyond_host", message: "it waits on RFC nrs5v's next slice"})
   | Container(_) | Volume(_) => Failed({reason: "beyond_host"})
   }
 
 /** An item asked again as it is held, kept as it stands, one failed made again with every list. */
-let asked = (held: option<keptItem>, item: item) =>
+let asked = async (held: option<keptItem>, item: item, ~bucket) =>
   switch held {
   | Some(k) if k.item.capacity == item.capacity =>
     switch k.state {
@@ -86,11 +115,11 @@ let asked = (held: option<keptItem>, item: item) =>
     | Unasked(u) =>
       switch u.address {
       | Some(address) => Made({address: address})
-      | None => made(item.capacity)
+      | None => await made(item.capacity, ~bucket)
       }
-    | Failed(_) => made(item.capacity)
+    | Failed(_) => await made(item.capacity, ~bucket)
     }
-  | Some(_) | None => made(item.capacity)
+  | Some(_) | None => await made(item.capacity, ~bucket)
   }
 
 /** An item the list no longer asks, since when it was first found so. */
@@ -101,9 +130,29 @@ let unasked = (held: keptItem, ~now) =>
   | Making | Failed(_) => Unasked({since: now})
   }
 
+/** An `object` item unasked yet holding the bucket, made once and within its grace. */
+let holding = (k: keptItem) =>
+  switch (k.item.capacity, k.state) {
+  | (Object(_), Unasked(u)) => u.address != None
+  | (Object(_), Making | Made(_) | Failed(_)) | (Container(_) | Volume(_) | Database(_), _) => false
+  }
+
+/** A call asked once at most, its answer kept for every later asking. */
+let once = ask => {
+  let asked = ref(None)
+  () =>
+    switch asked.contents {
+    | Some(answer) => answer
+    | None =>
+      let answer = ask()
+      asked := Some(answer)
+      answer
+    }
+}
+
 let byId = (a: keptItem, b: keptItem) => Float.compare(a.item.id, b.item.id)
 
-let apply = async (store, ~now, ~generation, ~items: array<item>, ~tokens) =>
+let apply = async (store, ~now, ~generation, ~items: array<item>, ~tokens, ~objects) =>
   switch valid(items) {
   | Error(_) as refused => refused
   | Ok() =>
@@ -115,11 +164,26 @@ let apply = async (store, ~now, ~generation, ~items: array<item>, ~tokens) =>
       | Some(refused) => Error(refused)
       | None =>
         let held = id => kept.items->Array.find(k => k.item.id == id)
-        let listed = items->Array.map(item => {item, state: asked(held(item.id), item)})
         let left =
           kept.items
           ->Array.filter(k => !(items->Array.some(item => item.id == k.item.id)))
           ->Array.map(k => {...k, state: unasked(k, ~now)})
+        let bucket = once(objects)
+        // The bucket is its holder's until it is ended or swept, as driver(machine)'s `bucketed`.
+        let holder = left->Array.find(holding)
+        let listed = await Promise.all(
+          items->Array.map(async item => {
+            let state = switch (item.capacity, holder) {
+            | (Object(_), Some(h)) =>
+              let id = Float.toString(h.item.id)
+              let message = `the binding holds one bucket, item ${id}'s, until it is ended or swept`
+              Failed({reason: "beyond_host", message})
+            | (Object(_), None) | (Container(_) | Volume(_) | Database(_), _) =>
+              await asked(held(item.id), item, ~bucket)
+            }
+            {item, state}
+          }),
+        )
         await store.write({
           ...kept,
           generation,

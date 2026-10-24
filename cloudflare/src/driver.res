@@ -53,10 +53,17 @@ let stateTo = (s: Management.state): Contracts.ManagementState.t =>
 
 let hex = bytes => bytes->Array.map(Envelope.Hex.encode)
 
+/** The Worker `object`'s address, made with the Worker `driver`, RFC nrs5v. */
+let objectAddress = async env =>
+  switch await Function.ofAccount(~accountId=env.accountId, ~token=env.apiToken).address("object") {
+  | Ok(address) => Ok(address)
+  | Error({reason, message}) => Error({Management.reason, message})
+  }
+
 /** A management call on the list kept, its grace swept first. */
 let managed = async (env, store, call: Contracts.Interface.Management.call, form) => {
   let now = Date.now()
-  // Nothing of an object or a database item is made yet, so a swept item leaves nothing behind.
+  // A swept `object` item's objects are cleared by the Worker `object`, a batch each request.
   ignore(await Management.sweep(store, ~now))
   let held = (generation): Contracts.ManagementHeld.t => {generation: generation}
   switch call {
@@ -72,6 +79,7 @@ let managed = async (env, store, call: Contracts.Interface.Management.call, form
       ~generation=input.generation,
       ~items,
       ~tokens=input.tokens->Option.map(hex),
+      ~objects=() => objectAddress(env),
     )
     answered(Contracts.Interface.Management.apply, result->Result.map(held))->Answer.written(
       form,

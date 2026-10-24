@@ -15,18 +15,35 @@ let driver: Made.driver = {
       ],
     },
     {kind: #instance, contract: "deployments", language: #rescript, as_: "a Durable Object"},
-    {kind: #object, contract: "object", language: #rescript, as_: "a Worker over R2"},
+    // The Worker `object`, the binding's one bucket `objects` counted in the driver's D1, nrs5v.
+    {
+      kind: #object,
+      contract: "object",
+      language: #rescript,
+      as_: "a Worker over R2",
+      uses: ["envelope*", "codec*", "keys*"],
+      takes: [{language: #rescript, name: "wrangler", major: "4"}],
+      samples: [
+        "../platform/tests/kinds/objects/listing.json",
+        "../platform/tests/kinds/objects/ranges.json",
+        "../platform/tests/kinds/objects/writes.json",
+      ],
+    },
     {kind: #database, contract: "database", language: #rescript, as_: "a Worker over D1"},
   ],
   runtimes: [{name: "workers", takes: "modules", stands: ["isolate"]}],
-  // The Worker `driver`, serving the management and each kind, bundled by wrangler, RFC nrs5v.
+  // The Worker `driver`, serving the management and the function kind, bundled by wrangler, nrs5v.
   program: {
     language: #rescript,
     uses: ["envelope*", "codec*", "keys*"],
     takes: [{language: #rescript, name: "wrangler", major: "4"}],
     serves: ["driver-cloudflare-function", "driver-cloudflare-management"],
-    // The management's samples hold object items, so they come with nrs5v's next slice.
-    samples: ["../platform/tests/kinds/deployments/lifecycle.json"],
+    samples: [
+      "../platform/tests/kinds/management/lists.json",
+      "../platform/tests/kinds/management/graces.json",
+      "../platform/tests/kinds/management/ends.json",
+      "../platform/tests/kinds/deployments/lifecycle.json",
+    ],
     released: false,
   },
 }

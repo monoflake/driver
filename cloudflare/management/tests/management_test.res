@@ -38,8 +38,20 @@ let waiting = Management.Failed({
   message: "it waits on RFC nrs5v's next slice",
 })
 
-let apply = (m, ~now=0., ~tokens=?, generation, items) =>
-  Management.apply(m.store, ~now, ~generation, ~items, ~tokens)
+/** The Worker `object`'s address. */
+let address = "object.my-subdomain.workers.dev"
+
+let made = Management.Made({address: address})
+
+/** The Worker `object`'s address as `apply` asks it, each asking counted. */
+let objects = (~answer=Ok(address), asked) =>
+  async () => {
+    asked := asked.contents + 1
+    answer
+  }
+
+let apply = (m, ~now=0., ~tokens=?, ~asked=ref(0), ~answer=?, generation, items) =>
+  Management.apply(m.store, ~now, ~generation, ~items, ~tokens, ~objects=objects(~answer?, asked))
 
 let reasonOf = result =>
   switch result {
@@ -69,14 +81,68 @@ test("a container or a volume is beyond the host, and nothing of the list is hel
   deepEqual(m.kept.contents, initial)
 })
 
-test("an object or a database is held failed, waiting on the next slice", async () => {
+test("an object is made at the Worker's address, a database held failed, waiting", async () => {
   let m = memory()
+  let asked = ref(0)
   let database: Management.item = {id: 2., capacity: Database({size: 1.}), credentials: [hash]}
-  deepEqual(await m->apply(1., [database, object(1.)]), Ok(1.))
+  deepEqual(await m->apply(1., [database, object(1.)], ~asked), Ok(1.))
   deepEqual(
     m.kept.contents.items,
-    [{item: object(1.), state: waiting}, {item: database, state: waiting}],
+    [{item: object(1.), state: made}, {item: database, state: waiting}],
   )
+  // Made already, the object is not asked for again, nor where the list holds none.
+  deepEqual(await m->apply(2., [database, object(1.)], ~asked), Ok(2.))
+  deepEqual(await m->apply(3., [database], ~asked), Ok(3.))
+  deepEqual(asked.contents, 1)
+})
+
+test("an object the address of which was refused is failed so, and made again after", async () => {
+  let m = memory()
+  let refused: Management.refused = {reason: "fault", message: "no subdomain"}
+  deepEqual(await m->apply(1., [object(1.)], ~answer=Error(refused)), Ok(1.))
+  deepEqual(
+    m.kept.contents.items,
+    [{item: object(1.), state: Failed({reason: "fault", message: "no subdomain"})}],
+  )
+  deepEqual(await m->apply(2., [object(1.)]), Ok(2.))
+  deepEqual(m.kept.contents.items, [{item: object(1.), state: made}])
+})
+
+test("two object items, or an object past 1 TiB, are beyond the host, nothing held", async () => {
+  let m = memory()
+  let asked = ref(0)
+  let past = 1_099_511_627_777.
+  let database: Management.item = {id: 3., capacity: Database({size: past}), credentials: [hash]}
+  let large: Management.item = {id: 4., capacity: Object({size: past}), credentials: [hash]}
+  let full: Management.item = {...large, capacity: Object({size: past -. 1.})}
+  deepEqual(reasonOf(await m->apply(1., [object(1.), object(2.)], ~asked)), Some("beyond_host"))
+  deepEqual(reasonOf(await m->apply(1., [large], ~asked)), Some("beyond_host"))
+  deepEqual((m.kept.contents, asked.contents), (initial, 0))
+  deepEqual(await m->apply(1., [full, database], ~asked), Ok(1.))
+  // A database past it is held failed as any database is, waiting on the third slice.
+  deepEqual(m.kept.contents.items, [{item: database, state: waiting}, {item: full, state: made}])
+})
+
+test("a second object item waits for the bucket until the one holding it is ended", async () => {
+  let m = memory()
+  deepEqual(await m->apply(1., [object(1.)]), Ok(1.))
+  deepEqual(await m->apply(2., [object(2.)], ~now=5.), Ok(2.))
+  deepEqual(
+    m.kept.contents.items,
+    [
+      {item: object(1.), state: Unasked({since: 5., address})},
+      {
+        item: object(2.),
+        state: Failed({
+          reason: "beyond_host",
+          message: "the binding holds one bucket, item 1's, until it is ended or swept",
+        }),
+      },
+    ],
+  )
+  deepEqual(await Management.end_(m.store, ~id=1.), Ok())
+  deepEqual(await m->apply(3., [object(2.)]), Ok(3.))
+  deepEqual(m.kept.contents.items, [{item: object(2.), state: made}])
 })
 
 test("a list behind the one held is answered with the generation held, unwritten", async () => {

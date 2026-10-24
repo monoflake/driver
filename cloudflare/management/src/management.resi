@@ -38,13 +38,17 @@ type kept = {
 /** Where it is kept, read and written whole, the driver's D1 `held`, `items` and `tokens`. */
 type store = {read: unit => promise<kept>, write: kept => promise<unit>}
 
-/** The list taken where its generation is not behind, `tokens` the binding's in force by hash. */
+/**
+ * The list taken where its generation is not behind, `tokens` the binding's in force by hash, and
+ * `objects` the Worker `object`'s address, asked only where the list holds an `object` item.
+ */
 let apply: (
   store,
   ~now: float,
   ~generation: float,
   ~items: array<item>,
   ~tokens: option<array<string>>,
+  ~objects: unit => promise<result<string, refused>>,
 ) => promise<result<float, refused>>
 
 /** The grace taken where its generation is not behind, 0 removing at once and a year at most. */

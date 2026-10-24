@@ -94,17 +94,19 @@ test("a binding new holds nothing, its grace a week, and names the revision give
 })
 
 test(
-  "a list is kept in D1, its object held failed, unasked, then swept past its grace",
+  "a list is kept in D1, its object made at the Worker's address, unasked, then swept",
   async () => {
     let env = envOf()
+    let restore = replaced(Account.make(~artifacts=dict{}))
     let (_, _, applied) = await manage(env, "apply", `{"generation": 1, "items": [${item}]}`)
+    restore()
     deepEqual(applied, success(`{"generation": 1}`))
     let (_, _, described) = await manage(env, "describe", "{}")
     deepEqual(
       described,
       success(`{"generation": 1, "policy": 0, "grace": 604800, "items": [{"id": 1,
-      "capacity": {"name": "object", "size": 1048576}, "state": {"name": "failed",
-      "reason": "beyond_host", "message": "it waits on RFC nrs5v's next slice"}}]}`),
+      "capacity": {"name": "object", "size": 1048576}, "state": {"name": "made",
+      "address": "object.my-subdomain.workers.dev"}}]}`),
     )
     deepEqual(
       reasonOf(await manage(env, "end", `{"id": 1}`)),
@@ -407,7 +409,9 @@ test("a deployments, a denied or a malformed call leaves D1 unswept and unwritte
   let sqlite = migrated()
   let env = envOf(~db=asDatabase(sqlite), ())
   ignore(await manage(env, "set_policy", `{"generation": 1, "grace": 0}`))
+  let restore = replaced(Account.make(~artifacts=dict{}))
   ignore(await manage(env, "apply", `{"generation": 1, "items": [${item}]}`))
+  restore()
   ignore(await manage(env, "apply", `{"generation": 2, "items": []}`))
   let before = rows(sqlite)
   let describe = `{"interface": "deployments", "operation": "describe",

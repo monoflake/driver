@@ -49,6 +49,22 @@ importers:
 
   cloudflare/management: {}
 
+  cloudflare/object:
+    dependencies:
+      '@monoflake/codec':
+        specifier: link:../../../platform/code/libs/codec
+        version: link:../../../platform/code/libs/codec
+      '@monoflake/envelope':
+        specifier: link:../../../platform/code/libs/envelope
+        version: link:../../../platform/code/libs/envelope
+      '@monoflake/keys':
+        specifier: link:../../../platform/code/libs/keys
+        version: link:../../../platform/code/libs/keys
+    devDependencies:
+      wrangler:
+        specifier: 4.151.3
+        version: 4.151.3
+
 packages:
 
   '@cloudflare/kv-asset-handler@0.5.0':
