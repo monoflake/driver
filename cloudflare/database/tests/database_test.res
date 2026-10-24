@@ -153,6 +153,96 @@ test("two first calls for a new item clear the database once, and keep what it m
   deepEqual(served.env.database->batches, done + 3)
 })
 
+/** A binding whose database held item 1's table, now listed for item 2 alone. */
+let handing = async () => {
+  let served = Served.make(~size=1_000_000.)
+  deepEqual((await served->Served.execute(["CREATE TABLE old (i INTEGER)"]))->Pair.first, 200)
+  served->Served.forget(1.)
+  served->Served.item(~id=2., 1_000_000.)
+  served
+}
+
+/** What `database_held` records, its item, whether it was emptied, and since when. */
+let heldRow = served => served.Served.driver->rows("SELECT item, cleared, since FROM database_held")
+
+/** A handover whose drops were done and whose record failed, its lease left at the clock. */
+let unrecorded = async () => {
+  let served = await handing()
+  served.env.db->failOnce("SET cleared = 1")
+  deepEqual(reasonOf(await served->Served.execute(["SELECT 1"])), (500, Some("fault")))
+  served
+}
+
+test("a clear that failed midway is taken over once its lease passed, ending cleared", async () => {
+  let served = await unrecorded()
+  deepEqual(names(served), ["_cf_KV", "sqlite_autoindex__cf_KV_1"])
+  deepEqual(heldRow(served)->Array.map(row => row->Dict.get("cleared")), [Some(JSON.Number(0.))])
+  served.clock := served.clock.contents +. Held.lease +. 1.
+  deepEqual((await served->Served.execute(["CREATE TABLE new (i INTEGER)"]))->Pair.first, 200)
+  deepEqual(names(served), ["_cf_KV", "new", "sqlite_autoindex__cf_KV_1"])
+  deepEqual(
+    heldRow(served),
+    [
+      dict{
+        "item": JSON.Number(2.),
+        "cleared": JSON.Number(1.),
+        "since": JSON.Number(served.clock.contents),
+      },
+    ],
+  )
+})
+
+test("a call while another holds a fresh lease is overloaded, and runs nothing", async () => {
+  let served = await unrecorded()
+  let done = served.env.database->batches
+  served.clock := served.clock.contents +. Held.lease
+  let overloaded = (503, Some("overloaded"))
+  deepEqual(reasonOf(await served->Served.execute(["CREATE TABLE t (i INTEGER)"])), overloaded)
+  deepEqual(
+    reasonOf(
+      await served->Served.call("rewind", `{"to": ${Float.toString(served.clock.contents)}}`),
+    ),
+    overloaded,
+  )
+  deepEqual(served.env.database->batches, done)
+  deepEqual(names(served), ["_cf_KV", "sqlite_autoindex__cf_KV_1"])
+  deepEqual(served.sent, [])
+})
+
+test("of two calls racing for a lease that passed one clears, the other overloaded", async () => {
+  let served = await unrecorded()
+  served.clock := served.clock.contents +. Held.lease +. 1.
+  let done = served.env.database->batches
+  // The late call reads the lease that passed, and tries to take it while the early one clears.
+  let read = served.env.db->holdBack("FROM database_held")
+  let late = served->Served.execute(["CREATE TABLE late (i INTEGER)"])
+  await read.reached
+  let clearing = served.env.database->holdBack("sqlite_master")
+  let early = served->Served.execute(["CREATE TABLE early (i INTEGER)"])
+  // Raced with the early call's answer, so a call that never clears fails rather than waits.
+  await Promise.race([clearing.reached, early->Promise.thenResolve(_ => ())])
+  read.release()
+  deepEqual(reasonOf(await late), (503, Some("overloaded")))
+  clearing.release()
+  deepEqual((await early)->Pair.first, 200)
+  deepEqual(names(served), ["_cf_KV", "early", "sqlite_autoindex__cf_KV_1"])
+  deepEqual(served.env.database->batches, done + 2)
+})
+
+test("the moment the database was emptied is taken once the clear is done", async () => {
+  let served = await handing()
+  let gate = served.env.database->holdBack("sqlite_master")
+  let call = served->Served.execute(["SELECT 1"])
+  await gate.reached
+  served.clock := served.clock.contents +. 5000.
+  gate.release()
+  deepEqual((await call)->Pair.first, 200)
+  deepEqual(
+    heldRow(served)->Array.map(row => row->Dict.get("since")),
+    [Some(JSON.Number(served.clock.contents))],
+  )
+})
+
 test("an item unasked once made still holds the database, within its grace", async () => {
   let served = Served.make()
   let address = "database.my-subdomain.workers.dev"
@@ -409,6 +499,30 @@ test("a restore Cloudflare's API refuses is a fault naming what it answered", as
   let answer = await served->rewind(served.clock.contents -. 30_000.)
   deepEqual(reasonOf(answer), (500, Some("fault")))
   deepEqual(messageOf(answer), Some("Time Travel's restore answered 400, 1000 message"))
+})
+
+test("a restore done is answered though its size was not read or recorded", async () => {
+  let served = Served.make(~size=1_000_000.)
+  let start = served.clock.contents
+  deepEqual((await served->Served.execute(["CREATE TABLE t (i INTEGER)"]))->Pair.first, 200)
+  let sizes = () => served.driver->rows("SELECT size FROM database_held")
+  let was = sizes()
+  served.clock := start +. 60_000.
+  served.env.db->failOnce("UPDATE database_held SET size")
+  let before = served.clock.contents
+  deepEqual(
+    await served->rewind(start +. 30_000.),
+    (200, success(`{"before": ${Float.toString(before)}}`)),
+  )
+  deepEqual(sizes(), was)
+  served.clock := start +. 120_000.
+  served.env.database->failOnce("SELECT 1")
+  let before = served.clock.contents
+  deepEqual(
+    await served->rewind(start +. 30_000.),
+    (200, success(`{"before": ${Float.toString(before)}}`)),
+  )
+  deepEqual(sizes(), was)
 })
 
 test("a statement's first keyword is read past space and comments", async () => {

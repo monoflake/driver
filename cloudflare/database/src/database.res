@@ -32,25 +32,46 @@ let refused = (operation: Contracts.operation, reason, ~message=?) => Contracts.
 )
 
 let unheld = "the binding holds no database item"
+let clearing = "the database is being emptied for its item"
+
+/** The database held for an item and emptied for it, or still being emptied by another call. */
+type holding = Held(Held.held) | Clearing
 
 /**
  * The database held for an item, emptied where it was held for another or for none by the one call
- * that took it, and what is recorded of it.
+ * that took it, or by one that took over a lease that passed.
  */
 let rec heldFor = async (env, item: Held.item) =>
   switch await Held.held(env.db) {
-  | Some(held) if held.item == item.id => held
+  | Some(held) if held.item == item.id && held.cleared => Held(held)
+  | Some(held) if held.item == item.id =>
+    let now = Date.now()
+    if now -. held.clearingSince <= Held.lease {
+      Clearing
+    } else if await Held.leased(env.db, ~item=item.id, ~was=held.clearingSince, ~now) {
+      await clearedFor(env, item, ~lease=now)
+    } else {
+      Clearing
+    }
   | was =>
-    let size = was->Option.mapOr(0., was => was.size)
-    let held: Held.held = {item: item.id, since: Date.now(), size}
-    if await Held.handed(env.db, ~was=was->Option.map(was => was.item), held) {
-      let size = await Cleared.clear(env.database)
-      await Held.sized(env.db, ~item=item.id, size)
-      {...held, size}
+    let now = Date.now()
+    if await Held.handed(env.db, ~was=was->Option.map(was => was.item), ~item=item.id, ~now) {
+      await clearedFor(env, item, ~lease=now)
     } else {
       await heldFor(env, item)
     }
   }
+
+/** The database emptied under a lease, recorded emptied while that lease is still this call's. */
+and clearedFor = async (env, item: Held.item, ~lease) => {
+  let size = await Cleared.clear(env.database)
+  let since = Date.now()
+  if await Held.cleared(env.db, ~item=item.id, ~lease, ~since, ~size) {
+    Held({item: item.id, since, size, cleared: true, clearingSince: lease})
+  } else {
+    await heldFor(env, item)
+  }
+}
 
 /** A statement's rows, its columns named as D1 keys each, in the order the first row holds them. */
 let resultOf = (sql, ran: Stores.result): result<Contracts.DatabaseResult.t, Values.unread> => {
@@ -86,46 +107,50 @@ let executed = async (env, item: option<Held.item>, input: Contracts.DatabaseExe
     refused(operation, "beyond_limit", ~message=`a statement is at most ${bound} bytes`)
   | None => refused(operation, "storage_full", ~message=unheld)
   | Some(item) =>
-    let held = await heldFor(env, item)
     let writes = !(sqls->Array.every(Statements.reads))
-    let full = writes ? Room.refusal(input.statements, ~held=held.size, ~size=item.size) : None
-    switch full {
-    | Some(message) => refused(operation, "storage_full", ~message)
-    | None if input.statements == [] =>
-      Contracts.Answer.Success(({results: []}: Contracts.DatabaseExecuted.t))
-    | None =>
-      let statements = input.statements->Array.map(s =>
-        env.database
-        ->Stores.prepare(s.sql)
-        ->Stores.bind(s.parameters->Option.getOr([])->Array.map(Values.bound))
-      )
-      switch await env.database->Stores.batch(statements) {
-      | ran =>
-        // The batch committed, so a size not recorded is read again after the next batch.
-        switch ran->Array.at(-1) {
-        | Some(last) =>
-          try await Held.sized(env.db, ~item=item.id, last.meta.sizeAfter) catch {
-          | JsExn(_) => ()
+    let full = held => writes ? Room.refusal(input.statements, ~held, ~size=item.size) : None
+    switch await heldFor(env, item) {
+    | Clearing => refused(operation, "overloaded", ~message=clearing)
+    | Held(held) =>
+      switch full(held.size) {
+      | Some(message) => refused(operation, "storage_full", ~message)
+      | None if input.statements == [] =>
+        Contracts.Answer.Success(({results: []}: Contracts.DatabaseExecuted.t))
+      | None =>
+        let statements = input.statements->Array.map(s =>
+          env.database
+          ->Stores.prepare(s.sql)
+          ->Stores.bind(s.parameters->Option.getOr([])->Array.map(Values.bound))
+        )
+        switch await env.database->Stores.batch(statements) {
+        | ran =>
+          // The batch committed, so a size not recorded is read again after the next batch.
+          switch ran->Array.at(-1) {
+          | Some(last) =>
+            try await Held.sized(env.db, ~item=item.id, last.meta.sizeAfter) catch {
+            | JsExn(_) => ()
+            }
+          | None => ()
           }
-        | None => ()
-        }
-        let results =
-          ran->Array.reduceWithIndex(Ok([]), (done, ran, at) =>
-            done->Result.flatMap(results =>
-              resultOf(sqls->Array.getUnsafe(at), ran)->Result.map(result => [...results, result])
+          let results =
+            ran->Array.reduceWithIndex(Ok([]), (done, ran, at) =>
+              done->Result.flatMap(results =>
+                resultOf(sqls->Array.getUnsafe(at), ran)->Result.map(result => [...results, result])
+              )
             )
-          )
-        switch results {
-        | Ok(results) =>
-          Contracts.Answer.Success(({results: results}: Contracts.DatabaseExecuted.t))
-        | Error(Beyond) =>
-          let message = "an integer read is past what a JavaScript number carries whole"
-          refused(operation, "beyond_range", ~message)
-        | Error(Unknown) => refused(operation, "fault", ~message="a value read is of no known type")
+          switch results {
+          | Ok(results) =>
+            Contracts.Answer.Success(({results: results}: Contracts.DatabaseExecuted.t))
+          | Error(Beyond) =>
+            let message = "an integer read is past what a JavaScript number carries whole"
+            refused(operation, "beyond_range", ~message)
+          | Error(Unknown) =>
+            refused(operation, "fault", ~message="a value read is of no known type")
+          }
+        | exception JsExn(e) =>
+          let message = e->JsExn.message->Option.getOr("D1 failed")
+          refused(operation, Failed.reasonOf(message), ~message)
         }
-      | exception JsExn(e) =>
-        let message = e->JsExn.message->Option.getOr("D1 failed")
-        refused(operation, Failed.reasonOf(message), ~message)
       }
     }
   }
@@ -136,16 +161,16 @@ let rewound = async (env, item: option<Held.item>, input: Contracts.DatabaseRewi
   switch item {
   | None => refused(operation, "beyond_window", ~message=unheld)
   | Some(item) =>
-    let held = await heldFor(env, item)
-    let now = Date.now()
-    if input.to < held.since +. settled {
+    switch await heldFor(env, item) {
+    | Clearing => refused(operation, "overloaded", ~message=clearing)
+    | Held(held) if input.to < held.since +. settled =>
       let message = "the moment is not a second past when the database was emptied for the item"
       refused(operation, "beyond_window", ~message)
-    } else if input.to < now -. window || input.to > now {
+    | Held(_) if input.to < Date.now() -. window || input.to > Date.now() =>
       refused(operation, "beyond_window", ~message="a rewind is to a moment of the last 30 days")
-    } else {
+    | Held(_) =>
       // The moment before the restore, which a rewind to undoes it.
-      let before = now
+      let before = Date.now()
       switch await Restored.restore(
         ~accountId=env.accountId,
         ~databaseId=env.databaseId,
@@ -153,10 +178,12 @@ let rewound = async (env, item: option<Held.item>, input: Contracts.DatabaseRewi
         ~to=input.to,
       ) {
       | Ok() =>
-        // The size the restore left, read again where it can be and else after the next batch.
-        switch await env.database->Stores.prepare("SELECT 1")->Stores.bind([])->Stores.run {
-        | ran => await Held.sized(env.db, ~item=item.id, ran.meta.sizeAfter)
-        | exception JsExn(_) => ()
+        // The restore is done, so a size not read or recorded is read after the next batch.
+        try {
+          let ran = await env.database->Stores.prepare("SELECT 1")->Stores.bind([])->Stores.run
+          await Held.sized(env.db, ~item=item.id, ran.meta.sizeAfter)
+        } catch {
+        | JsExn(_) => ()
         }
         Contracts.Answer.Success(({before: before}: Contracts.DatabaseRewound.t))
       | Error(message) => refused(operation, "fault", ~message)

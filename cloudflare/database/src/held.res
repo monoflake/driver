@@ -54,37 +54,79 @@ let item = async db => {
   row->Option.map(row => {id: row.id, size: row.bytes})
 }
 
-/** Which item the database is held for, since when in milliseconds, and its size after a batch. */
-type held = {item: float, since: float, size: float}
+/** How long a call emptying the database holds it before another may take its lease over. */
+let lease = 30_000.
+
+/**
+ * Which item the database is held for, since when in milliseconds it was emptied, its size after a
+ * batch, whether it was emptied, and since when the call emptying it held its lease.
+ */
+type held = {item: float, since: float, size: float, cleared: bool, clearingSince: float}
+
+type heldRecord = {
+  item: float,
+  since: float,
+  size: float,
+  cleared: float,
+  @as("clearing_since") clearingSince: float,
+}
 
 /** What `database_held` records, none before the database was first held for an item. */
 let held = async db => {
-  let sql = "SELECT item, since, size FROM database_held WHERE one = 1"
-  let row: option<held> = (await db->prepare(sql)->bind([])->first)->Nullable.toOption
-  row
+  let sql = "SELECT item, since, size, cleared, clearing_since FROM database_held WHERE one = 1"
+  let row: option<heldRecord> = (await db->prepare(sql)->bind([])->first)->Nullable.toOption
+  row->Option.map((row): held => {
+    item: row.item,
+    since: row.since,
+    size: row.size,
+    cleared: row.cleared == 1.,
+    clearingSince: row.clearingSince,
+  })
 }
 
 /**
- * The database taken for an item from the one `was` recorded, none for none, in one statement, and
- * whether this call took it, so only one call of several clears it.
+ * The database taken for an item from the one `was` recorded, none for none, its lease from `now`,
+ * and whether this call took it, so only one call of several clears it.
  */
-let handed = async (db, ~was, held: held) => {
+let handed = async (db, ~was, ~item, ~now) => {
   let sql =
     [
-      "INSERT INTO database_held (one, item, since, size) VALUES (1, ?, ?, ?)",
-      "ON CONFLICT (one) DO UPDATE SET item = excluded.item, since = excluded.since,",
-      "size = excluded.size WHERE database_held.item IS ?",
+      "INSERT INTO database_held (one, item, since, size, cleared, clearing_since)",
+      "VALUES (1, ?, ?, 0, 0, ?) ON CONFLICT (one) DO UPDATE SET item = excluded.item,",
+      "cleared = 0, clearing_since = excluded.clearing_since WHERE database_held.item IS ?",
     ]->Array.join(" ")
   let was = was->Option.mapOr(Null, item => Number(item))
+  let ran = await db->prepare(sql)->bind([Number(item), Number(now), Number(now), was])->run
+  ran.meta.changes > 0.
+}
+
+/** A lease taken from one that passed, `was` its start as read, and whether this call took it. */
+let leased = async (db, ~item, ~was, ~now) => {
+  let sql =
+    [
+      "UPDATE database_held SET clearing_since = ?",
+      "WHERE one = 1 AND item = ? AND cleared = 0 AND clearing_since = ?",
+    ]->Array.join(" ")
+  let ran = await db->prepare(sql)->bind([Number(now), Number(item), Number(was)])->run
+  ran.meta.changes > 0.
+}
+
+/** The database recorded emptied for an item while the lease is still this call's, and whether. */
+let cleared = async (db, ~item, ~lease, ~since, ~size) => {
+  let sql =
+    [
+      "UPDATE database_held SET cleared = 1, since = ?, size = ?",
+      "WHERE one = 1 AND item = ? AND cleared = 0 AND clearing_since = ?",
+    ]->Array.join(" ")
   let ran = await db
   ->prepare(sql)
-  ->bind([Number(held.item), Number(held.since), Number(held.size), was])
+  ->bind([Number(since), Number(size), Number(item), Number(lease)])
   ->run
   ran.meta.changes > 0.
 }
 
 /** The database's size after a batch, recorded only while it is held for that item still. */
 let sized = async (db, ~item, size) => {
-  let sql = "UPDATE database_held SET size = ? WHERE one = 1 AND item = ?"
+  let sql = "UPDATE database_held SET size = ? WHERE one = 1 AND item = ? AND cleared = 1"
   ignore(await db->prepare(sql)->bind([Number(size), Number(item)])->run)
 }

@@ -18,6 +18,7 @@ let listing = [
 /** A name quoted as SQLite reads an identifier. */
 let quoted = name => `"${name->String.replaceAll(`"`, `""`)}"`
 
+/** A drop of what a user made, IF EXISTS so a clear run again drops what it finds alone. */
 let dropOf = (made: made) =>
   switch made.kind {
   | "trigger" => Some("DROP TRIGGER IF EXISTS")
