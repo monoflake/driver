@@ -1,5 +1,6 @@
 node_modules/
 lib/
+!machine/function/tests/bundles/echo-modules/lib/
 *.res.mjs
 .DS_Store
 target/
