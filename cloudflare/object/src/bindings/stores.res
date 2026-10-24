@@ -84,7 +84,9 @@ let get = (bucket, key, ~range=?) =>
     }
   )
 
-let put = (bucket, key, bytes) => attempt(async () => ignore(await bucket->putRaw(key, bytes)))
+/** An object written, as R2 answers it where it gives an answer. */
+let put = (bucket, key, bytes) =>
+  attempt(async () => (await bucket->putRaw(key, bytes))->Nullable.toOption)
 
 let delete = (bucket, key) => attempt(() => bucket->deleteRaw(key))
 

@@ -52,14 +52,24 @@ let written = async (env, item: option<Held.item>, input: Contracts.ObjectWrite.
     )
   | None => refused(Interface.write, "storage_full", ~message="the binding holds no bucket")
   | Some(item) =>
-    let old = await Held.sizeOf(env.db, ~item=item.id, input.name)
-    let size = Int.toFloat(size)
-    if await Held.take(env.db, ~item, ~name=input.name, ~size) {
-      switch await Stores.put(env.objects, keyOf(item, input.name), input.content) {
-      | Ok() => Contracts.Answer.Success(({}: Contracts.ObjectWritten.t))
-      | Error(failure) =>
-        await Held.restore(env.db, ~item=item.id, ~name=input.name, old)
-        failed(Interface.write, failure)
+    let name = input.name
+    if await Held.take(env.db, ~item, ~name, ~size=Int.toFloat(size)) {
+      let key = keyOf(item, name)
+      let put = await Stores.put(env.objects, key, input.content)
+      // The count follows what R2 holds for the key once the put is done, whatever ran between.
+      let held = switch put {
+      | Ok(stored) => Ok(Some(stored->Option.mapOr(Int.toFloat(size), Stores.size)))
+      | Error(_) =>
+        (await Stores.head(env.objects, key))->Result.map(o => o->Option.map(Stores.size))
+      }
+      // A head that failed leaves the count as taken, until the key's next write or delete.
+      switch held {
+      | Ok(size) => await Held.settle(env.db, ~item=item.id, ~name, size)
+      | Error(_) => ()
+      }
+      switch put {
+      | Ok(_) => Contracts.Answer.Success(({}: Contracts.ObjectWritten.t))
+      | Error(failure) => failed(Interface.write, failure)
       }
     } else {
       refused(Interface.write, "storage_full")
@@ -69,26 +79,35 @@ let written = async (env, item: option<Held.item>, input: Contracts.ObjectWrite.
 
 let notFound = () => refused(Interface.read, "not_found")
 
+/** An object's size beside no bytes, as a range of none or past its end reads. */
+let empty = async (env, key) =>
+  switch await Stores.head(env.objects, key) {
+  | Ok(Some(stored)) =>
+    let content = Uint8Array.fromLength(0)
+    Contracts.Answer.Success(({content, size: stored->Stores.size}: Contracts.ObjectContent.t))
+  | Ok(None) => notFound()
+  | Error(failure) => failed(Interface.read, failure)
+  }
+
 /** An object read whole or in a range cut at its end, as a range past it is read empty. */
 let read = async (env, item: option<Held.item>, input: Contracts.ObjectRead.t) =>
   switch item {
   | None => notFound()
   | Some(item) =>
-    let range = input.range->Option.map((r): Stores.range => {offset: r.start, length: r.length})
-    switch await Stores.get(env.objects, keyOf(item, input.name), ~range?) {
-    | Ok(Some((content, size))) =>
-      Contracts.Answer.Success(({content, size}: Contracts.ObjectContent.t))
-    | Ok(None) => notFound()
-    // R2 refuses a range starting at or past the end, or of no bytes, which reads nothing here.
-    | Error(Unsatisfiable) =>
-      switch await Stores.head(env.objects, keyOf(item, input.name)) {
-      | Ok(Some(stored)) =>
-        let content = Uint8Array.fromLength(0)
-        Contracts.Answer.Success(({content, size: stored->Stores.size}: Contracts.ObjectContent.t))
+    let key = keyOf(item, input.name)
+    switch input.range {
+    // A range of no bytes never reaches R2, so nothing rests on how it would answer one.
+    | Some(range) if range.length == 0. => await empty(env, key)
+    | range =>
+      let range = range->Option.map((r): Stores.range => {offset: r.start, length: r.length})
+      switch await Stores.get(env.objects, key, ~range?) {
+      | Ok(Some((content, size))) =>
+        Contracts.Answer.Success(({content, size}: Contracts.ObjectContent.t))
       | Ok(None) => notFound()
-      | Error(failure) => failed(Interface.read, failure)
+      // R2 refuses a range starting at or past the end, which reads nothing here.
+      | Error(Unsatisfiable) => await empty(env, key)
+      | Error((Limited | Failed(_)) as failure) => failed(Interface.read, failure)
       }
-    | Error((Limited | Failed(_)) as failure) => failed(Interface.read, failure)
     }
   }
 
@@ -230,7 +249,7 @@ let serve = async (request, env, forms: Answer.forms) => {
     let holding = await Held.item(env.db)
     let answer = await called(request, env, forms, parts, ~holding)
     // A batch a fault left is cleared by a later request, so the call's answer stands.
-    switch await Cleared.clear(env.db, env.objects, ~holding) {
+    switch await Cleared.clear(env.db, env.objects) {
     | () => ()
     | exception JsExn(_) => ()
     }

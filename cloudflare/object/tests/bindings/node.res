@@ -58,12 +58,8 @@ let run: (sqlite, string, array<JSON.t>) => unit = %raw(`(db, sql, values) => {
   db.prepare(sql).run(...values)
 }`)
 
-// Each shape is https://developers.cloudflare.com/r2/api/workers/workers-api-reference/'s.
-// Each error ends with its code, as https://developers.cloudflare.com/r2/api/error-codes/ writes.
-/**
- * A bucket in memory answering as R2's binding does, 10039 a range past the end and 10058 a key
- * written within a second of the clock's last write to it, `startAfter` as the runtime types it.
- */
+// A bucket in memory answering as R2's binding does by the references `stores.res` names.
+// A range of no bytes is not modeled, and `before` sets a hook run once before an operation.
 let bucket: ref<float> => Object.bucket = %raw(`clock => {
   const objects = new Map()
   const encoder = new TextEncoder()
@@ -80,17 +76,26 @@ let bucket: ref<float> => Object.bucket = %raw(`clock => {
       return part.buffer.slice(part.byteOffset, part.byteOffset + part.byteLength)
     },
   })
+  const hooks = new Map()
+  const hook = async operation => {
+    const run = hooks.get(operation)
+    hooks.delete(operation)
+    if (run) await run()
+  }
   return {
+    before: (operation, run) => hooks.set(operation, run),
     head: async key => objects.has(key) ? stored(key, objects.get(key).bytes) : null,
     get: async (key, options) => {
       const held = objects.get(key)
       if (!held) return null
       const range = options?.range
-      if (range && (range.offset >= held.bytes.length || range.length <= 0))
+      if (range && range.length <= 0) throw new Error("get: a range of no bytes is not modeled")
+      if (range && range.offset >= held.bytes.length)
         throw new Error("get: Requested byte range is not satisfiable. (10039)")
       return stored(key, held.bytes, range)
     },
     put: async (key, value) => {
+      await hook("put")
       const held = objects.get(key)
       if (held && clock.contents - held.written < 1000)
         throw new Error("put: Rate limit exceeded. (10058)")
@@ -102,6 +107,7 @@ let bucket: ref<float> => Object.bucket = %raw(`clock => {
       for (const key of [keys].flat()) objects.delete(key)
     },
     list: async ({ prefix, startAfter, delimiter, limit }) => {
+      await hook(delimiter === undefined ? "list" : "prefixes")
       const entries = []
       for (const k of [...objects.keys()].sort(order)) {
         const before = startAfter !== undefined && order(k, startAfter) <= 0
@@ -126,6 +132,9 @@ let bucket: ref<float> => Object.bucket = %raw(`clock => {
 
 /** Every key the bucket in memory holds, in byte order. */
 @send external keys: Object.bucket => array<string> = "keys"
+
+/** A call run once before the bucket's next `put`, `list`, or `prefixes`, a list by delimiter. */
+@send external before: (Object.bucket, string, unit => promise<unit>) => unit = "before"
 
 /** A key written to the bucket as it stands, past the Worker. */
 @send external placed: (Object.bucket, string, Uint8Array.t) => promise<unit> = "put"

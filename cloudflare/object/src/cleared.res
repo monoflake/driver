@@ -7,14 +7,16 @@
 let batch = 1000
 
 /**
- * One batch cleared, the keys under the first prefix no item holds, or once none is left the rows
- * of other items; what fails is taken up again by the next request.
+ * One batch cleared, the keys under the first prefix whose item `items` lacks, or once none is left
+ * the rows of such items; what fails is taken up again by the next request.
  */
-let clear = async (db, bucket, ~holding: option<Held.item>) => {
-  let held = holding->Option.map(item => Held.prefixOf(item.id))
+let clear = async (db, bucket) =>
   switch await Stores.prefixes(bucket, ~limit=batch) {
   | Ok(prefixes) =>
-    switch prefixes->Array.find(prefix => Some(prefix) != held) {
+    // Items are read after the prefixes, as a key stands under an id only once `items` holds it.
+    let ids = await Held.ids(db)
+    let absent = prefix => !(ids->Array.some(id => Held.prefixOf(id) == prefix))
+    switch prefixes->Array.find(absent) {
     | Some(stale) =>
       switch await Stores.list(bucket, ~prefix=stale, ~limit=batch) {
       | Ok({objects: []}) | Error(_) => ()
@@ -30,10 +32,7 @@ let clear = async (db, bucket, ~holding: option<Held.item>) => {
         | Error(_) => ()
         }
       }
-    | None =>
-      let holding = holding->Option.map(item => item.id)
-      ignore(await Held.forgetStale(db, ~holding, ~limit=batch))
+    | None => ignore(await Held.forgetStale(db, ~limit=batch))
     }
   | Error(_) => ()
   }
-}

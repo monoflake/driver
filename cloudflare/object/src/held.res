@@ -57,19 +57,6 @@ let item = async db => {
 /** The prefix an item's keys stand under, its id and `/`, so no item sees another's objects. */
 let prefixOf = (id: float) => `${Float.toString(id)}/`
 
-type sizeRow = {size: float}
-
-/** An object's size as it is counted for an item, none where none is. */
-let sizeOf = async (db, ~item, name) => {
-  let row: option<sizeRow> = (
-    await db
-    ->prepare("SELECT size FROM objects WHERE item = ? AND name = ?")
-    ->bind([Number(item), Text(name)])
-    ->first
-  )->Nullable.toOption
-  row->Option.map(row => row.size)
-}
-
 /** An object counted at a size, written or replaced in one statement, so it is one transaction. */
 let taking = [
   "INSERT INTO objects (item, name, size) SELECT ?, ?, ?",
@@ -103,9 +90,9 @@ let forget = async (db, ~item, name) =>
     ->run,
   )
 
-/** An object counted as it was before a write that failed, its size or none. */
-let restore = async (db, ~item, ~name, old) =>
-  switch old {
+/** An object counted at the size R2 holds for its key, or no longer counted where it holds none. */
+let settle = async (db, ~item, ~name, size) =>
+  switch size {
   | Some(size) =>
     let put =
       [
@@ -116,6 +103,14 @@ let restore = async (db, ~item, ~name, old) =>
   | None => await forget(db, ~item, name)
   }
 
+type idRow = {id: float}
+
+/** The id of every item `items` holds, in whatever state it stands. */
+let ids = async db => {
+  let rows: rows<idRow> = await db->prepare("SELECT id FROM items")->bind([])->all
+  rows.results->Array.map(row => row.id)
+}
+
 /** The objects of an item no longer counted, by their names in one statement. */
 let forgetAll = async (db, ~item, names: array<string>) => {
   let names = JSON.stringify(JSON.Array(names->Array.map(name => JSON.String(name))))
@@ -123,13 +118,15 @@ let forgetAll = async (db, ~item, names: array<string>) => {
   ignore(await db->prepare(sql)->bind([Number(item), Text(names)])->run)
 }
 
-/** At most `limit` rows of items other than the one holding the bucket forgotten, how many. */
-let forgetStale = async (db, ~holding: option<float>, ~limit) => {
+/**
+ * At most `limit` rows of items absent from `items` forgotten, how many, in one statement, so a row
+ * is read beside the items as they stand at one moment.
+ */
+let forgetStale = async (db, ~limit) => {
   let sql =
     [
-      "DELETE FROM objects WHERE rowid IN",
-      "(SELECT rowid FROM objects WHERE item IS NOT ? LIMIT ?)",
+      "DELETE FROM objects WHERE rowid IN (SELECT rowid FROM objects",
+      "WHERE item NOT IN (SELECT id FROM items) LIMIT ?)",
     ]->Array.join(" ")
-  let held = holding->Option.mapOr(Null, id => Number(id))
-  (await db->prepare(sql)->bind([held, Number(Int.toFloat(limit))])->run).meta.changes
+  (await db->prepare(sql)->bind([Number(Int.toFloat(limit))])->run).meta.changes
 }
