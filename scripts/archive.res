@@ -101,10 +101,44 @@ let described = binary =>
 /** Where cargo writes the program built for a target. */
 let binary = target => join([root, "target", target, "release", package])
 
+/** What a command printed in the repository's root, trimmed, or none where it failed. */
+let said = (command, arguments) => {
+  let run = spawnSync(command, arguments, {cwd: root, encoding: "utf8"})
+  run.status->Nullable.toOption == Some(0)
+    ? run.stdout->Nullable.toOption->Option.map(String.trim)
+    : None
+}
+
+/**
+ * The commit the source stands on whole, jj's working-copy parent where the working copy holds no
+ * change or git's HEAD where its tree is clean, so a build from changed source reports none.
+ */
+let revision = () => {
+  let whole = switch said("jj", ["log", "-r", "@", "--no-graph", "-T", "if(empty, 'clean', '')"]) {
+  | Some("clean") => said("jj", ["log", "-r", "@-", "--no-graph", "-T", "commit_id"])
+  | Some(_) => None
+  | None =>
+    said("git", ["status", "--porcelain"]) == Some("") ? said("git", ["rev-parse", "HEAD"]) : None
+  }
+  whole->Option.filter(id => id->String.length == 40)
+}
+
 /** The program built for one target, and held static and of its machine, its path or why not. */
 let built = ((target, _, named)) => {
   let binary = binary(target)
-  if !ran("cargo", ["zigbuild", "--release", "--locked", "-p", package, "--target", target]) {
+  // The revision reaches the program as DRIVER_REVISION, which its describe answers.
+  let environment = revision()->Option.map(id => {
+    let given = Dict.fromArray(env->Dict.toArray)
+    given->Dict.set("DRIVER_REVISION", id)
+    given
+  })
+  if (
+    !ran(
+      "cargo",
+      ["zigbuild", "--release", "--locked", "-p", package, "--target", target],
+      ~environment?,
+    )
+  ) {
     Error(`${target}: cargo zigbuild failed`)
   } else {
     let said = described(binary)

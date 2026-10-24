@@ -382,6 +382,8 @@ impl Manage for Listed {
 			policy: uint53(self.policy)?,
 			grace: self.grace,
 			items: self.items.iter().map(holding).collect::<Result<_, _>>()?,
+			// The revision it was built from, given at its build, none where it was given none.
+			revision: option_env!("DRIVER_REVISION").map(String::from),
 		})
 	}
 
