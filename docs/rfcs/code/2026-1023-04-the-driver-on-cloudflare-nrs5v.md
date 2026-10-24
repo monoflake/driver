@@ -188,8 +188,13 @@ Decided by the author on 2026-10-23, from the research the Options below record.
   - **A new item holds nothing of an old one.** The driver's D1 records which item the database
     is held for, and the first request for another drops every object a user made in it, tables,
     indexes, views and triggers, and none named `_cf_` or `sqlite_`; a rewind to a moment before
-    the item was made is refused as `beyond_window`. What an ended item left stays while no
-    request comes.
+    the item was made, or within a second after, is refused as `beyond_window`, the second a margin
+    for the Worker's clock against D1's, until a live account shows whether a Time Travel bookmark
+    taken after the clear can bound it instead. What an ended item left stays while no request
+    comes. The item is taken over by one conditional update of `database_held`, and only the call
+    that changed it clears. One gap is left: a call of the old item that found it held before the
+    old item ended, its batch landing after the clear, writes into the new item's database; a
+    marker checked by every batch would close it, which waits on the author.
   - **A rewind is Time Travel's restore**, a REST call, by a token of its own holding D1 Edit
     alone, the Worker `database`'s secret `API_TOKEN`, which `install` reads from
     `DATABASE_API_TOKEN`; the account's id and the database's are its variables. Thirty days are
@@ -208,8 +213,9 @@ Decided by the author on 2026-10-23, from the research the Options below record.
     numbers, so a whole real reads as an integer; an integer past 2^53 is found once the batch
     ran, so a write returning one has already happened; and a batch's rows come back as objects,
     workerd's `batch()` ending in `toArrayOfObjects` (`src/cloudflare/internal/d1-api.ts`), so a
-    result's columns are read from its first row, a statement with no rows names none, and two
-    columns of one name are one. `raw()` keeps them but runs one statement alone with no meta, so
+    result's columns are read from its first row, in the order JavaScript gives an object's keys,
+    integer-like names first, a statement with no rows names none, and two columns of one name are
+    one. `raw()` keeps them but runs one statement alone with no meta, so
     a batch stays one transaction with its `size_after` and `changes`. A batch of reads alone is
     never refused for room.
   - **Implementers' defaults, let stand by the advisor**: a statement of at most 100,000 bytes, D1's
