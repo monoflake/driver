@@ -194,11 +194,26 @@ Decided by the author on 2026-10-23, from the research the Options below record.
     alone, the Worker `database`'s secret `API_TOKEN`, which `install` reads from
     `DATABASE_API_TOKEN`; the account's id and the database's are its variables. Thirty days are
     kept, the paid plan's.
-  - **A database's size** is read from each execute's `size_after`, and once it holds the item's
-    size a write is refused as `storage_full`, so it may pass the size by one batch.
+  - **A database's size** is held two ways. Before a batch runs, its statements' and parameters'
+    bytes are added to the size last read, and a batch that would pass the item's size is refused
+    as `storage_full`; after it runs, `size_after` is kept, and once it holds the item's size every
+    write is refused alike. What passes the size is what that reckoning misses, an index's or a
+    page's own room. Ending each batch with a statement that fails past the size, so D1 rolls the
+    batch back, waits on a live account showing D1 answers `pragma_page_count`, and replaces the
+    reckoning then.
   - **Its samples** are `statements.json`, `batches.json`, `limits.json` and `rewinds.json`;
     `copies.json` is left out, since the driver sees one copy of a D1 database and cannot be
     read-only below a majority of copies.
+  - **What D1 cannot answer as the contract asks**: an integer and a real alike come back as
+    numbers, so a whole real reads as an integer; and an integer past 2^53 is found once the batch
+    ran, so a write returning one has already happened. A result's columns are read with
+    `raw({columnNames: true})`, so a statement with no rows still names them.
+  - **Implementers' defaults, let stand by the advisor**: a statement of at most 100,000 bytes, D1's
+    own; a call's body of at most 100,000,000, a Worker's request's; 10 GB as 10^10 bytes; with no
+    `database` item an execute is `storage_full` and a rewind `beyond_window`; only `SELECT`,
+    `EXPLAIN` and `VALUES` are reads, so a full database refuses `WITH` and `PRAGMA` too; D1's
+    errors read by their `SQLITE_` code or words. The item a database is held for is the one row
+    of the driver's table `database_held`, its item, `since` and the `size` last read.
 
   What makes it on an account, provisional, chosen by the advisor on 2026-10-24:
   - **`mise run install`**, `scripts/install.res` beside `archive` and `dev`, makes what is absent
