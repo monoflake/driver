@@ -19,6 +19,8 @@ the roles with it; [docs/rfcs/](docs/rfcs/) holds what is decided here alone.
 machine/    driver(machine): the program driver-machine, RFC 8c0rg, the entry its command `entry`
             run as a unit of its own, RFC rmll5, and beneath it each kind's crate, container/,
             function/, object/ and volume/, which owns every subvolume and qgroup, and management/
+cloudflare/ driver(cloudflare): the Worker `driver` on a bound account, RFC nrs5v, its D1 state
+            in migrations/, and beneath it function/ and management/, so far its first slice
 scripts/    archive.res, the program built static for both architectures and archived; dev.res, one
             built for a test machine, copied in, restarted and checked
 .github/    release.yml and release/, what CI alone runs, its version and what it releases
@@ -32,7 +34,6 @@ docs/       rfcs/, what is decided here alone
   `FILL`, as cloud's whole model runs it with cloud's.
 - **The platform's crates and samples are reached by path**, `../platform/code/libs/...` and
   `../platform/tests/...`, until releases cross repositories, RFC 7ykg6.
-- `cloudflare/` is made once it has code.
 
 ## Commands
 
