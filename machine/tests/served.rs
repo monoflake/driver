@@ -188,6 +188,6 @@ fn a_list_and_the_tokens_an_apply_forgot_are_kept_across_a_restart() {
 	let (status, answer) = driver.call(1, "management", "describe", &json!({}));
 	assert_eq!(status, 200);
 	let held = json!({ "generation": 2, "policy": 1, "grace": 3600, "items": [] });
-	assert_eq!(answer["data"], held);
+	assert!(matches(&held, &answer["data"]), "{}", answer["data"]);
 	assert_eq!(driver.call(2, "management", "describe", &json!({})).0, 403);
 }

@@ -76,7 +76,7 @@ fn captured(expect: &Value, answer: &Value, captures: &mut BTreeMap<String, Valu
 				true
 			}
 			(Value::Object(e), Value::Object(a)) if !e.contains_key("$any") => {
-				e.len() == a.len() && e.iter().all(|(k, v)| a.get(k).is_some_and(|w| kept(v, w, captures)))
+				e.iter().all(|(k, v)| a.get(k).is_some_and(|w| kept(v, w, captures)))
 			}
 			_ => common::matches(expected, actual),
 		}

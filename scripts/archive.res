@@ -127,16 +127,19 @@ let revision = () => {
 let built = ((target, _, named)) => {
   let binary = binary(target)
   // The revision reaches the program as DRIVER_REVISION, which its describe answers.
-  let environment = revision()->Option.map(id => {
+  let environment = {
     let given = Dict.fromArray(env->Dict.toArray)
-    given->Dict.set("DRIVER_REVISION", id)
+    switch revision() {
+    | Some(id) => given->Dict.set("DRIVER_REVISION", id)
+    | None => given->Dict.delete("DRIVER_REVISION")
+    }
     given
-  })
+  }
   if (
     !ran(
       "cargo",
       ["zigbuild", "--release", "--locked", "-p", package, "--target", target],
-      ~environment?,
+      ~environment,
     )
   ) {
     Error(`${target}: cargo zigbuild failed`)
