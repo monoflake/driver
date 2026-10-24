@@ -41,8 +41,9 @@ let of_: Contracts.DeploymentOf.t = {runs: runs}
 test(
   "a deployment's Worker is named for what it runs, its version's tag for its hash",
   async () => {
-    deepEqual(Function.workerOf(App({id: 12.})), "app-12")
-    deepEqual(Function.workerOf(Component({component: "pages"})), "component-pages")
+    deepEqual(Function.workerOf(App({id: 12.}), ~installId="0a1b2c3d"), "app-12-0a1b2c3d")
+    let pages = Function.workerOf(Component({component: "pages"}), ~installId="0a1b2c3d")
+    deepEqual(pages, "component-pages-0a1b2c3d")
     let tag = Function.tagOf(Uint8Array.fromLength(32))
     deepEqual(tag, "version-" ++ String.repeat("00", 32))
     deepEqual(String.length(tag), 72)

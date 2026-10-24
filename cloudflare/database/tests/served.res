@@ -26,6 +26,8 @@ type served = {
   clock: ref<float>,
   sent: array<sent>,
   refusing: ref<option<(int, string)>>,
+  /** The name D1's get gives the database, `database-<install id>` unless a test changes it. */
+  named: ref<string>,
 }
 
 let items =
@@ -56,8 +58,11 @@ let item = (served, ~id=1., ~kind="database", ~state="made", ~address=?, ~since=
 /** An item no longer listed, as the management forgets one ended or swept. */
 let forget = (served, id) => served.driver->run("DELETE FROM items WHERE id = ?", [JSON.Number(id)])
 
+/** The database's path on the account, as D1's get reads it. */
+let databasePath = `/client/v4/accounts/${accountId}/d1/database/${databaseId}`
+
 /** The restore's path on the account, its timestamp read from the address. */
-let restorePath = `/client/v4/accounts/${accountId}/d1/database/${databaseId}/time_travel/restore`
+let restorePath = `${databasePath}/time_travel/restore`
 
 /** A binding new at a moment, holding no item unless `size` names one. */
 let make = (~size=?, ~at=1_790_000_000_000.) => {
@@ -81,10 +86,15 @@ let make = (~size=?, ~at=1_790_000_000_000.) => {
     ),
     dict{"INSTALL_ID": installId},
   )
-  let served = {env, driver, sqlite, clock, sent: [], refusing: ref(None)}
+  let named = ref(`database-${installId}`)
+  let served = {env, driver, sqlite, clock, sent: [], refusing: ref(None), named}
   answering(served.sent, async (url, init) => {
     let parts = Web.parts(url)
     switch (init.method, parts->Web.pathname, served.refusing.contents) {
+    | ("GET", path, _) if path == databasePath =>
+      let got =
+        Documented.got->String.replace(`"my-database"`, JSON.stringify(JSON.String(named.contents)))
+      response(got, {status: 200})
     | ("POST", path, None) if path == restorePath =>
       let timestamp = searchParams(parts)->searchGet("timestamp")->Nullable.toOption
       switch timestamp->Option.map(t => Date.fromString(t)->Date.getTime) {

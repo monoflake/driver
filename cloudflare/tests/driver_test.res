@@ -500,31 +500,48 @@ test("the stub's answer in CBOR is the error stopped, as the codec reads it", as
   )
 })
 
-test("a Worker whose INSTALL_ID or KINDS is not as install sets it denies every call", async () => {
-  let denied = (403, Some(JSON.String("denied")))
+test("a Worker whose INSTALL_ID or KINDS is not as install sets it answers fault", async () => {
   let kinds = "function,object,database"
-  let answers = await Promise.all(
-    [
-      dict{"KINDS": kinds},
-      dict{"INSTALL_ID": "", "KINDS": kinds},
-      dict{"INSTALL_ID": "0A1B2C3D", "KINDS": kinds},
-      dict{"INSTALL_ID": "0a1b2c3", "KINDS": kinds},
-      dict{"INSTALL_ID": "0a1b2c3d0", "KINDS": kinds},
+  let unid = "INSTALL_ID is unset or not 8 lowercase hex digits, so install broke"
+  let cases = [
+    (dict{"KINDS": kinds}, unid),
+    (dict{"INSTALL_ID": "", "KINDS": kinds}, unid),
+    (dict{"INSTALL_ID": "0A1B2C3D", "KINDS": kinds}, unid),
+    (dict{"INSTALL_ID": "0a1b2c3", "KINDS": kinds}, unid),
+    (dict{"INSTALL_ID": "0a1b2c3d0", "KINDS": kinds}, unid),
+    (dict{"INSTALL_ID": installId}, "KINDS is unset, so install broke"),
+    (dict{"INSTALL_ID": installId, "KINDS": " "}, "KINDS is empty, so install broke"),
+    (
       dict{"INSTALL_ID": installId, "KINDS": "function,instance"},
-    ]->Array.map(async vars => {
+      `KINDS names "instance", where each is function, object or database, so install broke`,
+    ),
+    (
+      dict{"INSTALL_ID": installId, "KINDS": "function,"},
+      `KINDS names "", where each is function, object or database, so install broke`,
+    ),
+  ]
+  let answers = await Promise.all(
+    cases->Array.map(async ((vars, _)) => {
       let env = envOf(~vars, ())
-      let answered = await manage(env, "describe", "{}")
+      // A misinstall is told before the token, so a caller without one is told it too.
+      let answered = await call(
+        env,
+        ~path="/management/describe",
+        ~body=management("describe", "{}"),
+        ~authorization="",
+      )
       (reasonOf(answered), messageOf(answered))
     }),
   )
-  answers->Array.forEach(answer =>
-    deepEqual(
-      answer,
-      (denied, Some(JSON.String("The call carries no credential, or one that does not allow it"))),
-    )
+  deepEqual(
+    answers,
+    cases->Array.map(((_, message)) => (
+      (500, Some(JSON.String("fault"))),
+      Some(JSON.String(message)),
+    )),
   )
   let (status, _, _) = await manage(
-    envOf(~vars=dict{"INSTALL_ID": installId}, ()),
+    envOf(~vars=dict{"INSTALL_ID": installId, "KINDS": "function"}, ()),
     "describe",
     "{}",
   )
@@ -532,7 +549,7 @@ test("a Worker whose INSTALL_ID or KINDS is not as install sets it denies every 
 })
 
 test("a list naming a kind KINDS does not offer is refused whole as beyond_host", async () => {
-  let env = envOf(~vars=dict{"INSTALL_ID": installId}, ())
+  let env = envOf(~vars=dict{"INSTALL_ID": installId, "KINDS": "function"}, ())
   let asked = []
   let restore = replaced(async (url, _) => {
     asked->Array.push(url)
@@ -557,7 +574,51 @@ test("a list naming a kind KINDS does not offer is refused whole as beyond_host"
   let unoffered = await manage(objects, "apply", `{"generation": 3, "items": [${database}]}`)
   restore()
   deepEqual(behind, (200, Some("application/json"), success(`{"generation": 2}`)))
-  deepEqual(reasonOf(unoffered), (400, Some(JSON.String("beyond_host"))))
+  deepEqual(
+    (reasonOf(unoffered), messageOf(unoffered)),
+    (
+      (400, Some(JSON.String("beyond_host"))),
+      Some(JSON.String("item 2: database is not offered, only object")),
+    ),
+  )
+  deepEqual(asked, [])
+})
+
+test("with KINDS lacking function, every deployments call is refused as beyond_host", async () => {
+  let env = envOf(~vars=dict{"INSTALL_ID": installId, "KINDS": "object,database"}, ())
+  let asked = []
+  let restore = replaced(async (url, _) => {
+    asked->Array.push(url)
+    answerText("{}", {status: 500})
+  })
+  let runs = `{"runs": {"name": "app", "id": 1}}`
+  let deploy = `{"runs": {"name": "app", "id": 1}, "version": "${binding}", "form": "modules",
+    "isolation": ["isolate"], "artifact": {"address": "https://artifacts.example/hello",
+    "hash": "${binding}"}, "footing": "https://footing.invalid", "secrets": {},
+    "network": ["http", "tcp"]}`
+  let answers = await Promise.all(
+    [
+      ("deploy", deploy),
+      ("stop", runs),
+      ("resume", runs),
+      ("describe", runs),
+      ("delete", runs),
+    ]->Array.map(async ((operation, input)) => {
+      let body = `{"interface": "deployments", "operation": "${operation}", "input": ${input}}`
+      let answered = await call(env, ~path=`/deployments/${operation}`, ~body)
+      let (_, reason) = reasonOf(answered)
+      (operation, reason, messageOf(answered))
+    }),
+  )
+  restore()
+  // Only deploy declares beyond_host, so the others answer it as an unknown failure.
+  answers->Array.forEach(((operation, reason, message)) =>
+    deepEqual(
+      (reason, message),
+      (Some(JSON.String("beyond_host")), Some(JSON.String("function is not offered, by KINDS"))),
+      ~message=operation,
+    )
+  )
   deepEqual(asked, [])
 })
 

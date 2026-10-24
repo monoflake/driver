@@ -11,6 +11,8 @@ type capacity =
   | Object({size: float})
   | Database({size: float})
 
+type kind = [#function | #object | #database]
+
 type item = {id: float, capacity: capacity, credentials: array<string>}
 
 type state =
@@ -179,7 +181,44 @@ let once = ask => {
 
 let byId = (a: keptItem, b: keptItem) => Float.compare(a.item.id, b.item.id)
 
-let apply = async (store, ~now, ~generation, ~items: array<item>, ~tokens, ~objects, ~databases) =>
+let kindName = (kind: kind) =>
+  switch kind {
+  | #function => "function"
+  | #object => "object"
+  | #database => "database"
+  }
+
+/** The first item of a kind install did not offer, refused whole as a container is, nrs5v. */
+let unoffered = (items: array<item>, ~offered: array<kind>) => {
+  let kindOf = (item: item): option<kind> =>
+    switch item.capacity {
+    | Object(_) => Some(#object)
+    | Database(_) => Some(#database)
+    | Container(_) | Volume(_) => None
+    }
+  items
+  ->Array.findMap(item =>
+    kindOf(item)->Option.flatMap(kind => offered->Array.includes(kind) ? None : Some((item, kind)))
+  )
+  ->Option.map(((item, kind)) => {
+    let only = offered->Array.map(kindName)->Array.join(", ")
+    {
+      reason: "beyond_host",
+      message: `item ${Float.toString(item.id)}: ${kindName(kind)} is not offered, only ${only}`,
+    }
+  })
+}
+
+let apply = async (
+  store,
+  ~offered,
+  ~now,
+  ~generation,
+  ~items: array<item>,
+  ~tokens,
+  ~objects,
+  ~databases,
+) =>
   switch valid(items) {
   | Error(_) as refused => refused
   | Ok() =>
@@ -187,7 +226,7 @@ let apply = async (store, ~now, ~generation, ~items: array<item>, ~tokens, ~obje
     if generation < kept.generation {
       Ok(kept.generation)
     } else {
-      switch beyond(items) {
+      switch beyond(items)->Option.orElse(unoffered(items, ~offered)) {
       | Some(refused) => Error(refused)
       | None =>
         let held = id => kept.items->Array.find(k => k.item.id == id)

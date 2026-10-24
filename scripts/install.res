@@ -23,7 +23,12 @@ let kindsInput = "DRIVER_KINDS"
 /** The names wrangler reads, set in its own environment alone and never read from install's. */
 let wranglerToken = "CLOUDFLARE_API_TOKEN"
 let wranglerAccount = "CLOUDFLARE_ACCOUNT_ID"
-let ambient = "CLOUDFLARE_"
+
+/** The prefixes of every sign-in name wrangler reads, its legacy `CF_` names among them. */
+let ambient = ["CLOUDFLARE_", "CF_"]
+
+/** The file wrangler loads in place of `.env` and `.env.local`, which holds nothing. */
+let noEnvFile = ["--env-file", "/dev/null"]
 
 /** The tokens kept out of every command's environment by their own names. */
 let tokens = [installToken, driverToken, databaseToken]
@@ -108,14 +113,16 @@ let shown = command => {
 
 /**
  * The environment the commands run in, quiet and unasking, every token and every ambient
- * `CLOUDFLARE_` name taken out.
+ * `CLOUDFLARE_` or `CF_` name taken out.
  */
 let quiet = env => {
   let given = Dict.copy(env)
   given
   ->Dict.keysToArray
   ->Array.forEach(name =>
-    if name->String.startsWith(ambient) || tokens->Array.includes(name) {
+    if (
+      ambient->Array.some(prefix => name->String.startsWith(prefix)) || tokens->Array.includes(name)
+    ) {
       given->Dict.delete(name)
     }
   )
@@ -132,13 +139,17 @@ let accounted = env => {
   given
 }
 
-/** A command of the account's, run in `cwd`, wrangler being the cloudflare block's. */
-let commanded = (w, ~root, ~cwd, arguments) => {
+/** A wrangler command run in `cwd` reading no `.env`, wrangler being the cloudflare block's. */
+let wrangler = (~root, ~cwd, ~env, arguments) => {
   program: join([root, "cloudflare", "node_modules", ".bin", "wrangler"]),
-  args: arguments,
+  args: [...arguments, ...noEnvFile],
   cwd,
-  env: accounted(w.env),
+  env,
 }
+
+/** A command of the account's, given install's own account and token alone. */
+let commanded = (w, ~root, ~cwd, arguments) =>
+  wrangler(~root, ~cwd, ~env=accounted(w.env), arguments)
 
 /** A Worker's package compiled in its directory, so its bundle is this checkout's source. */
 let compiled = (w, ~dry, ~root, ~directory, worker) => {
@@ -190,18 +201,24 @@ let bindingHash = token =>
   | _ => Error("the token on stdin is not <id>.<secret>, its secret 32 bytes in unpadded base64url")
   }
 
+/** What `d1 list --json` prints, an array, or an error where it is anything else. */
+let listed = body =>
+  switch parsed(body)->Option.flatMap(JSON.Decode.array) {
+  | Some(all) => Ok(all)
+  | None => Error("d1 list printed no JSON array, so the account's databases are not known")
+  }
+
 /** A database's id where `d1 list` holds one by its name. */
 let listedDatabase = (body, name) =>
-  parsed(body)
-  ->Option.flatMap(JSON.Decode.array)
-  ->Option.flatMap(all => all->Array.find(db => db->text("name") == Some(name)))
-  ->Option.flatMap(db => db->text("uuid"))
+  listed(body)->Result.map(all =>
+    all
+    ->Array.find(db => db->text("name") == Some(name))
+    ->Option.flatMap(db => db->text("uuid"))
+  )
 
 /** The names `d1 list` holds, and nothing more of any database. */
 let listedNames = body =>
-  parsed(body)
-  ->Option.flatMap(JSON.Decode.array)
-  ->Option.mapOr([], all => all->Array.filterMap(db => db->text("name")))
+  listed(body)->Result.map(all => all->Array.filterMap(db => db->text("name")))
 
 /** The install ids the driver's D1 databases are named by, each `driver-<8 hex>`. */
 let installIds = names =>
@@ -212,6 +229,9 @@ let installIds = names =>
     }
   )
 
+/** The install ids the account's D1 names hold, or why they are not known. */
+let idsOf = (w, list) => w.run(list)->then(listedNames)->Result.map(installIds)
+
 /**
  * The install id the account holds, read from its D1 databases' names alone, a new one drawn where
  * none is, the one reused, and a refusal naming each where more than one is.
@@ -219,25 +239,48 @@ let installIds = names =>
 let recovered = (w, ~dry, ~root) => {
   let list = commanded(w, ~root, ~cwd=root, ["d1", "list", "--json"])
   if dry {
-    w.say(`would run ${shown(list)}, and reuse the install id of the one driver-<8 hex> it names,`)
-    w.say(`  draw a new one where it names none, and refuse where it names more than one`)
-    Ok(("<install id>", []))
+    let rule = () => {
+      w.say(`  it reuses the install id of the one driver-<8 hex> d1 list names, draws a new one`)
+      w.say(`  where it names none, and refuses where it names more than one`)
+    }
+    // A dry run writes nothing, so it reads the list alone, and only where it has the account.
+    let id = switch [account, installToken]->Array.filter(name => value(w.env, name) == None) {
+    | [] =>
+      switch idsOf(w, list) {
+      | Ok([]) =>
+        w.say(`d1 list names no driver-<8 hex>, so a new install id would be drawn`)
+        Ok("<install id>")
+      | Ok([id]) =>
+        w.say(`d1 list names ${named(database, ~id)}, so the install id ${id} would be reused`)
+        Ok(id)
+      | Ok(ids) =>
+        let all = ids->Array.map(id => named(database, ~id))->Array.join(", ")
+        Error(`the account holds more than one driver's D1, ${all}, so none is chosen`)
+      | Error(why) =>
+        w.say(`the install id is not known, as ${shown(list)} failed, ${why};`)
+        rule()
+        Ok("<install id>")
+      }
+    | unset =>
+      w.say(`the install id is not known, as ${unset->Array.join(" and ")} unset;`)
+      rule()
+      Ok("<install id>")
+    }
+    id->Result.map(id => (id, []))
   } else {
-    w.run(list)
-    ->Result.map(listedNames)
-    ->then(names =>
-      switch installIds(names) {
+    idsOf(w, list)->then(ids =>
+      switch ids {
       | [] =>
         let id = w.draw()
         if installIdForm->RegExp.test(id) {
           w.say(`no driver-<8 hex> on the account, so the install id ${id} is drawn`)
-          Ok((id, names))
+          Ok((id, []))
         } else {
           Error(`an install id drawn is not 8 lowercase hex digits, ${id}`)
         }
       | [id] =>
         w.say(`the install id ${id} is reused, the account holding ${named(database, ~id)}`)
-        Ok((id, names))
+        Ok((id, []))
       | ids =>
         let all = ids->Array.map(id => named(database, ~id))->Array.join(", ")
         Error(`the account holds more than one driver's D1, ${all}, so none is chosen`)
@@ -265,7 +308,7 @@ let databaseOf = (w, ~dry, ~root, database) => {
     w.say(`would run ${shown(list)}, and ${shown(create)} unless ${database} is listed`)
     Ok(`<${database}'s id>`)
   } else {
-    switch w.run(list)->Result.map(body => listedDatabase(body, database)) {
+    switch w.run(list)->then(body => listedDatabase(body, database)) {
     | Error(why) => Error(why)
     | Ok(Some(id)) =>
       w.say(`the database ${database} is there already`)
@@ -273,7 +316,7 @@ let databaseOf = (w, ~dry, ~root, database) => {
     | Ok(None) =>
       w.run(create)
       ->then(_ => w.run(list))
-      ->Result.map(body => listedDatabase(body, database))
+      ->then(body => listedDatabase(body, database))
       ->then(found =>
         switch found {
         | Some(id) =>
@@ -432,16 +475,18 @@ let migrated = (w, ~dry, ~root, ~directory, ~config, ~database) => {
   }
 }
 
+/** The bundle written out, in the quiet environment, as it reaches no account. */
+let bundling = (w, ~root, ~directory, ~config, ~out) =>
+  wrangler(
+    ~root,
+    ~cwd=directory,
+    ~env=quiet(w.env),
+    ["deploy", "--dry-run", "--outdir", out, "--config", config],
+  )
+
 /** What a deploy would upload, the bundle and the configuration, as one short hash. */
 let bundled = (w, ~root, ~directory, ~config, ~out) =>
-  w.run(
-    commanded(
-      w,
-      ~root,
-      ~cwd=directory,
-      ["deploy", "--dry-run", "--outdir", out, "--config", config],
-    ),
-  )->Result.map(_ => {
+  w.run(bundling(w, ~root, ~directory, ~config, ~out))->Result.map(_ => {
     let hashed = createHash("sha256")->updateText(readFileSync(config))
     readdirSync(out, {recursive: true})
     ->Array.toSorted(String.compare)
@@ -530,12 +575,7 @@ let deployed = (w, ~dry, ~root, ~directory, ~config, ~scratch, ~hashed, worker) 
   let build = () => compiled(w, ~dry, ~root, ~directory, worker)
   if dry {
     build()->ignore
-    let bundle = commanded(
-      w,
-      ~root,
-      ~cwd=directory,
-      ["deploy", "--dry-run", "--outdir", out, "--config", config],
-    )
+    let bundle = bundling(w, ~root, ~directory, ~config, ~out)
     w.say(`would run ${shown(bundle)}, and hash the bundle and the configuration`)
     w.say(`would run ${shown(versions)}, and deploy unless ${worker.name} runs that hash's tag,`)
     w.say(`  its secrets put first where it exists, and after where it does not`)
@@ -585,17 +625,23 @@ let kindsOf = env =>
     }
   }
 
-/** What install reads before anything runs, every input it needs and the kinds offered. */
-let inputsOf = env =>
-  kindsOf(env)->then(offered => {
+/**
+ * What install reads before anything runs, the kinds offered and every input it needs, one unset
+ * refused, or said where the run is dry, since a dry run acts on nothing.
+ */
+let inputsOf = (w, ~dry) =>
+  kindsOf(w.env)->then(offered => {
     let needed = [
       account,
       installToken,
       driverToken,
       ...offered->Array.includes("database") ? [databaseToken] : [],
     ]
-    switch needed->Array.filter(name => value(env, name) == None) {
+    switch needed->Array.filter(name => value(w.env, name) == None) {
     | [] => Ok(offered)
+    | missing if dry =>
+      w.say(`${missing->Array.join(", ")} unset in the environment, so a run not dry refuses`)
+      Ok(offered)
     | missing =>
       Error(`${missing->Array.join(", ")} unset in the environment, which alone gives them`)
     }
@@ -608,6 +654,9 @@ let heldBy = kind =>
   | "database" => Some((databaseWorker, `the D1 database ${userDatabase}`))
   | _ => None
   }
+
+/** Cloudflare's answer for a Worker the account does not hold, its error 10007. */
+let notFound = why => why->String.includes("[code: 10007]")
 
 /**
  * Each kind not offered whose Worker the account holds, named with what it holds and left as it
@@ -625,22 +674,24 @@ let left = (w, ~dry, ~root, ~install) =>
       if dry {
         w.say(`would run ${shown(versions)}, and where ${full} is there name it and ${store},`)
         w.say(`  left as they are, ${kind} not being offered`)
+        Ok()
       } else {
         switch w.run(versions) {
         | Ok(_) =>
           w.say(`${kind} is not offered, and ${full} and ${store} are left as they are;`)
           w.say(`  install removes neither, so remove them by hand where they are not wanted`)
+          Ok()
         // A Worker not found was never made, or is gone already.
-        | Error(_) => ()
+        | Error(why) if notFound(why) => Ok()
+        | Error(why) => Error(`whether ${full} is there is not known, ${why}`)
         }
       }
-      Ok()
     })
   )
 
 /** driver(cloudflare) on the account, each part made where it is absent, in nrs5v's order. */
 let install = (w, ~dry, ~root=root) =>
-  inputsOf(w.env)->then(offered =>
+  inputsOf(w, ~dry)->then(offered =>
     hashOfStdin(w)->then(hashed => {
       if hashed == None {
         w.say(`nothing on stdin, so ${binding} is passed over on each Worker`)

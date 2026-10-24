@@ -46,13 +46,19 @@ test("an unset or empty BINDING holds no token, so every caller is denied", asyn
   }
 })
 
-test("a Worker whose INSTALL_ID is unset or not 8 lowercase hex denies every call", async () => {
+test("a Worker whose INSTALL_ID is unset or not 8 lowercase hex answers fault", async () => {
   let served = Served.make(~size=1024.)
   let ids = [unset, "", "0A1B2C3D", "0a1b2c3", "0a1b2c3d0"]
   for at in 0 to Array.length(ids) - 1 {
     let env = withVars(served.env, dict{"INSTALL_ID": ids->Array.getUnsafe(at)})
     let answered = await {...served, env}->Served.call("execute", `{"statements": []}`)
-    deepEqual(reasonOf(answered), (403, Some("denied")))
+    deepEqual(
+      (reasonOf(answered), messageOf(answered)),
+      (
+        (500, Some("fault")),
+        Some("INSTALL_ID is unset or not 8 lowercase hex digits, so install broke"),
+      ),
+    )
   }
   let (status, _) = await served->Served.call("execute", `{"statements": []}`)
   deepEqual(status, 200)
@@ -427,6 +433,12 @@ test(
       served.sent->Array.map(s => (s.init.method, s.url, s.init.headers)),
       [
         (
+          "GET",
+          `https://api.cloudflare.com/client/v4/accounts/${Served.accountId}/d1/database/` ++
+          Served.databaseId,
+          dict{"authorization": `Bearer ${Served.apiToken}`},
+        ),
+        (
           "POST",
           `https://api.cloudflare.com/client/v4/accounts/${Served.accountId}/d1/database/` ++
           `${Served.databaseId}/time_travel/restore?timestamp=${Web.encodeURIComponent(timestamp)}`,
@@ -512,6 +524,32 @@ test("a restore Cloudflare's API refuses is a fault naming what it answered", as
   deepEqual(reasonOf(answer), (500, Some("fault")))
   deepEqual(messageOf(answer), Some("Time Travel's restore answered 400, 1000 message"))
 })
+
+test(
+  "a rewind of a database not named database-<install id> is a fault, nothing restored",
+  async () => {
+    let served = Served.make(~size=1_000_000.)
+    let start = served.clock.contents
+    deepEqual((await served->Served.execute(["CREATE TABLE t (i INTEGER)"]))->Pair.first, 200)
+    served.clock := start +. 60_000.
+    let names = ["my-database", "database-4e5f6a7b", "driver-0a1b2c3d"]
+    let answers = []
+    for at in 0 to Array.length(names) - 1 {
+      served.named := names->Array.getUnsafe(at)
+      answers->Array.push(await served->rewind(start +. 30_000.))
+    }
+    deepEqual(
+      answers->Array.map(answer => (reasonOf(answer), messageOf(answer))),
+      names->Array.map(name => (
+        (500, Some("fault")),
+        Some(
+          `the database ${Served.databaseId} is ${name}, not database-0a1b2c3d, so it is never restored`,
+        ),
+      )),
+    )
+    deepEqual(served.sent->Array.map(s => s.init.method), ["GET", "GET", "GET"])
+  },
+)
 
 test("a restore done is answered though its size was not read or recorded", async () => {
   let served = Served.make(~size=1_000_000.)

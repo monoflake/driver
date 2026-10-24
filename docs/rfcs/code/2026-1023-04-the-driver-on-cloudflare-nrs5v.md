@@ -313,10 +313,16 @@ Choices made provisionally while the thread runs, read by the author at its end.
     from the list holds; it reports those resources by name instead.
 - **A list naming a kind not offered is refused whole as `beyond_host`**, provisional, chosen by the
   advisor on 2026-10-24, as `container` and `volume` are refused today.
-- **How install recovers its install id**, provisional, chosen by the advisor on 2026-10-24:
-  - install lists the account's D1 databases by name, reading names alone.
-  - No name of the form `driver-<8 hex>`: it draws a new id. Exactly one: it reuses that one. More
-    than one: it refuses and lists them, since a binding is still an account of its own.
+- **How install recovers its install id**, provisional, chosen by the advisor on 2026-10-24, the
+  first rule replaced since it took any name of the form for an install:
+  - A D1 is the driver's only when its name is `driver-<8 hex>` and it holds the driver's marker:
+    its `held` table with the install id equal to its name's suffix, read by a read-only query.
+  - A name of that form without the marker is foreign. It is never migrated or written, and the
+    dry run names it as passed over.
+  - Recovery counts marked databases alone: none, draw; one, reuse; more, refuse and list them.
+  - A drawn id is drawn again while any existing D1 or Worker name ends in it.
+  - install writes the marker first, in the same step that makes the database, before any other
+    migration.
   - Every Worker gets the var `INSTALL_ID`, and the driver forms every name and address from it.
 - **`DATABASE_API_TOKEN` is asked for only where `database` is offered**, provisional, chosen by the
   advisor on 2026-10-24.
@@ -328,6 +334,9 @@ Choices made provisionally while the thread runs, read by the author at its end.
   - It hands wrangler `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` only in the environment of
     its own child processes, set from those, so an ambient value never reaches wrangler.
   - It refuses to run when `DRIVER_ACCOUNT_ID` is unset, rather than falling back.
+  - Every `CF_*` name is stripped from a child's environment as well, and wrangler is kept from
+    reading `.env` files, since wrangler 4 still reads the older names and loads `.env` and
+    `.env.local` before every command, after review on 2026-10-24.
 - **The exception list reaches the driver through management**, provisional, chosen by the advisor
   on 2026-10-24: `apply` carries it, the driver keeps it in its state, and management describe
   reports every listed name and its item.

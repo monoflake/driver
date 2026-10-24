@@ -65,11 +65,13 @@ let apply = (
   ~answer=?,
   ~databasesAsked=ref(0),
   ~databaseAnswer=Ok(databaseAddress),
+  ~offered: array<Management.kind>=[#function, #object, #database],
   generation,
   items,
 ) =>
   Management.apply(
     m.store,
+    ~offered,
     ~now,
     ~generation,
     ~items,
@@ -92,6 +94,35 @@ test("a list naming an item twice, or one with no credential or three, is invali
   deepEqual(reasonOf(await m->apply(1., [object(1., ~credentials=three)])), Some("invalid"))
   deepEqual(m.writes.contents, 0)
 })
+
+test(
+  "a list naming a kind not offered is refused whole, after its form and generation",
+  async () => {
+    let m = memory()
+    let asked = ref(0)
+    let offered: array<Management.kind> = [#function]
+    let refusedOf = result =>
+      switch result {
+      | Ok(_) => None
+      | Error({Management.reason: reason, message}) => Some((reason, message))
+      }
+    deepEqual(
+      refusedOf(await m->apply(1., [object(1.)], ~asked, ~offered)),
+      Some(("beyond_host", "item 1: object is not offered, only function")),
+    )
+    deepEqual(
+      refusedOf(await m->apply(1., [database(2.)], ~offered=[#function, #object])),
+      Some(("beyond_host", "item 2: database is not offered, only function, object")),
+    )
+    deepEqual((asked.contents, m.writes.contents), (0, 0))
+    deepEqual(reasonOf(await m->apply(1., [object(1.), object(1.)], ~offered)), Some("invalid"))
+    deepEqual(await m->apply(2., [], ~offered), Ok(2.))
+    // A list behind is answered by the generation held, as any list behind is.
+    deepEqual(await m->apply(1., [object(1.)], ~offered), Ok(2.))
+    deepEqual(await m->apply(3., [object(1.)], ~asked, ~offered=[#object]), Ok(3.))
+    deepEqual(asked.contents, 1)
+  },
+)
 
 test("a container or a volume is beyond the host, and nothing of the list is held", async () => {
   let m = memory()

@@ -1,7 +1,45 @@
 /***
- * Time Travel's restore answered by the example of the page below, copied as `docs/code.md` asks.
+ * D1's get and Time Travel's restore answered by the examples of the pages below, copied as
+ * `docs/code.md` asks.
+ * https://developers.cloudflare.com/api/resources/d1/subresources/database/methods/get/
  * https://developers.cloudflare.com/api/resources/d1/subresources/database/subresources/time_travel/methods/restore/
  */
+
+let got = `{
+  "errors": [
+    {
+      "code": 1000,
+      "message": "message",
+      "documentation_url": "documentation_url",
+      "source": {
+        "pointer": "pointer"
+      }
+    }
+  ],
+  "messages": [
+    {
+      "code": 1000,
+      "message": "message",
+      "documentation_url": "documentation_url",
+      "source": {
+        "pointer": "pointer"
+      }
+    }
+  ],
+  "result": {
+    "created_at": "2022-11-15T18:25:44.442097Z",
+    "file_size": 12,
+    "jurisdiction": "eu",
+    "name": "my-database",
+    "num_tables": 12,
+    "read_replication": {
+      "mode": "auto"
+    },
+    "uuid": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+    "version": "production"
+  },
+  "success": true
+}`
 
 let restored = `{
   "errors": [

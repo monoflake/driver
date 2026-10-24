@@ -1,5 +1,7 @@
 /***
- * The database restored by D1 Time Travel, as the page below documents it, RFC nrs5v.
+ * The database named by its id and restored by D1 Time Travel, as the pages below document them,
+ * RFC nrs5v.
+ * https://developers.cloudflare.com/api/resources/d1/subresources/database/methods/get/
  * https://developers.cloudflare.com/api/resources/d1/subresources/database/subresources/time_travel/methods/restore/
  */
 
@@ -21,6 +23,49 @@ let said = json =>
   })
   ->Array.join("; ")
 
+/** The address of one database of one account, as its get reads it. */
+let databaseAddress = (~accountId, ~databaseId) => {
+  let account = Web.encodeURIComponent(accountId)
+  let database = Web.encodeURIComponent(databaseId)
+  `${origin}/accounts/${account}/d1/database/${database}`
+}
+
+/** An answer's JSON and whether it says it succeeded, none where it is not JSON. */
+let read = async response => {
+  let status = response->Web.status
+  let text = await response->Web.text
+  let json = try Some(JSON.parseOrThrow(text)) catch {
+  | JsExn(_) => None
+  }
+  let success = json->Option.flatMap(j => j->member("success"))->Option.flatMap(JSON.Decode.bool)
+  let failed = what => {
+    let errors = json->Option.mapOr("", said)
+    let after = errors == "" ? "" : `, ${errors}`
+    Error(`${what} answered ${Int.toString(status)}${after}`)
+  }
+  (success == Some(true) && status >= 200 && status < 300, json, failed)
+}
+
+/** The name the account gives a database by its id, as D1's get documents it. */
+let nameOf = async (~accountId, ~databaseId, ~token) => {
+  let headers = dict{"authorization": `Bearer ${token}`}
+  switch await Web.send(databaseAddress(~accountId, ~databaseId), {method: "GET", headers}) {
+  | response =>
+    switch await read(response) {
+    | (true, json, _) =>
+      switch json
+      ->Option.flatMap(j => j->member("result"))
+      ->Option.flatMap(r => r->member("name"))
+      ->Option.flatMap(JSON.Decode.string) {
+      | Some(name) => Ok(name)
+      | None => Error("D1's get answered no database's name")
+      }
+    | (false, _, failed) => failed("D1's get")
+    }
+  | exception JsExn(_) => Error("Cloudflare's API was not reached")
+  }
+}
+
 /** The address restoring one database of one account to a moment in milliseconds. */
 let address = (~accountId, ~databaseId, ~to) => {
   let account = Web.encodeURIComponent(accountId)
@@ -35,18 +80,9 @@ let restore = async (~accountId, ~databaseId, ~token, ~to) => {
   let headers = dict{"authorization": `Bearer ${token}`}
   switch await Web.send(url, {method: "POST", headers}) {
   | response =>
-    let status = response->Web.status
-    let text = await response->Web.text
-    let json = try Some(JSON.parseOrThrow(text)) catch {
-    | JsExn(_) => None
-    }
-    let success = json->Option.flatMap(j => j->member("success"))->Option.flatMap(JSON.Decode.bool)
-    switch success {
-    | Some(true) if status >= 200 && status < 300 => Ok()
-    | Some(_) | None =>
-      let errors = json->Option.mapOr("", said)
-      let after = errors == "" ? "" : `, ${errors}`
-      Error(`Time Travel's restore answered ${Int.toString(status)}${after}`)
+    switch await read(response) {
+    | (true, _, _) => Ok()
+    | (false, _, failed) => failed("Time Travel's restore")
     }
   | exception JsExn(_) => Error("Cloudflare's API was not reached")
   }

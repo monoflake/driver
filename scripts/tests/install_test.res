@@ -61,8 +61,19 @@ let versionsOf = held =>
     ),
   )
 
+/** A command's arguments before the empty env file every wrangler command ends with. */
+let argsOf = (command: Install.command) => {
+  let n = Array.length(command.args)
+  command.args->Array.slice(~start=n - 2) == Install.noEnvFile
+    ? command.args->Array.slice(~start=0, ~end=n - 2)
+    : command.args
+}
+
 let line = (command: Install.command) =>
-  [Host.basename(command.program), ...command.args]->Array.join(" ")
+  [Host.basename(command.program), ...argsOf(command)]->Array.join(" ")
+
+/** What wrangler prints for a Worker the account does not hold. */
+let notFound = "This Worker does not exist on your account. [code: 10007]"
 
 let answered = (account, command: Install.command) => {
   let worker = config =>
@@ -70,8 +81,10 @@ let answered = (account, command: Install.command) => {
     | Some(held) => Ok(held)
     | None => Error(`no configuration of the moment at ${config}`)
     }
-  let missing = Error("Worker not found")
-  switch (Host.basename(command.program), List.fromArray(command.args)) {
+  let missing = Error(notFound)
+  let program = Host.basename(command.program)
+  switch (program, List.fromArray(argsOf(command))) {
+  | ("wrangler", _) if argsOf(command) == command.args => Error(`reads a .env, ${line(command)}`)
   | ("wrangler", list{"d1", "list", "--json"}) =>
     Ok(
       JSON.stringify(
@@ -334,16 +347,28 @@ let moments = root => [
   Host.join([root, "cloudflare", "database", Install.moment]),
 ]
 
-test("a dry run runs nothing, writes nothing and shows no secret", () => {
+/** A dry run whose commands are answered by `account`, any but the D1 list refused. */
+let dryOn = (~env=?, ~answer=?, account, root) => {
+  let answer =
+    answer->Option.getOr(command =>
+      line(command) == "wrangler d1 list --json"
+        ? answered(account, command)
+        : Error(`ran ${line(command)}`)
+    )
+  let faked = make(~env?, ~answer)
+  (faked, Install.install(faked.world, ~dry=true, ~root))
+}
+
+test("a dry run reads the D1 list alone, writes nothing and shows no secret", () => {
   let root = fixture()
-  let faked = make(~answer=command => Error(`ran ${line(command)}`))
-  deepEqual(Install.install(faked.world, ~dry=true, ~root), Ok())
-  deepEqual((faked.ran, faked.scratched), ([], []))
+  let (faked, result) = dryOn(empty(), root)
+  deepEqual(result, Ok())
+  deepEqual((plain(faked), faked.scratched), (["wrangler d1 list --json"], []))
   ok(!shows(faked), ~message="a secret was said")
   ok(moments(root)->Array.every(path => !Host.existsSync(path)))
   ok(
     [
-      "wrangler d1 list --json, and reuse the install id of the one driver-<8 hex>",
+      "d1 list names no driver-<8 hex>, so a new install id would be drawn",
       "wrangler d1 create driver-<install id>",
       "wrangler d1 create database-<install id>",
       "wrangler d1 migrations apply driver-<install id> --remote",
@@ -361,45 +386,99 @@ test("a dry run runs nothing, writes nothing and shows no secret", () => {
   )
 })
 
+test("a dry run says which install id it would reuse, and refuses where two are listed", () => {
+  let account = empty()
+  account.databases = ["other", "driver-0a1b2c3d"]
+  let (faked, result) = dryOn(account, fixture())
+  deepEqual(result, Ok())
+  ok(
+    faked.said->Array.includes(
+      "d1 list names driver-0a1b2c3d, so the install id 0a1b2c3d would be reused",
+    ),
+  )
+  ok(
+    faked.said->Array.some(l => l->String.includes("wrangler d1 migrations apply driver-0a1b2c3d")),
+  )
+  account.databases = ["driver-0a1b2c3d", "driver-4e5f6a7b"]
+  let (faked, result) = dryOn(account, fixture())
+  ok(result->Result.isError)
+  deepEqual(plain(faked), ["wrangler d1 list --json"])
+})
+
+test("a dry run that cannot read the account prints the rule and says why", () => {
+  let rule = "  it reuses the install id of the one driver-<8 hex> d1 list names, draws a new one"
+  let (failed, result) = dryOn(~answer=_ => Error("the list failed"), empty(), fixture())
+  deepEqual(result, Ok())
+  ok(failed.said->Array.includes(rule), ~message=failed.said->Array.join("\n"))
+  ok(
+    failed.said->Array.some(l =>
+      l->String.startsWith("the install id is not known, as wrangler d1 list --json") &&
+        l->String.endsWith("failed, the list failed;")
+    ),
+  )
+  let (unread, result) = dryOn(~answer=_ => Ok("not JSON"), empty(), fixture())
+  deepEqual(result, Ok())
+  ok(unread.said->Array.some(l => l->String.includes("d1 list printed no JSON array")))
+  let env = credentials->Array.filter(((name, _)) => name != "DRIVER_INSTALL_TOKEN")
+  let (unset, result) = dryOn(~env, empty(), fixture())
+  deepEqual(result, Ok())
+  deepEqual(unset.ran, [])
+  ok(unset.said->Array.includes("the install id is not known, as DRIVER_INSTALL_TOKEN unset;"))
+  ok(unset.said->Array.includes(rule))
+  ok(
+    unset.said->Array.includes(
+      "DRIVER_INSTALL_TOKEN unset in the environment, so a run not dry refuses",
+    ),
+  )
+})
+
 test("a missing input is refused by its name before anything runs, none read in its stead", () => {
   let root = fixture()
   let env = [...ambient, ("DRIVER_ACCOUNT_ID", "")]
-  [false, true]->Array.forEach(dry => {
-    let faked = make(~env, ~answer=_ => Ok(""))
-    deepEqual(
-      Install.install(faked.world, ~dry, ~root),
-      Error(
-        "DRIVER_ACCOUNT_ID, DRIVER_INSTALL_TOKEN, DRIVER_API_TOKEN unset in the environment, " ++ "which alone gives them",
-      ),
-    )
-    deepEqual(faked.ran, [])
-  })
+  let faked = make(~env, ~answer=_ => Ok(""))
+  let names = "DRIVER_ACCOUNT_ID, DRIVER_INSTALL_TOKEN, DRIVER_API_TOKEN"
+  deepEqual(
+    Install.install(faked.world, ~dry=false, ~root),
+    Error(`${names} unset in the environment, which alone gives them`),
+  )
+  deepEqual(faked.ran, [])
+  // A dry run names them, and reads nothing, the account being unknown.
+  let faked = make(~env, ~answer=_ => Ok(""))
+  deepEqual(Install.install(faked.world, ~dry=true, ~root), Ok())
+  deepEqual(faked.ran, [])
+  ok(faked.said->Array.includes(`${names} unset in the environment, so a run not dry refuses`))
 })
 
 test("DRIVER_ACCOUNT_ID unset is refused, though CLOUDFLARE_ACCOUNT_ID is set", () => {
   let root = fixture()
   let env = [...credentials->Array.filter(((name, _)) => name != "DRIVER_ACCOUNT_ID"), ...ambient]
-  [false, true]->Array.forEach(dry => {
-    let faked = make(~env, ~answer=_ => Ok(""))
-    deepEqual(
-      Install.install(faked.world, ~dry, ~root),
-      Error("DRIVER_ACCOUNT_ID unset in the environment, which alone gives them"),
-    )
-    deepEqual(faked.ran, [])
-  })
+  let faked = make(~env, ~answer=_ => Ok(""))
+  deepEqual(
+    Install.install(faked.world, ~dry=false, ~root),
+    Error("DRIVER_ACCOUNT_ID unset in the environment, which alone gives them"),
+  )
+  deepEqual(faked.ran, [])
+  let faked = make(~env, ~answer=_ => Ok(""))
+  deepEqual(Install.install(faked.world, ~dry=true, ~root), Ok())
+  deepEqual(faked.ran, [])
 })
 
-test("DATABASE_API_TOKEN missing is refused by its name alone, dry or not", () => {
+test("DATABASE_API_TOKEN missing is refused by its name alone, and said in a dry run", () => {
   let root = fixture()
   let env = credentials->Array.filter(((name, _)) => name != "DATABASE_API_TOKEN")
-  [false, true]->Array.forEach(dry => {
-    let faked = make(~env, ~answer=_ => Ok(""))
-    deepEqual(
-      Install.install(faked.world, ~dry, ~root),
-      Error("DATABASE_API_TOKEN unset in the environment, which alone gives them"),
-    )
-    deepEqual(faked.ran, [])
-  })
+  let faked = make(~env, ~answer=_ => Ok(""))
+  deepEqual(
+    Install.install(faked.world, ~dry=false, ~root),
+    Error("DATABASE_API_TOKEN unset in the environment, which alone gives them"),
+  )
+  deepEqual(faked.ran, [])
+  let (faked, result) = dryOn(~env, empty(), root)
+  deepEqual(result, Ok())
+  ok(
+    faked.said->Array.includes(
+      "DATABASE_API_TOKEN unset in the environment, so a run not dry refuses",
+    ),
+  )
 })
 
 test("a first install makes each part in order, and a second changes nothing", () => {
@@ -615,7 +694,8 @@ test("DRIVER_API_TOKEN and DATABASE_API_TOKEN are in no command's environment", 
       !(values->Array.includes("the-driver-token") || values->Array.includes("the-database-token")),
       ~message=line(command),
     )
-    let wrangler = Host.basename(command.program) == "wrangler"
+    let wrangler =
+      Host.basename(command.program) == "wrangler" && !(command.args->Array.includes("--dry-run"))
     deepEqual(
       (
         command.env->Dict.get("CLOUDFLARE_API_TOKEN"),
@@ -741,7 +821,10 @@ test("more than one driver-<8 hex> is refused by name, and nothing is made", () 
   deepEqual(
     result,
     Error(
-      "the account holds more than one driver's D1, driver-0a1b2c3d, driver-4e5f6a7b, " ++ "so none is chosen",
+      [
+        "the account holds more than one driver's D1, driver-0a1b2c3d, driver-4e5f6a7b, ",
+        "so none is chosen",
+      ]->Array.join(""),
     ),
   )
   deepEqual(plain(faked), ["wrangler d1 list --json"])
@@ -821,7 +904,10 @@ test("a kind listed on a rerun is added, and one dropped is named and left as it
   deepEqual(account.buckets, [full("objects")])
   ok(
     dropped.said->Array.includes(
-      "object is not offered, and object-0a1b2c3d and the bucket objects-0a1b2c3d " ++ "are left as they are;",
+      [
+        "object is not offered, and object-0a1b2c3d and the bucket objects-0a1b2c3d ",
+        "are left as they are;",
+      ]->Array.join(""),
     ),
     ~message=dropped.said->Array.join("\n"),
   )
@@ -853,6 +939,85 @@ test("no ambient CLOUDFLARE_ name reaches a command, wrangler given install's ow
     faked.ran->Array.some(c =>
       c.env->Dict.get("CLOUDFLARE_API_TOKEN") == Some("the-install-token")
     ),
+  )
+})
+
+test("no CF_ name reaches a command, and wrangler is pointed at an empty env file", () => {
+  let root = fixture()
+  // A .env wrangler would load from where it runs, were it not given the empty file instead.
+  let dotEnv = "CLOUDFLARE_API_KEY=the-dotenv-key\nCLOUDFLARE_EMAIL=dotenv@example.com\n"
+  ["", "cloudflare", "cloudflare/object", "cloudflare/database"]->Array.forEach(dir =>
+    Host.writeFileSync(Host.join([root, dir, ".env"]), dotEnv)
+  )
+  let legacy = [
+    ("CF_API_KEY", "the-legacy-key"),
+    ("CF_EMAIL", "legacy@example.com"),
+    ("CF_API_BASE_URL", "https://api.example/client/v4"),
+  ]
+  let (faked, result) = installed(~env=[...legacy, ...credentials], empty(), root)
+  deepEqual(result, Ok())
+  faked.ran->Array.forEach(command => {
+    let names = command.env->Dict.keysToArray
+    deepEqual(
+      names->Array.filter(name => name->String.startsWith("CF_")),
+      [],
+      ~message=line(command),
+    )
+    let values = command.env->Dict.valuesToArray
+    ok(legacy->Array.every(((_, v)) => !(values->Array.includes(v))), ~message=line(command))
+    if Host.basename(command.program) == "wrangler" {
+      deepEqual(command.args->Array.slice(~start=-2), ["--env-file", "/dev/null"])
+    }
+  })
+})
+
+test("the bundle is written in the quiet environment, given no account and no token", () => {
+  let (faked, result) = installed(empty(), fixture())
+  deepEqual(result, Ok())
+  let bundles = faked.ran->Array.filter(c => c.args->Array.includes("--dry-run"))
+  deepEqual(Array.length(bundles), 3)
+  bundles->Array.forEach(command =>
+    deepEqual(
+      (
+        command.env->Dict.get("CLOUDFLARE_API_TOKEN"),
+        command.env->Dict.get("CLOUDFLARE_ACCOUNT_ID"),
+      ),
+      (None, None),
+    )
+  )
+})
+
+test("a D1 list that is no JSON array is an error, never an empty account", () => {
+  let lists = ref(0)
+  let account = empty()
+  let unreadAt = at =>
+    command =>
+      if line(command) == "wrangler d1 list --json" {
+        lists := lists.contents + 1
+        lists.contents == at ? Ok("not JSON") : answered(account, command)
+      } else {
+        answered(account, command)
+      }
+  let refused = Error("d1 list printed no JSON array, so the account's databases are not known")
+  // The first list is recovery's, the second the driver's D1's.
+  [1, 2]->Array.forEach(at => {
+    lists := 0
+    let faked = make(~answer=unreadAt(at))
+    deepEqual(Install.install(faked.world, ~dry=false, ~root=fixture()), refused)
+    ok(plain(faked)->Array.every(l => !(l->String.includes(" create "))))
+  })
+})
+
+test("a dropped kind's Worker whose lookup fails otherwise than not found is named", () => {
+  let account = empty()
+  let answer = command =>
+    line(command) == "wrangler versions list --json --name object-0a1b2c3d"
+      ? Error("Authentication error [code: 10000]")
+      : answered(account, command)
+  let faked = make(~env=only(None), ~answer)
+  deepEqual(
+    Install.install(faked.world, ~dry=false, ~root=fixture()),
+    Error("whether object-0a1b2c3d is there is not known, Authentication error [code: 10000]"),
   )
 })
 

@@ -14,6 +14,8 @@ type env = {
   @as("ACCOUNT_ID") accountId: string,
   @as("BINDING") binding: string,
   @as("DRIVER_REVISION") revision?: string,
+  @as("INSTALL_ID") installId?: string,
+  @as("KINDS") kinds?: string,
 }
 
 /** The interfaces it serves, as a call names them. */
@@ -64,41 +66,6 @@ let addressOf = async (env, worker, ~id) =>
   | Error({reason, message}) => Error({Management.reason, message})
   }
 
-/** Nothing is ever written, so apply only says what it would answer. */
-let unwritten = (store: Management.store): Management.store => {
-  read: store.read,
-  write: async _ => (),
-}
-
-/**
- * The list taken, or refused whole as `beyond_host` where it names a kind KINDS does not offer,
- * after its own form and its generation are read, as a container is refused.
- */
-let applied = async (store, ~now, ~generation, ~items, ~tokens, ~objects, ~databases, ~kinds) =>
-  switch Installed.unoffered(items, ~kinds) {
-  | None => await Management.apply(store, ~now, ~generation, ~items, ~tokens, ~objects, ~databases)
-  | Some(item) =>
-    let none = async () => Error({Management.reason: "beyond_host", message: ""})
-    switch await Management.apply(
-      unwritten(store),
-      ~now,
-      ~generation,
-      ~items,
-      ~tokens,
-      ~objects=none,
-      ~databases=none,
-    ) {
-    | Error(_) as refused => refused
-    // A list behind is answered by the generation held, as apply answers it.
-    | Ok(held) if held > generation => Ok(held)
-    | Ok(_) =>
-      let id = Float.toString(item.id)
-      let kind = Installed.kindOf(item)
-      let offered = kinds->Array.join(", ")
-      Error({reason: "beyond_host", message: `item ${id}: ${kind} is not offered, only ${offered}`})
-    }
-  }
-
 /** A management call on the list kept, its grace swept first. */
 let managed = async (env, store, call: Contracts.Interface.Management.call, form, ~id, ~kinds) => {
   let now = Date.now()
@@ -112,15 +79,15 @@ let managed = async (env, store, call: Contracts.Interface.Management.call, form
       capacity: capacityOf(item.capacity),
       credentials: hex(item.credentials),
     })
-    let result = await applied(
+    let result = await Management.apply(
       store,
+      ~offered=kinds,
       ~now,
       ~generation=input.generation,
       ~items,
       ~tokens=input.tokens->Option.map(hex),
       ~objects=() => addressOf(env, "object", ~id),
       ~databases=() => addressOf(env, "database", ~id),
-      ~kinds,
     )
     answered(Contracts.Interface.Management.apply, result->Result.map(held))->Answer.written(
       form,
@@ -263,6 +230,37 @@ let rec fetchedFrom = async (address, ~left) =>
 
 let artifact = address => fetchedFrom(address, ~left=hops)
 
+/** A deployments call refused whole, `function` not being among the kinds offered, nrs5v. */
+let unoffered = (operation, form, ~toJson, ~toCbor) =>
+  answered(
+    operation,
+    Error({Management.reason: "beyond_host", message: "function is not offered, by KINDS"}),
+  )->Answer.written(form, ~toJson, ~toCbor)
+
+/** A deployments call answered beyond the host, every one, where `function` is not offered. */
+let refusedAll = (call: Contracts.Interface.Deployments.call, form) => {
+  let described = operation =>
+    unoffered(
+      operation,
+      form,
+      ~toJson=Contracts.DeploymentDescribed.toJson,
+      ~toCbor=Contracts.DeploymentDescribed.toCbor,
+    )
+  switch call {
+  | Deploy(_) => described(Contracts.Interface.Deployments.deploy)
+  | Stop(_) => described(Contracts.Interface.Deployments.stop)
+  | Resume(_) => described(Contracts.Interface.Deployments.resume)
+  | Describe(_) => described(Contracts.Interface.Deployments.describe)
+  | Delete(_) =>
+    unoffered(
+      Contracts.Interface.Deployments.delete,
+      form,
+      ~toJson=Contracts.DeploymentDeleted.toJson,
+      ~toCbor=Contracts.DeploymentDeleted.toCbor,
+    )
+  }
+}
+
 /** A deployments call on the account's Workers. */
 let deployed = async (through, call: Contracts.Interface.Deployments.call, form) => {
   let described = answer =>
@@ -354,6 +352,8 @@ let held = async (request, env, forms: Answer.forms, ~header, ~early, ~id, ~kind
         ~fromCbor=Contracts.Interface.Deployments.fromCbor,
         ~named=e => deploymentsOperation(e.call),
       ) {
+      | Ok(envelope) if !(kinds->Array.includes(#function)) =>
+        refusedAll(envelope.call, forms.answer)
       | Ok(envelope) =>
         let through: Function.through = {
           api: accountOf(env, ~id),
@@ -374,10 +374,10 @@ let held = async (request, env, forms: Answer.forms, ~header, ~early, ~id, ~kind
 let serve = async (request, env, forms: Answer.forms) => {
   let header = name => request->Web.requestHeaders->Web.header(name)->Nullable.toOption
   let early = error => Answer.refused(error, forms.answer)
-  switch (Installed.idOf(env), Installed.kindsOf(env)) {
-  | (Some(id), Some(kinds)) => await held(request, env, forms, ~header, ~early, ~id, ~kinds)
-  // A Worker not installed whole denies every call, as an unset BINDING does, and says no more.
-  | (None, _) | (_, None) => early(Answer.error("denied"))
+  // A Worker not installed whole is the implementation's fault, never the caller's, nrs5v.
+  switch (Installed.idOf(env.installId), Installed.kindsOf(env.kinds)) {
+  | (Ok(id), Ok(kinds)) => await held(request, env, forms, ~header, ~early, ~id, ~kinds)
+  | (Error(message), _) | (_, Error(message)) => early(Answer.error("fault", ~message))
   }
 }
 

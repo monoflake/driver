@@ -12,6 +12,7 @@ type env = {
   @as("DB") db: database,
   @as("OBJECTS") objects: bucket,
   @as("BINDING") binding: string,
+  @as("INSTALL_ID") installId?: string,
 }
 
 /** The most an object holds in bytes, the contract's 16 MiB. */
@@ -262,11 +263,12 @@ let held = async (request, env, forms: Answer.forms) => {
   }
 }
 
-/** A call answered, denied unread where the Worker is not installed whole, as an unset BINDING. */
+/** A call answered, a fault unread where the Worker is not installed whole, never the caller's. */
 let serve = (request, env, forms: Answer.forms) =>
-  Installed.whole(env)
-    ? held(request, env, forms)
-    : Promise.resolve(Answer.refused(Answer.error("denied"), forms.answer))
+  switch Installed.idOf(env.installId) {
+  | Ok(_) => held(request, env, forms)
+  | Error(message) => Promise.resolve(Answer.refused(Answer.error("fault", ~message), forms.answer))
+  }
 
 let fetch = async (request, env) => {
   let header = name => request->Web.requestHeaders->Web.header(name)->Nullable.toOption
