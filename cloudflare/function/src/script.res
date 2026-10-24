@@ -23,5 +23,5 @@ type api = {
   deploy: (string, string) => promise<result<unit, refused>>,
   running: string => promise<result<option<running>, refused>>,
   delete: string => promise<result<unit, refused>>,
-  subdomain: unit => promise<result<string, refused>>,
+  address: string => promise<result<string, refused>>,
 }

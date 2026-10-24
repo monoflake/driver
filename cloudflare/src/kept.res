@@ -147,8 +147,12 @@ let management = (db: database): Management.store => {
             ->prepare(`INSERT INTO items (${columns}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
             ->bind(rowOf(k))
           ),
+          // A hash named twice is held once, as the table keeps each once.
           kept.tokens
           ->Option.getOr([])
+          ->Array.filterWithIndex((hash, at) =>
+            kept.tokens->Option.getOr([])->Array.indexOf(hash) == at
+          )
           ->Array.map(hash =>
             db->prepare("INSERT INTO tokens (hash) VALUES (?)")->bind([Text(hash)])
           ),

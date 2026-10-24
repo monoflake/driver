@@ -33,7 +33,7 @@ type api = Script.api = {
   deploy: (string, string) => promise<result<unit, refused>>,
   running: string => promise<result<option<running>, refused>>,
   delete: string => promise<result<unit, refused>>,
-  subdomain: unit => promise<result<string, refused>>,
+  address: string => promise<result<string, refused>>,
 }
 
 let ofAccount = (~accountId, ~token) => Cloudflare.api(~send=Web.fetch, ~accountId, ~token)
@@ -119,28 +119,26 @@ let checked = (input: Contracts.DeploymentDeploy.t) =>
     if !(input.isolation->Array.every(i => i == Contracts.DeploymentIsolation.Isolate)) {
       beyond("a Worker stands on an isolate's isolation alone")
     } else {
-      outbound(input.network)
+      // A Worker's secret binding holds text, and the message names the secret, never its bytes.
+      switch input.secrets
+      ->Dict.toArray
+      ->Array.find(((_, bytes)) => Web.fromUtf8(bytes) == None) {
+      | Some((name, _)) => beyond(`the secret ${name} is no UTF-8 text, as a Worker's secret is`)
+      | None => outbound(input.network)
+      }
     }
   }
 
-/** A deployment described as it is kept, its address the account's workers.dev subdomain. */
+/** A deployment described as it is kept, its address the one its Worker answers at. */
 let described = async (through, runs, kept: kept): result<Contracts.DeploymentDescribed.t, _> => {
   let version = Envelope.Hex.decode(kept.version)->Option.getOr(Uint8Array.fromLength(32))
   switch kept.state {
   | #stopped => Ok({runs, version, state: Stopped})
   | #failed => Ok({runs, version, state: Failed({reason: kept.reason->Option.getOr("fault")})})
   | #running =>
-    switch await through.api.subdomain() {
-    | Ok(subdomain) =>
-      Ok({
-        runs,
-        version,
-        state: Running({
-          address: `${workerOf(runs)}.${subdomain}.workers.dev`,
-          runtime: Workers,
-          isolation: [Isolate],
-        }),
-      })
+    switch await through.api.address(workerOf(runs)) {
+    | Ok(address) =>
+      Ok({runs, version, state: Running({address, runtime: Workers, isolation: [Isolate]})})
     | Error(_) as refused => refused
     }
   }
@@ -165,7 +163,7 @@ let fetched = async (through, artifact: Contracts.DeploymentArtifact.t) =>
       : Error({reason: "hash_mismatch", message: ""})
   }
 
-/** The footing's address and each secret, its bytes read as UTF-8 text. */
+/** The footing's address and each secret, its bytes UTF-8 text as `checked` holds them. */
 let bindingsOf = (input: Contracts.DeploymentDeploy.t) =>
   Array.concat(
     [PlainText({name: footing, text: input.footing})],
@@ -215,8 +213,10 @@ let deploying = async (through, input: Contracts.DeploymentDeploy.t) => {
             await described(through, input.runs, kept)
           | Error(refused) =>
             // A Worker made for nothing kept is told failed, so deleting it removes it.
-            if kept == None {
+            switch (kept, await through.api.running(worker)) {
+            | (None, Ok(Some(_))) =>
               await through.store.write(worker, {version, state: #failed, reason: refused.reason})
+            | (Some(_), _) | (None, Ok(None) | Error(_)) => ()
             }
             Error(refused)
           }
@@ -247,15 +247,24 @@ let notFound = (runs: Contracts.DeploymentRuns.t) => Error({
   message: `no deployment of ${workerOf(runs)} is kept`,
 })
 
+/** A stop finding the Worker running another version than the one kept, which it never keeps. */
+let notRunning = worker => Error({
+  reason: "fault",
+  message: `the version running on ${worker} is not the one kept, so nothing is stopped`,
+})
+
 let stopping_ = async (through, runs) => {
   let worker = workerOf(runs)
   switch await through.store.read(worker) {
   | None => notFound(runs)
   | Some({state: #stopped | #failed} as kept) => await described(through, runs, kept)
   | Some({state: #running} as kept) =>
+    let keptTag = Envelope.Hex.decode(kept.version)->Option.map(tagOf)
     switch await through.api.running(worker) {
     | Error(_) as refused => refused
-    | Ok(running) =>
+    | Ok(None) | Ok(Some({tag: None})) => notRunning(worker)
+    | Ok(Some({tag: Some(tag)})) if Some(tag) != keptTag => notRunning(worker)
+    | Ok(Some(running)) =>
       let stubbed = switch await through.api.upload(
         worker,
         {bundle: stub, bindings: [], tag: stopping},
@@ -269,7 +278,7 @@ let stopping_ = async (through, runs) => {
         let kept = {
           version: kept.version,
           state: #stopped,
-          replaced: ?(running->Option.map(r => r.id)),
+          replaced: running.id,
         }
         await through.store.write(worker, kept)
         await described(through, runs, kept)

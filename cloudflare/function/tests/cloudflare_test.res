@@ -171,9 +171,9 @@ test("a Worker is deleted, and one absent is deleted already", async () => {
   )
 })
 
-test("the account's workers.dev subdomain is answered", async () => {
+test("a Worker's address is its name on the account's workers.dev subdomain", async () => {
   let (api, sent) = account([(200, Documented.subdomainGot)])
-  deepEqual(await api.subdomain(), Ok("my-subdomain"))
+  deepEqual(await api.address("app-1"), Ok("app-1.my-subdomain.workers.dev"))
   deepEqual(requested(sent), [("GET", `${accountPath}/workers/subdomain`)])
 })
 
@@ -184,7 +184,7 @@ test(
     "result": null, "success": false}`
     let (api, _) = account([(403, refusal)])
     deepEqual(
-      await api.subdomain(),
+      await api.address("app-1"),
       Error({
         reason: "fault",
         message: "Cloudflare's API answered 403, 10000 Authentication error",

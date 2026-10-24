@@ -20,13 +20,29 @@ type responseInit = {status: int, headers: dict<string>}
 /** A response's body whole. */
 let responseBytes = async response => Uint8Array.fromBuffer(await response->responseBuffer)
 
+@get external responseHeaders: response => headers = "headers"
+
 type parts
 @new external parts: string => parts = "URL"
+/** An address read against the one it was found at, as a redirect's `Location` is. */
+@new external partsIn: (string, string) => parts = "URL"
 @get external pathname: parts => string = "pathname"
 @get external protocol: parts => string = "protocol"
+@get external href: parts => string = "href"
+
+/** A fetch's options, its redirects answered rather than followed where `manual`. */
+type fetchInit = {method: string, redirect: string}
 
 /** What fetches an address, the runtime's `fetch`. */
-@val external fetch: string => promise<response> = "fetch"
+@val external fetch: (string, fetchInit) => promise<response> = "fetch"
+
+type stream
+type reader
+type chunk = {done: bool, value: Nullable.t<Uint8Array.t>}
+@get external body: response => Nullable.t<stream> = "body"
+@send external reader: stream => reader = "getReader"
+@send external read: reader => promise<chunk> = "read"
+@send external cancel: reader => promise<unit> = "cancel"
 
 type encoder
 @new external encoder: unit => encoder = "TextEncoder"
@@ -46,3 +62,6 @@ let fromUtf8 = bytes =>
   | text => Some(text)
   | exception JsExn(_) => None
   }
+
+/** Bytes copied into others from an offset by `set`, never number by number. */
+@send external copyInto: (Uint8Array.t, Uint8Array.t, int) => unit = "set"

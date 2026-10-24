@@ -13,6 +13,7 @@ let hashOf = authorization =>
     | -1 => None
     | space if header->String.slice(~start=0, ~end=space)->String.toLowerCase == "bearer" =>
       switch header->String.slice(~start=space + 1)->String.split(".") {
+      // This driver holds one binding and is never told its id, so the secret's hash is the check.
       | [binding, secret] if id->RegExp.test(binding) && String.length(secret) == 43 =>
         Envelope.Base64url.decode(secret)
         ->Option.filter(bytes => TypedArray.length(bytes) == 32)

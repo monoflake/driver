@@ -20,6 +20,9 @@ type bundle = {
   compatibilityFlags: array<string>,
 }
 
+/** The most an artifact may be in bytes, a Worker's 64 MiB on every plan, RFC nrs5v. */
+let largest: int
+
 /** The bundle of a tar archive's bytes and its `metadata.json`, or `malformed` where it is none. */
 let unpack: Uint8Array.t => result<bundle, refused>
 
@@ -45,8 +48,8 @@ type api = {
   running: string => promise<result<option<running>, refused>>,
   /** The Worker deleted, succeeding where there is none. */
   delete: string => promise<result<unit, refused>>,
-  /** The account's subdomain of `workers.dev`. */
-  subdomain: unit => promise<result<string, refused>>,
+  /** The address a Worker answers at, by its name, on the account's subdomain of `workers.dev`. */
+  address: string => promise<result<string, refused>>,
 }
 
 /** The API of the account `accountId`, reached with `token` by the runtime's `fetch`. */

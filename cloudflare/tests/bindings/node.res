@@ -45,16 +45,37 @@ let asDatabase: sqlite => Driver.database = %raw(`db => {
   }
 }`)
 
-/** A database in memory with the driver's migrations applied in order. */
-let database = () => {
+/** node's SQLite in memory with the driver's migrations applied in order. */
+let migrated = () => {
   let db = openSqlite(":memory:")
   let migrations = fromBlock("migrations")
   list(migrations)
   ->Array.filter(name => name->String.endsWith(".sql"))
   ->Array.toSorted(String.compare)
   ->Array.forEach(name => db->exec(readText(`${migrations}/${name}`)))
-  asDatabase(db)
+  db
 }
+
+/** A database in memory with the driver's migrations applied in order. */
+let database = () => asDatabase(migrated())
+
+/** Every row of every table the migrations make, as JSON, to tell a write. */
+let rows: sqlite => string = %raw(`db => JSON.stringify(
+  ["held", "items", "tokens", "deployments"].map(t => db.prepare("SELECT * FROM " + t).all())
+)`)
+
+/** A database whose statements beginning with `prefix` throw as they are run. */
+let refusing: (Driver.database, string) => Driver.database = %raw(`(db, prefix) => ({
+  prepare: sql => sql.startsWith(prefix)
+    ? {
+        bind: () => {
+          const refused = async () => { throw new Error("refused " + prefix) }
+          return { first: refused, all: refused, run: refused }
+        },
+      }
+    : db.prepare(sql),
+  batch: statements => db.batch(statements),
+})`)
 
 type requestInit = {method: string, headers: dict<string>, body?: Uint8Array.t}
 @new external request: (string, requestInit) => Web.request = "Request"
@@ -86,3 +107,14 @@ let sha256 = async bytes => Uint8Array.fromBuffer(await digest("SHA-256", bytes)
 
 /** A file's JSON by its path from the repository's root, the directory above this block's. */
 let fromRoot = path => JSON.parseOrThrow(readText(fromBlock(`../${path}`)))
+
+type answerInitWith = {status: int, headers: dict<string>}
+@new external answerWith: (Uint8Array.t, answerInitWith) => answer = "Response"
+
+type worker = {fetch: Web.request => Web.response}
+type imported = {default: worker}
+@val external importModule: string => promise<imported> = "import"
+@val external encodeURIComponent: string => string = "encodeURIComponent"
+
+/** A module's default export, imported from its source text. */
+let imported = source => importModule("data:text/javascript," ++ encodeURIComponent(source))

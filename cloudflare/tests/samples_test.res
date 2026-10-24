@@ -1,7 +1,6 @@
 /***
- * The deployments lifecycle sample run through the Worker `driver`, its D1 node's SQLite and its
- * account the fake of `account.res`. A `send` reaches a Worker running, which no test here has, so
- * it is counted and passed over.
+ * The deployments lifecycle sample run through the Worker `driver` on node's SQLite and the fake
+ * account of `account.res`, each `send` counted and passed over, as no Worker runs here.
  */
 open Node
 

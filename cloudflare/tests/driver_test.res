@@ -10,8 +10,8 @@ let token = `1.${Envelope.Base64url.encode(secret)}`
 let binding = Envelope.Hex.encode(Keys.Hash.plain(secret))
 let other = Uint8Array.fromLength(32)->TypedArray.fillAll(9)
 
-let envOf = (~revision=?, ()): Driver.env => {
-  db: database(),
+let envOf = (~revision=?, ~db=database(), ()): Driver.env => {
+  db,
   apiToken: "t0ken",
   accountId: "023e105f4ecef8ad9ca31a8372d0c353",
   binding,
@@ -137,20 +137,24 @@ test(
   },
 )
 
-test("tokens an apply names stand in place of the binding's", async () => {
-  let env = envOf()
-  let held = Envelope.Hex.encode(Keys.Hash.plain(other))
-  ignore(await manage(env, "apply", `{"generation": 1, "items": [], "tokens": ["${held}"]}`))
-  deepEqual(reasonOf(await manage(env, "describe", "{}")), (403, Some(JSON.String("denied"))))
-  let theirs = `Bearer 7.${Envelope.Base64url.encode(other)}`
-  let (status, _, _) = await call(
-    env,
-    ~path="/management/describe",
-    ~body=management("describe", "{}"),
-    ~authorization=theirs,
-  )
-  deepEqual(status, 200)
-})
+// The token's id is not checked, this driver holding one binding and never told its id.
+test(
+  "a token's id is passed over, its secret's hash held to the tokens an apply names",
+  async () => {
+    let env = envOf()
+    let held = Envelope.Hex.encode(Keys.Hash.plain(other))
+    ignore(await manage(env, "apply", `{"generation": 1, "items": [], "tokens": ["${held}"]}`))
+    deepEqual(reasonOf(await manage(env, "describe", "{}")), (403, Some(JSON.String("denied"))))
+    let theirs = `Bearer 7.${Envelope.Base64url.encode(other)}`
+    let (status, _, _) = await call(
+      env,
+      ~path="/management/describe",
+      ~body=management("describe", "{}"),
+      ~authorization=theirs,
+    )
+    deepEqual(status, 200)
+  },
+)
 
 test("a call in CBOR is answered in CBOR", async () => {
   let env = envOf()
@@ -288,3 +292,160 @@ test(
     deepEqual((reasonOf(plain), reasonOf(none)), (unfetchable, unfetchable))
   },
 )
+
+let messageOf = ((_, _, json)) =>
+  json->JSON.Decode.object->Option.flatMap(o => o->Dict.get("message"))
+
+/** A first deploy of `artifact` from an address, `served` answering first and the account after. */
+let deployedFrom = async (address, ~served) => {
+  let env = envOf()
+  let account = Account.make(~artifacts=dict{})
+  let fetched = []
+  let restore = replaced(async (url, init) =>
+    switch served(url) {
+    | Some(answer) =>
+      fetched->Array.push(url)
+      answer
+    | None => await account(url, init)
+    }
+  )
+  let hash = Envelope.Hex.encode(await sha256(artifact))
+  let deploy = `{"interface": "deployments", "operation": "deploy", "input": {
+    "runs": {"name": "app", "id": 1}, "version": "${hash}", "form": "modules",
+    "isolation": ["isolate"], "artifact": {"address": "${address}", "hash": "${hash}"},
+    "footing": "https://footing.invalid", "secrets": {}, "network": ["http", "tcp"]}}`
+  let answered = await call(env, ~path="/deployments/deploy", ~body=deploy)
+  restore()
+  (answered, fetched)
+}
+
+let tooLarge = (400, Some(JSON.String("too_large")))
+let largest = 67_108_864
+
+test("an artifact past the bound is too large, by its length or by what came", async () => {
+  let said = Dict.fromArray([("content-length", Int.toString(largest + 1))])
+  let (byLength, _) = await deployedFrom("https://artifacts.example/said", ~served=url =>
+    url->String.startsWith("https://artifacts.example")
+      ? Some(answerWith(Web.utf8("small"), {status: 200, headers: said}))
+      : None
+  )
+  deepEqual(reasonOf(byLength), tooLarge)
+  let (byBytes, _) = await deployedFrom("https://artifacts.example/sent", ~served=url =>
+    url->String.startsWith("https://artifacts.example")
+      ? Some(answerBytes(Uint8Array.fromLength(largest + 1), {status: 200}))
+      : None
+  )
+  deepEqual(reasonOf(byBytes), tooLarge)
+})
+
+test("an artifact's redirect is followed to https alone, and only so often", async () => {
+  let redirect = location => Some(
+    answerWith(Uint8Array.fromLength(0), {status: 302, headers: dict{"location": location}}),
+  )
+  let (followed, fetched) = await deployedFrom("https://artifacts.example/a", ~served=url =>
+    switch url {
+    | "https://artifacts.example/a" => redirect("/b")
+    | "https://artifacts.example/b" => Some(answerBytes(artifact, {status: 200}))
+    | _ => None
+    }
+  )
+  let (status, _, _) = followed
+  deepEqual(
+    (status, fetched),
+    (200, ["https://artifacts.example/a", "https://artifacts.example/b"]),
+  )
+  let (plain, _) = await deployedFrom("https://artifacts.example/a", ~served=url =>
+    url->String.startsWith("https://artifacts.example") || url->String.startsWith("http:")
+      ? redirect("http://artifacts.example/b")
+      : None
+  )
+  deepEqual(
+    (reasonOf(plain), messageOf(plain)),
+    ((503, Some(JSON.String("unfetchable"))), Some(JSON.String("an artifact's address is https:"))),
+  )
+  let (looping, fetched) = await deployedFrom("https://artifacts.example/a", ~served=url =>
+    url->String.startsWith("https://artifacts.example") ? redirect("/a") : None
+  )
+  deepEqual(
+    (messageOf(looping), Array.length(fetched)),
+    (Some(JSON.String("the artifact's address redirects too often")), 11),
+  )
+})
+
+test("an apply naming a token twice holds it once", async () => {
+  let env = envOf()
+  let held = Envelope.Hex.encode(Keys.Hash.plain(secret))
+  let (status, _, _) = await manage(
+    env,
+    "apply",
+    `{"generation": 1, "items": [], "tokens": ["${held}", "${held}"]}`,
+  )
+  deepEqual(status, 200)
+  let (described, _, _) = await manage(env, "describe", "{}")
+  deepEqual(described, 200)
+})
+
+test("a token not checked for a fault tells the caller nothing of why", async () => {
+  let env = envOf(~db=refusing(database(), "SELECT hash FROM tokens"), ())
+  let answered = await manage(env, "describe", "{}")
+  deepEqual(
+    (reasonOf(answered), messageOf(answered)),
+    ((500, Some(JSON.String("fault"))), Some(JSON.String("the call's token was not checked"))),
+  )
+})
+
+test("a deployments, a denied or a malformed call leaves D1 unswept and unwritten", async () => {
+  let sqlite = migrated()
+  let env = envOf(~db=asDatabase(sqlite), ())
+  ignore(await manage(env, "set_policy", `{"generation": 1, "grace": 0}`))
+  ignore(await manage(env, "apply", `{"generation": 1, "items": [${item}]}`))
+  ignore(await manage(env, "apply", `{"generation": 2, "items": []}`))
+  let before = rows(sqlite)
+  let describe = `{"interface": "deployments", "operation": "describe",
+    "input": {"runs": {"name": "app", "id": 1}}}`
+  let found = await call(env, ~path="/deployments/describe", ~body=describe)
+  let wrong = `Bearer 1.${Envelope.Base64url.encode(other)}`
+  let denied = await call(
+    env,
+    ~path="/management/describe",
+    ~body=management("describe", "{}"),
+    ~authorization=wrong,
+  )
+  let malformed = await call(env, ~path="/management/describe", ~body="{")
+  deepEqual(
+    [reasonOf(found), reasonOf(denied), reasonOf(malformed)],
+    [
+      (404, Some(JSON.String("not_found"))),
+      (403, Some(JSON.String("denied"))),
+      (400, Some(JSON.String("malformed"))),
+    ],
+  )
+  deepEqual(rows(sqlite), before)
+  ok(before->String.includes("unasked"), ~message="the item unasked is held until a sweep")
+})
+
+test("the stub's answer in CBOR is the error stopped, as the codec reads it", async () => {
+  let source = DriverCloudflareFunction.Function.stub.modules->Array.getUnsafe(0)
+  let worker = (await imported(Web.fromUtf8(source.bytes)->Option.getOrThrow)).default
+  let answer = worker.fetch(
+    request("https://app-1.example/echo", {method: "POST", headers: dict{}}),
+  )
+  let read =
+    (await answer->Web.responseBytes)
+    ->Codec.Cbor.decodeDeterministic
+    ->Result.getOrThrow
+    ->Contracts.Answer.fromCbor(Contracts.DeploymentDeleted.fromCbor)
+  deepEqual(
+    (answer->Web.status, read),
+    (
+      503,
+      Ok(
+        Contracts.Answer.Error({
+          failure: Unavailable,
+          reason: "stopped",
+          message: "What was called is stopped",
+        }),
+      ),
+    ),
+  )
+})

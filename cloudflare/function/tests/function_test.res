@@ -31,7 +31,7 @@ let stateOf = (answer: Contracts.Answer.t<Contracts.DeploymentDescribed.t>) =>
   }
 
 let running = Contracts.DeploymentState.Running({
-  address: "app-1.my-subdomain.workers.dev",
+  address: "app-1.example",
   runtime: Workers,
   isolation: [Isolate],
 })
@@ -184,9 +184,11 @@ test("what was never deployed is not found, and deleting it succeeds", async () 
   deepEqual(await Function.delete(through, never), Success({}))
 })
 
+let failing: Function.refused = {reason: "fault", message: "Cloudflare's API answered 500"}
+
 test("a Worker made for a deployment that failed is told failed, and may be deleted", async () => {
   let (through, account, _, _) = setUp()
-  account.refusing := Some({reason: "fault", message: "Cloudflare's API answered 500"})
+  account.refusing := Some((Deploy, failing))
   let input = await deployOf()
   deepEqual(reasonOf(await Function.deploy(through, input)), Some((Unknown, "fault")))
   deepEqual(stateOf(await Function.describe(through, of_)), Some(Failed({reason: "fault"})))
@@ -194,14 +196,59 @@ test("a Worker made for a deployment that failed is told failed, and may be dele
   deepEqual(await Function.delete(through, of_), Success({}))
 })
 
+test("a first deploy refused before any Worker is made keeps nothing", async () => {
+  let (through, account, kept, _) = setUp()
+  account.refusing := Some((Upload, failing))
+  deepEqual(reasonOf(await Function.deploy(through, await deployOf())), Some((Unknown, "fault")))
+  deepEqual(kept->Map.size, 0)
+  deepEqual(reasonOf(await Function.describe(through, of_)), Some((Rejected, "not_found")))
+})
+
+test("a secret that is no UTF-8 text is beyond the host, named but never shown", async () => {
+  let (through, account, kept, fetched) = setUp()
+  let input = await deployOf()
+  let secrets = dict{"KEY": Web.utf8("s3cret"), "RAW": Uint8Array.fromArray([0xff, 0xfe])}
+  switch await Function.deploy(through, {...input, secrets}) {
+  | Error(e) =>
+    deepEqual(
+      (e.reason, e.message),
+      ("beyond_host", "the secret RAW is no UTF-8 text, as a Worker's secret is"),
+    )
+  | Success(_) => ok(false, ~message="a secret of no text was deployed")
+  }
+  deepEqual((fetched, account.asked, kept->Map.size), ([], [], 0))
+})
+
+test("a stop finding another version running, or none, keeps nothing and is a fault", async () => {
+  let (through, account, kept, _) = setUp()
+  let input = await deployOf()
+  ignore(await Function.deploy(through, input))
+  let before = kept->Map.get("app-1")
+  let notKept = Some((
+    Contracts.Failure.Unknown,
+    "fault",
+    "the version running on app-1 is not the one kept, so nothing is stopped",
+  ))
+  let refusal = answer =>
+    switch answer {
+    | Contracts.Answer.Error(e) => Some((e.failure, e.reason, e.message))
+    | Success(_) => None
+    }
+  account.versions->Map.set("v9", {bundle: Function.stub, bindings: [], tag: "version-other"})
+  account.runs->Map.set("app-1", "v9")
+  deepEqual(refusal(await Function.stop(through, of_)), notKept)
+  account.runs->Map.delete("app-1")->ignore
+  deepEqual(refusal(await Function.stop(through, of_)), notKept)
+  deepEqual(kept->Map.get("app-1"), before)
+  deepEqual(account.asked->Array.filter(a => a->String.includes("stopped")), [])
+})
+
 test("the stub answers every request 503 stopped, in the form the call asks", async () => {
   deepEqual(Function.stub.modules->Array.map(m => (m.name, m.kind)), [("stopped.js", Function.Es)])
   let source = Function.stub.modules->Array.getUnsafe(0)
   let worker = (await imported(Web.fromUtf8(source.bytes)->Option.getOrThrow)).default
   let asked = async headers => {
-    let answer = worker.fetch(
-      request("https://app-1.my-subdomain.workers.dev/echo", {headers: headers}),
-    )
+    let answer = worker.fetch(request("https://app-1.example/echo", {headers: headers}))
     let bytes = Uint8Array.fromBuffer(await answer->answerBytes)
     (answer->answerStatus, answer->answerHeaders->header("content-type")->Nullable.toOption, bytes)
   }
@@ -216,24 +263,14 @@ test("the stub answers every request 503 stopped, in the form the call asks", as
     await asked(dict{"content-type": "application/json; charset=utf-8"}),
     (503, Some("application/json"), json),
   )
-  // The error's CBOR, a map of its case 2, failure 2, reason and message, RFC 8949.
-  let cbor = Uint8Array.fromArray(
-    Array.concat(
-      [0xa4, 0x00, 0x02, 0x01, 0x02, 0x02, 0x67],
-      Array.concat(
-        "stopped"->String.split("")->Array.map(c => c->String.charCodeAt(0)->Option.getOr(0)),
-        Array.concat(
-          [0x03, 0x78, 0x1a],
-          "What was called is stopped"
-          ->String.split("")
-          ->Array.map(c => c->String.charCodeAt(0)->Option.getOr(0)),
-        ),
-      ),
-    ),
-  )
-  deepEqual(await asked(dict{}), (503, Some("application/cbor"), cbor))
+  // Its CBOR is read by the codec in the driver's tests, this block taking no codec.
+  let media = async headers => {
+    let (status, media, _) = await asked(headers)
+    (status, media)
+  }
+  deepEqual(await media(dict{}), (503, Some("application/cbor")))
   deepEqual(
-    await asked(dict{"accept": "application/cbor, application/json"}),
-    (503, Some("application/cbor"), cbor),
+    await media(dict{"accept": "application/cbor, application/json"}),
+    (503, Some("application/cbor")),
   )
 })

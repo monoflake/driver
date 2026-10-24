@@ -1,7 +1,6 @@
 /***
- * The Worker `driver`, every call held to the binding's token first, so a call denied learns
- * nothing of what it named, then read, answered and swept as driver(machine)'s `served.rs` does,
- * RFC nrs5v.
+ * The Worker `driver`, every call held to the binding's token before it is read, answered and swept
+ * as driver(machine)'s `served.rs` does, RFC nrs5v.
  */
 module Contracts = Envelope.Contracts
 module Management = DriverCloudflareManagement.Management
@@ -118,20 +117,87 @@ let managed = async (env, store, call: Contracts.Interface.Management.call, form
 
 let unfetchable = message => Error({Function.reason: "unfetchable", message})
 
-/** An artifact fetched whole from its address, which a Worker reaches by https alone. */
-let artifact = async address =>
+let largest = Function.largest
+
+/** The redirects a fetch follows, as many as driver(machine)'s client follows by default. */
+let hops = 10
+
+let tooLarge = () => Error({
+  Function.reason: "too_large",
+  message: `an artifact is at most ${Int.toString(largest)} bytes`,
+})
+
+/** A body read as it comes, held to the bound on what came, which may be more than it said. */
+let bounded = async response =>
+  switch response->Web.body->Nullable.toOption {
+  | None => Ok(Uint8Array.fromLength(0))
+  | Some(stream) =>
+    let reader = stream->Web.reader
+    let chunks = []
+    let total = ref(0)
+    let over = ref(false)
+    let ended = ref(false)
+    while !ended.contents && !over.contents {
+      let chunk = await reader->Web.read
+      switch chunk.value->Nullable.toOption {
+      | Some(bytes) if !chunk.done =>
+        total := total.contents + TypedArray.length(bytes)
+        total.contents > largest ? over := true : chunks->Array.push(bytes)
+      | Some(_) | None => ended := true
+      }
+    }
+    if over.contents {
+      await reader->Web.cancel
+      tooLarge()
+    } else {
+      let whole = Uint8Array.fromLength(total.contents)
+      chunks
+      ->Array.reduce(0, (at, bytes) => {
+        whole->Web.copyInto(bytes, at)
+        at + TypedArray.length(bytes)
+      })
+      ->ignore
+      Ok(whole)
+    }
+  }
+
+/**
+ * An artifact fetched from its address by https alone, each redirect followed only to https, and
+ * refused past the bound by its length before it is read, as machine's `container/src/fetch.rs`.
+ */
+let rec fetchedFrom = async (address, ~left) =>
   switch Web.parts(address)->Web.protocol {
   | "https:" =>
-    switch await Web.fetch(address) {
-    | response if response->Web.status >= 200 && response->Web.status < 300 =>
-      Ok(await response->Web.responseBytes)
+    switch await Web.fetch(address, {method: "GET", redirect: "manual"}) {
     | response =>
-      unfetchable(`the artifact's address answered ${Int.toString(response->Web.status)}`)
+      let status = response->Web.status
+      let header = name => response->Web.responseHeaders->Web.header(name)->Nullable.toOption
+      switch (status, header("location")) {
+      | (301 | 302 | 303 | 307 | 308, Some(location)) =>
+        switch Web.partsIn(location, address)->Web.href {
+        | next if left > 0 => await fetchedFrom(next, ~left=left - 1)
+        | _ => unfetchable("the artifact's address redirects too often")
+        | exception JsExn(_) => unfetchable("the artifact's address redirects to no URL")
+        }
+      | _ if status < 200 || status >= 300 =>
+        unfetchable(`the artifact's address answered ${Int.toString(status)}`)
+      | _ =>
+        switch header("content-length")->Option.flatMap(n => Float.fromString(n)) {
+        | Some(length) if length > Int.toFloat(largest) => tooLarge()
+        | Some(_) | None =>
+          switch await bounded(response) {
+          | read => read
+          | exception JsExn(_) => unfetchable("the artifact's body was not read whole")
+          }
+        }
+      }
     | exception JsExn(_) => unfetchable("the artifact's address was not reached")
     }
   | _ => unfetchable("an artifact's address is https:")
   | exception JsExn(_) => unfetchable("an artifact's address is no URL")
   }
+
+let artifact = address => fetchedFrom(address, ~left=hops)
 
 /** A deployments call on the account's Workers. */
 let deployed = async (through, call: Contracts.Interface.Deployments.call, form) => {
@@ -186,15 +252,22 @@ let serve = async (request, env, forms: Answer.forms) => {
   let early = error => Answer.refused(error, forms.answer)
   let store = Kept.management(env.db)
   let given = env.binding->String.trim->String.toLowerCase
+  // A caller not yet held to a token is told nothing of why its token could not be read.
   let held = switch Bearer.hashOf(header("authorization")) {
-  | Some(hash) => await Management.holds(store, ~given, hash)
-  | None => false
+  | Some(hash) =>
+    switch await Management.holds(store, ~given, hash) {
+    | held => Ok(held)
+    | exception Kept.Unkept(_) => Error()
+    | exception JsExn(_) => Error()
+    }
+  | None => Ok(false)
   }
   let path = Web.parts(request->Web.url)->Web.pathname
   let parts = path->String.split("/")
   switch (held, parts, request->Web.method_, forms.body) {
-  | (false, _, _, _) => early(Answer.error("denied"))
-  | (true, ["", interface, operation], "POST", Some(form)) =>
+  | (Error(), _, _, _) => early(Answer.error("fault", ~message="the call's token was not checked"))
+  | (Ok(false), _, _, _) => early(Answer.error("denied"))
+  | (Ok(true), ["", interface, operation], "POST", Some(form)) =>
     let bytes = await request->Web.bytesOf
     switch interface {
     | "management" =>
@@ -229,9 +302,9 @@ let serve = async (request, env, forms: Answer.forms) => {
       }
     | other => early(Answer.malformed(`no interface ${other}, one of ${served}`))
     }
-  | (true, ["", _, _], "POST", None) =>
+  | (Ok(true), ["", _, _], "POST", None) =>
     early(Answer.malformed("a call's body is application/json or application/cbor"))
-  | (true, _, _, _) => early(Answer.malformed("a call is POST /{interface}/{operation}"))
+  | (Ok(true), _, _, _) => early(Answer.malformed("a call is POST /{interface}/{operation}"))
   }
 }
 

@@ -2,23 +2,37 @@
  * A fake of Cloudflare's API, which records what it is asked and keeps what each Worker runs, and
  * a store in memory, as the driver's D1 would keep deployments.
  */
+
+/** A call the fake refuses, before a Worker is made or once it is. */
+type step = Upload | Deploy
+
 /** The fake account, each Worker by its versions, the one it runs, and every call asked of it. */
 type account = {
   versions: Map.t<string, Function.upload>,
   runs: Map.t<string, string>,
   asked: array<string>,
-  refusing: ref<option<Function.refused>>,
+  refusing: ref<option<(step, Function.refused)>>,
 }
+
+/** The version a Worker made runs first, the stub, which holds no tag. */
+let made = "made"
 
 let fake = () => {
   let account = {versions: Map.make(), runs: Map.make(), asked: [], refusing: ref(None)}
-  let refused = () => account.refusing.contents->Option.map(r => Error(r))
+  let refused = step =>
+    switch account.refusing.contents {
+    | Some((refusing, r)) if refusing == step => Some(Error(r))
+    | Some(_) | None => None
+    }
   let api: Function.api = {
     upload: async (name, upload) => {
       account.asked->Array.push(`upload ${name} ${upload.tag}`)
-      switch refused() {
+      switch refused(Upload) {
       | Some(refused) => refused
       | None =>
+        if !(account.runs->Map.has(name)) {
+          account.runs->Map.set(name, made)
+        }
         let id = `v${Int.toString(account.versions->Map.size + 1)}`
         account.versions->Map.set(id, upload)
         Ok(id)
@@ -26,8 +40,12 @@ let fake = () => {
     },
     deploy: async (name, id) => {
       account.asked->Array.push(`deploy ${name} ${id}`)
-      account.runs->Map.set(name, id)
-      Ok()
+      switch refused(Deploy) {
+      | Some(refused) => refused
+      | None =>
+        account.runs->Map.set(name, id)
+        Ok()
+      }
     },
     running: async name => Ok(
       account.runs
@@ -42,7 +60,7 @@ let fake = () => {
       account.runs->Map.delete(name)->ignore
       Ok()
     },
-    subdomain: async () => Ok("my-subdomain"),
+    address: async name => Ok(`${name}.example`),
   }
   (account, api)
 }

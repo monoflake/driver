@@ -238,11 +238,12 @@ let deleted = async (account, name) =>
   | Failed(why) => Error(fault(why))
   }
 
-let subdomain = async account =>
+/** The address a Worker answers at, its name on the account's subdomain of workers.dev. */
+let address = async (account, name) =>
   switch await call(account, ~method="GET", "/workers/subdomain") {
   | Done(result) =>
     switch result->member("subdomain")->Option.flatMap(JSON.Decode.string) {
-    | Some(subdomain) => Ok(subdomain)
+    | Some(subdomain) => Ok(`${name}.${subdomain}.workers.dev`)
     | None => Error(fault("the account's workers.dev subdomain is named nowhere"))
     }
   | Absent => Error(fault("the account has no workers.dev subdomain"))
@@ -256,6 +257,6 @@ let api = (~send, ~accountId, ~token): api => {
     deploy: (name, id) => deployed(account, name, id),
     running: name => ran(account, name),
     delete: name => deleted(account, name),
-    subdomain: () => subdomain(account),
+    address: name => address(account, name),
   }
 }
