@@ -192,14 +192,21 @@ pub fn sample(path: &str) -> Value {
 	serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap()
 }
 
-/// Whether a value is as a sample expects it, `{"$any": null}` standing for any value, and an
-/// object holding at least the keys it writes, as monoflake/platform's runner reads one, RFC p8e8k.
+/// Whether an expected value is `{"$absent": null}`.
+pub fn absent(expected: &Value) -> bool {
+	expected.as_object().is_some_and(|o| o.contains_key("$absent"))
+}
+
+/// Whether a value is as a sample expects it, `{"$any": null}` standing for any value, `{"$absent":
+/// null}` a key left out, and an object holding at least the keys it writes, as monoflake/platform's
+/// runner reads one, RFC p8e8k.
 pub fn matches(expected: &Value, actual: &Value) -> bool {
 	match (expected, actual) {
 		(Value::Object(e), _) if e.contains_key("$any") => true,
-		(Value::Object(e), Value::Object(a)) => {
-			e.iter().all(|(k, v)| a.get(k).is_some_and(|w| matches(v, w)))
-		}
+		(Value::Object(e), Value::Object(a)) => e.iter().all(|(k, v)| match a.get(k) {
+			Some(w) => matches(v, w),
+			None => absent(v),
+		}),
 		(Value::Array(e), Value::Array(a)) => {
 			e.len() == a.len() && e.iter().zip(a).all(|(v, w)| matches(v, w))
 		}

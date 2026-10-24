@@ -158,8 +158,12 @@ mod tests {
 		items: Vec<ManagementItem>,
 		now: u64,
 	) {
-		let input =
-			ManagementApply { generation: Uint53::new(generation).unwrap(), items, tokens: None };
+		let input = ManagementApply {
+			generation: Uint53::new(generation).unwrap(),
+			items,
+			tokens: None,
+			adopted: None,
+		};
 		listed.apply(&input, &machine(), mount, now).unwrap();
 	}
 
@@ -252,6 +256,7 @@ mod tests {
 			generation: Uint53::new(1).unwrap(),
 			items: vec![container(1, 3000), container(2, 2000)],
 			tokens: None,
+			adopted: None,
 		};
 		let refused = listed.apply(&input, &machine(), &mount, 0).unwrap_err();
 		assert_eq!(refused.reason, "beyond_host");

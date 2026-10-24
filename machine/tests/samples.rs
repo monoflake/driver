@@ -76,7 +76,10 @@ fn captured(expect: &Value, answer: &Value, captures: &mut BTreeMap<String, Valu
 				true
 			}
 			(Value::Object(e), Value::Object(a)) if !e.contains_key("$any") => {
-				e.iter().all(|(k, v)| a.get(k).is_some_and(|w| kept(v, w, captures)))
+				e.iter().all(|(k, v)| match a.get(k) {
+					Some(w) => kept(v, w, captures),
+					None => common::absent(v),
+				})
 			}
 			_ => common::matches(expected, actual),
 		}
@@ -117,7 +120,7 @@ fn ran(driver: &Started, binding: u32, interface: &str, case: &Value) {
 fn every_management_sample_holds() {
 	let cases: Vec<Value> =
 		MANAGEMENT.iter().flat_map(|file| sample(file)["cases"].as_array().unwrap().clone()).collect();
-	assert_eq!(cases.len(), 11);
+	assert_eq!(cases.len(), 12);
 	let driver = Started::with("management", u32::try_from(cases.len()).unwrap());
 	for (binding, case) in (1..).zip(&cases) {
 		ran(&driver, binding, "management", case);

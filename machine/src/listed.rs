@@ -13,7 +13,8 @@ use driver_machine_object::{Bucket, MOST, Open as _};
 use driver_machine_volume::{BUCKETS, VOLUMES, Volume, place};
 use envelope::contracts::{
 	ManagementApply, ManagementCapacity, ManagementDescribed, ManagementEnd, ManagementEnded,
-	ManagementHeld, ManagementHolding, ManagementItem, ManagementPolicy, ManagementState,
+	ManagementHeld, ManagementHolding, ManagementItem, ManagementKind, ManagementPolicy,
+	ManagementState,
 };
 use envelope::{Bounded, Uint53};
 
@@ -24,6 +25,14 @@ const WEEK: u32 = 604_800;
 
 /// The longest grace, a year of 365 days in seconds.
 const YEAR: u32 = 31_536_000;
+
+/// The kinds it serves today, RFC dg903 leaving an instance and RFC 4elqc a database waiting.
+const OFFERED: [ManagementKind; 4] = [
+	ManagementKind::Function,
+	ManagementKind::Container,
+	ManagementKind::Object,
+	ManagementKind::Volume,
+];
 
 impl Listed {
 	/// A binding's list before anything is applied.
@@ -322,6 +331,10 @@ impl Manage for Listed {
 		if input.generation.get() < self.generation {
 			return held(self.generation);
 		}
+		// A machine holds no resource of its own to adopt, so a list naming one is beyond it whole.
+		if input.adopted.as_ref().is_some_and(|adopted| !adopted.is_empty()) {
+			return Err(refused("beyond_host", "a machine has no resource to adopt"));
+		}
 		self.bounded(&input.items, machine, make)?;
 		let making: Vec<&ManagementItem> = input.items.iter().filter(|i| !self.kept(i)).collect();
 		// A database waits for its block, RFC 4elqc, and nothing of the list is made before it.
@@ -384,6 +397,9 @@ impl Manage for Listed {
 			items: self.items.iter().map(holding).collect::<Result<_, _>>()?,
 			// The revision it was built from, given at its build, none where it was given none.
 			revision: option_env!("DRIVER_REVISION").map(String::from),
+			kinds: Some(OFFERED.to_vec()),
+			adopted: None,
+			warnings: None,
 		})
 	}
 
@@ -410,7 +426,8 @@ pub(crate) mod tests {
 	use driver_machine_object::Objects as _;
 	use driver_machine_volume::{BUCKETS, VOLUMES, Volume, place};
 	use envelope::contracts::{
-		ManagementApply, ManagementCapacity, ManagementEnd, ManagementItem, ManagementPolicy,
+		ManagementAdoptable, ManagementAdopted, ManagementAdoptedFor, ManagementApply,
+		ManagementCapacity, ManagementEnd, ManagementItem, ManagementKind, ManagementPolicy,
 		ManagementState, ObjectRead, ObjectWrite,
 	};
 	use envelope::{Bounded as _, Uint53};
@@ -506,7 +523,8 @@ pub(crate) mod tests {
 		items: Vec<ManagementItem>,
 		now: u64,
 	) -> Result<(), &'static str> {
-		let input = ManagementApply { generation: sized(generation), items, tokens: None };
+		let input =
+			ManagementApply { generation: sized(generation), items, tokens: None, adopted: None };
 		listed.apply(&input, &machine(), mount, now).map(drop).map_err(|r| r.reason)
 	}
 
@@ -640,5 +658,42 @@ pub(crate) mod tests {
 		// A volume not found is made again by the next list.
 		apply(&mut again, &mount, 2, vec![object(1, 1024), volume(2, 64)], 0).unwrap();
 		assert!(matches!(state(&again, 2), ManagementState::Made { .. }));
+	}
+
+	#[test]
+	fn a_list_naming_an_adopted_resource_is_beyond_the_host_whole_and_an_empty_one_is_not() {
+		let mount = Mount::new("adopted");
+		let mut listed = Listed::new(7);
+		let adopted = ManagementAdopted {
+			kind: ManagementAdoptable::Object,
+			name: "bucket.example".into(),
+			r#for: ManagementAdoptedFor::Item { id: 1 },
+		};
+		let input = |adopted| ManagementApply {
+			generation: sized(1),
+			items: vec![volume(1, 64)],
+			tokens: None,
+			adopted: Some(adopted),
+		};
+		let refused = listed.apply(&input(vec![adopted]), &machine(), &mount, 0).unwrap_err();
+		assert_eq!(refused.reason, "beyond_host");
+		assert!(listed.items.is_empty() && listed.generation == 0 && asked(&mount).is_empty());
+		listed.apply(&input(Vec::new()), &machine(), &mount, 0).unwrap();
+		assert_eq!(listed.generation, 1);
+		assert_eq!(listed.items.len(), 1);
+	}
+
+	#[test]
+	fn a_machine_describes_the_kinds_it_serves_and_no_adopted_list_or_warning() {
+		let mount = Mount::new("kinds");
+		let described = Listed::new(7).describe(&mount, 0).unwrap();
+		let served = [
+			ManagementKind::Function,
+			ManagementKind::Container,
+			ManagementKind::Object,
+			ManagementKind::Volume,
+		];
+		assert_eq!(described.kinds.as_deref(), Some(served.as_slice()));
+		assert!(described.adopted.is_none() && described.warnings.is_none());
 	}
 }
