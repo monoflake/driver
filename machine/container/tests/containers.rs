@@ -420,6 +420,11 @@ async fn its_spec_holds_its_capacity_its_network_and_what_it_is_given() {
 		})
 	);
 	assert_eq!(std::fs::read(open.join("TOKEN")).unwrap(), b"hidden");
+	// The machine's resolver is bound read only, as an image may hold none.
+	let resolver =
+		s["mounts"].as_array().unwrap().iter().find(|m| m["destination"] == "/etc/resolv.conf");
+	assert_eq!(resolver.unwrap()["source"], "/etc/resolv.conf");
+	assert!(resolver.unwrap()["options"].as_array().unwrap().iter().any(|o| o == "ro"));
 	let sealed = std::fs::read(driver.state.join("secrets/b1").join(&spec.id).join("TOKEN")).unwrap();
 	assert!(!sealed.windows(6).any(|w| w == b"hidden"));
 	assert!(!s.to_string().contains("hidden"));

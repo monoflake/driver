@@ -160,6 +160,9 @@ fn environment(image: &[String], over: &[String]) -> Vec<String> {
 	env
 }
 
+/// The machine's resolver, bound so a container whose image holds none resolves names as it does.
+const RESOLVER: &str = "/etc/resolv.conf";
+
 /// The spec, or why the image cannot run.
 pub(super) fn build(asked: &Asked<'_>) -> Result<Value, Refused> {
 	let args: Vec<&String> = asked.config.entrypoint.iter().chain(&asked.config.cmd).collect();
@@ -211,6 +214,12 @@ pub(super) fn build(asked: &Asked<'_>) -> Result<Value, Refused> {
 			"type": "tmpfs",
 			"source": "tmpfs",
 			"options": ["nosuid", "strictatime", "mode=755", "size=65536k"],
+		}),
+		json!({
+			"destination": RESOLVER,
+			"type": "bind",
+			"source": RESOLVER,
+			"options": ["rbind", "ro", "nosuid", "nodev", "noexec"],
 		}),
 	];
 	if let Some(secrets) = asked.secrets {
