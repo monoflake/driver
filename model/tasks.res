@@ -35,7 +35,12 @@ let given = Base.args->Array.slice(~start=3)
 switch Base.args->Array.get(2) {
 | Some("check") =>
   let status = platform()
-  Tree.check(Filling.tree(), ~title="Driver blocks held", ~work="model/plan/progress.res")
+  Tree.check(
+    Filling.tree(),
+    ~title="Driver blocks held",
+    ~work="model/plan/progress.res",
+    ~provided=Driver_provided.blocks->Dict.keysToArray,
+  )
   Base.shownInWork()
   Base.process->Base.setExitCode(status != 0 || Base.failed.contents ? 1 : 0)
 | Some("brief") => Tree.brief(Filling.tree(), given)
