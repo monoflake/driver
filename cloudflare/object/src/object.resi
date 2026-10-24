@@ -1,6 +1,6 @@
 /***
- * driver(cloudflare)'s object, the Worker `object` over the binding's one bucket `objects`, what it
- * holds counted in the driver's D1, RFC nrs5v. This file is its interface, the model's.
+ * driver(cloudflare)'s object, the Worker `object-<install id>` over the binding's one bucket
+ * `objects-<install id>` counted in the driver's D1, RFC nrs5v. This file is its interface.
  */
 
 /** A D1 database binding, as the Worker is given it. */
@@ -9,11 +9,12 @@ type database
 /** An R2 bucket binding, as the Worker is given it. */
 type bucket
 
-/** What the Worker is given, the D1 `driver`, the bucket `objects` and the binding's hash. */
+/** What the Worker is given, the driver's D1, its bucket, the binding's hash and its install id. */
 type env = {
   @as("DB") db: database,
   @as("OBJECTS") objects: bucket,
   @as("BINDING") binding: string,
+  @as("INSTALL_ID") installId?: string,
 }
 
 /**

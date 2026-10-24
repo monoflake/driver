@@ -6,13 +6,18 @@
 /** A D1 database binding, as the Worker is given it. */
 type database
 
-/** What the Worker is given, its D1 `driver`, its token, its account and the binding's hash. */
+/**
+ * What the Worker is given, its D1, its token, its account, the binding's hash, its install id and
+ * the kinds it offers, each of the last two absent only where install broke, RFC nrs5v.
+ */
 type env = {
   @as("DB") db: database,
   @as("API_TOKEN") apiToken: string,
   @as("ACCOUNT_ID") accountId: string,
   @as("BINDING") binding: string,
   @as("DRIVER_REVISION") revision?: string,
+  @as("INSTALL_ID") installId?: string,
+  @as("KINDS") kinds?: string,
 }
 
 /**

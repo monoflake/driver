@@ -13,6 +13,9 @@ type capacity =
   | Object({size: float})
   | Database({size: float})
 
+/** A kind a binding may offer, chosen at install, RFC nrs5v. */
+type kind = [#function | #object | #database]
+
 /** An item of the list, by its `capacity` id, its credentials each a BLAKE3 in hex. */
 type item = {id: float, capacity: capacity, credentials: array<string>}
 
@@ -39,11 +42,12 @@ type kept = {
 type store = {read: unit => promise<kept>, write: kept => promise<unit>}
 
 /**
- * The list taken where its generation is not behind, `tokens` the binding's in force by hash, and
- * the Workers `object`'s and `database`'s addresses, each asked only where the list holds its item.
+ * The list taken where its generation is not behind, `tokens` the binding's in force by hash, a
+ * list naming a kind not `offered` refused whole, and the object and database Workers' addresses.
  */
 let apply: (
   store,
+  ~offered: array<kind>,
   ~now: float,
   ~generation: float,
   ~items: array<item>,
