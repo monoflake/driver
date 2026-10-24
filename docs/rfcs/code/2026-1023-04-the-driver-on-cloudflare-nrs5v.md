@@ -170,6 +170,36 @@ Decided by the author on 2026-10-23, from the research the Options below record.
     `after` is R2's `startAfter`; a range past an object's end is read empty with its size; an
     object call's body is bounded as driver(machine)'s `LARGEST_OBJECT`, refused as `malformed`
     past it.
+  - **What is cleared and what is counted, after review**: a prefix or a row is cleared only where
+    its item is absent from the driver's `items`, read after the bucket was listed, so an item that
+    exists keeps its keys though it holds the bucket no more, until the driver removes it; after a
+    put, its row is settled to what R2 holds for the key. Two gaps are left: where the put and the
+    head after it both fail, the row stays as counted before; and a put settling its row between a
+    delete's removal of the key and of its row leaves that object uncounted, closing which would
+    ask a head after every delete.
+
+  The third slice's, database on D1, each provisional, chosen by the advisor on 2026-10-24:
+  - **A binding holds one database**, as it holds one bucket: a list holding two `database` items
+    or more is refused whole as `beyond_host`, and one past 10 GB too, D1's bound on a database; a
+    new item is failed as `beyond_host` while an older one unasked still holds it.
+  - **Names.** The block `cloudflare/database`, the Worker `database` and its D1 database
+    `database`, made with the rest by `install` with the hint `wnam`, answering
+    `POST /database/{operation}`, the binding's token held as the driver holds it; a `database`
+    item is `made` at the Worker's address.
+  - **A new item holds nothing of an old one.** The driver's D1 records which item the database
+    is held for, and the first request for another drops every object a user made in it, tables,
+    indexes, views and triggers, and none named `_cf_` or `sqlite_`; a rewind to a moment before
+    the item was made is refused as `beyond_window`. What an ended item left stays while no
+    request comes.
+  - **A rewind is Time Travel's restore**, a REST call, by a token of its own holding D1 Edit
+    alone, the Worker `database`'s secret `API_TOKEN`, which `install` reads from
+    `DATABASE_API_TOKEN`; the account's id and the database's are its variables. Thirty days are
+    kept, the paid plan's.
+  - **A database's size** is read from each execute's `size_after`, and once it holds the item's
+    size a write is refused as `storage_full`, so it may pass the size by one batch.
+  - **Its samples** are `statements.json`, `batches.json`, `limits.json` and `rewinds.json`;
+    `copies.json` is left out, since the driver sees one copy of a D1 database and cannot be
+    read-only below a majority of copies.
 
   What makes it on an account, provisional, chosen by the advisor on 2026-10-24:
   - **`mise run install`**, `scripts/install.res` beside `archive` and `dev`, makes what is absent
