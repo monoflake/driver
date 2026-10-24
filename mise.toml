@@ -76,7 +76,7 @@ flag "-n --dry-run" help="Say what would be done and change nothing"
 run = 'rescript build > /dev/null && node scripts/dev.res.mjs "$usage_host" ${usage_watch:+--watch} ${usage_dry_run:+--dry-run}'
 
 # What a bound account runs of driver(cloudflare), made where absent, nrs5v; its inputs are the
-# environment's and the binding's token on stdin.
+# environment's, DRIVER_LOCATION placing its parts, and the binding's token on stdin.
 [tasks.install]
 description = "Make driver(cloudflare) on the account wrangler is given, each part where it is absent: `install [--dry-run]`"
 usage = 'flag "-n --dry-run" help="Print each wrangler command it would run, a secret by its name alone, and run none"'

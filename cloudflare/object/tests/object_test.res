@@ -90,6 +90,30 @@ test("a delete between a write's count and its put leaves the object counted", a
   deepEqual((keys(served.env.objects), counted(served.sqlite)), (["1/a"], [(1., "a", 5.)]))
 })
 
+test("a delete between a write's put and its count leaves the object uncounted", async () => {
+  let served = Served.make(~size=10.)
+  served.env.objects->before("head", async () =>
+    ignore(await served->Served.call("delete", `{"name": "a"}`))
+  )
+  deepEqual(await served->write("a", 5), (200, success("{}")))
+  deepEqual((keys(served.env.objects), counted(served.sqlite)), ([], []))
+})
+
+test("a put and its head both failing leave the count as it stood before the write", async () => {
+  let served = Served.make(~size=10.)
+  ignore(await served->write("a", 3))
+  served.clock := 1000.
+  served.env.objects->failing("put", "put: We encountered an internal error. (10001)")
+  served.env.objects->failing("head", "head: We encountered an internal error. (10001)")
+  deepEqual(reasonOf(await served->write("a", 6)), (500, Some("fault")))
+  deepEqual(counted(served.sqlite), [(1., "a", 3.)])
+  // An object never counted before is counted at nothing again.
+  served.env.objects->failing("put", "put: We encountered an internal error. (10001)")
+  served.env.objects->failing("head", "head: We encountered an internal error. (10001)")
+  deepEqual(reasonOf(await served->write("b", 4)), (500, Some("fault")))
+  deepEqual(counted(served.sqlite), [(1., "a", 3.)])
+})
+
 test("a write within a second of the last to its key is a fault asking it again", async () => {
   let served = Served.make(~size=10.)
   deepEqual(await served->write("a", 3), (200, success("{}")))
@@ -264,7 +288,7 @@ test(
   },
 )
 
-test("a clear spares an item made and written to after it listed the bucket", async () => {
+test("a clear spares an item made and written to just before it lists the bucket", async () => {
   let served = Served.make()
   served.env.objects->before("prefixes", async () => {
     served->Served.item(~id=2., 1024.)
@@ -283,7 +307,7 @@ test("a clear spares an item made and written to after it listed the bucket", as
   deepEqual(counted(served.sqlite), [(2., "a", 5.)])
 })
 
-test("what no item made now holds is cleared a batch of 1000 keys a request", async () => {
+test("what belongs to no item in items is cleared a batch of 1000 keys a request", async () => {
   let served = Served.make(~size=1024.)
   let names = Array.fromInitializer(~length=1500, at => `n${Int.toString(at)}`)
   for at in 0 to 1499 {
@@ -307,7 +331,7 @@ test("what no item made now holds is cleared a batch of 1000 keys a request", as
   deepEqual((keys(served.env.objects), counted(served.sqlite)), (["2/a"], [(2., "a", 1.)]))
 })
 
-test("rows left of an item no longer made are cleared once its keys are gone", async () => {
+test("rows of an item absent from items are cleared once its keys are gone", async () => {
   let served = Served.make()
   served->Served.item(~id=2., 1024.)
   served.sqlite->run("INSERT INTO objects (item, name, size) VALUES (1, 'a', 5)", [])

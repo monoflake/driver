@@ -1,6 +1,6 @@
 /***
- * What belongs to no item holding the bucket, deleted at most a batch of keys and their rows on
- * each request, so clearing goes on over requests and never runs past one, RFC nrs5v.
+ * What belongs to no item `items` holds, deleted at most a batch of keys and their rows on each
+ * request, so clearing goes on over requests and never runs past one, RFC nrs5v.
  */
 
 /** The most keys one request deletes, as many as R2 deletes in one call. */

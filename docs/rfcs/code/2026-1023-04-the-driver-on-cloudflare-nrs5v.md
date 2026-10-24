@@ -174,7 +174,8 @@ Decided by the author on 2026-10-23, from the research the Options below record.
     its item is absent from the driver's `items`, read after the bucket was listed, so an item that
     exists keeps its keys though it holds the bucket no more, until the driver removes it; after a
     put, its row is settled by a head of the key, forgotten where the key is gone, and where the put
-    and that head both fail it goes back to what it counted before. One gap is left: a put settling
+    and that head both fail it goes back to what it counted before; where the put succeeds and
+    the head fails, it counts what was written. One gap is left: a put settling
     its row between a delete's removal of the key and of its row leaves that object uncounted,
     closing which would ask a head after every delete.
   - **A binding holds one database**, as it holds one bucket: a list holding two `database` items

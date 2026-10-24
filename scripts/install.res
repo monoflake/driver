@@ -12,14 +12,14 @@ let root = join([fileURLToPath(importMetaUrl), "..", ".."])
 let database = "driver"
 let bucket = "objects"
 
-/** Where the database and bucket are placed on the test account, western North America. */
-let located = "wnam"
-
 /** What it is given, read from the environment alone, as this repository is public. */
 let credential = "CLOUDFLARE_API_TOKEN"
 let account = "CLOUDFLARE_ACCOUNT_ID"
 let driverToken = "DRIVER_API_TOKEN"
 let inputs = [credential, account, driverToken]
+
+/** The hint the database and the bucket are placed by, none given letting Cloudflare place them. */
+let location = "DRIVER_LOCATION"
 
 /** A Worker, its directory beneath the root and the secrets it is given by name. */
 type worker = {name: string, directory: array<string>, secrets: array<string>}
@@ -79,6 +79,29 @@ let commanded = (w, ~root, ~cwd, arguments) => {
   env: quiet(w.env),
 }
 
+/** A Worker's package compiled in its directory, so its bundle is this checkout's source. */
+let compiled = (w, ~dry, ~root, ~directory, worker) => {
+  let build = {
+    program: join([root, "node_modules", ".bin", "rescript"]),
+    args: ["build"],
+    cwd: directory,
+    env: quiet(w.env),
+  }
+  if dry {
+    w.say(`would run ${shown(build)} in ${worker.directory->Array.join("/")}`)
+    Ok()
+  } else {
+    w.run(build)->Result.map(_ => w.say(`the Worker ${worker.name} built`))
+  }
+}
+
+/** The arguments placing a part by the hint `DRIVER_LOCATION` gives, none where it gives none. */
+let placed = w =>
+  switch value(w.env, location) {
+  | Some(hint) => ["--location", hint]
+  | None => []
+  }
+
 /** A JSON object's member, or null. */
 let member = (json, name) =>
   json->JSON.Decode.object->Option.flatMap(o => o->Dict.get(name))->Option.getOr(JSON.Null)
@@ -127,7 +150,7 @@ let listedBuckets = body =>
 /** The database made with its hint where the account lists none by its name, and its id. */
 let databaseOf = (w, ~dry, ~root) => {
   let list = commanded(w, ~root, ~cwd=root, ["d1", "list", "--json"])
-  let create = commanded(w, ~root, ~cwd=root, ["d1", "create", database, "--location", located])
+  let create = commanded(w, ~root, ~cwd=root, ["d1", "create", database, ...placed(w)])
   if dry {
     w.say(`would run ${shown(list)}, and ${shown(create)} unless ${database} is listed`)
     Ok("<the database's id>")
@@ -156,12 +179,7 @@ let databaseOf = (w, ~dry, ~root) => {
 /** The bucket made with its hint where the account lists none by its name. */
 let bucketOf = (w, ~dry, ~root) => {
   let list = commanded(w, ~root, ~cwd=root, ["r2", "bucket", "list"])
-  let create = commanded(
-    w,
-    ~root,
-    ~cwd=root,
-    ["r2", "bucket", "create", bucket, "--location", located],
-  )
+  let create = commanded(w, ~root, ~cwd=root, ["r2", "bucket", "create", bucket, ...placed(w)])
   if dry {
     w.say(`would run ${shown(list)}, and ${shown(create)} unless ${bucket} is listed`)
     Ok()
@@ -212,8 +230,10 @@ let configured = (given, ~id, ~account) =>
     Ok(JSON.stringify(JSON.Object(filled), ~space=2))
   }
 
-/** `next` run with a Worker's configuration of the moment written, removed after whatever it
- * answered. */
+/**
+ * `next` run with a Worker's configuration of the moment written, removed after whatever it
+ * answered or threw, a throw answered as an error.
+ */
 let within = (w, ~dry, ~root, ~id, worker, next) => {
   let directory = join([root, ...worker.directory])
   let config = join([directory, moment])
@@ -223,19 +243,20 @@ let within = (w, ~dry, ~root, ~id, worker, next) => {
     w.say(`  and ACCOUNT_ID filled in, and remove it once ${worker.name} is done`)
     next(directory, config)
   } else {
-    configured(
+    let account = value(w.env, account)->Option.getOr("")
+    let done = switch configured(
       readFileSync(join([directory, "wrangler.json"])),
       ~id,
-      ~account=value(w.env, account)->Option.getOr(""),
+      ~account,
     )->then(text => {
       writeFileSync(config, text)
-      let done = switch next(directory, config) {
-      | done => done
-      | exception JsExn(e) => Error(e->JsExn.message->Option.getOr("an exception"))
-      }
-      rmSync(config, {recursive: false, force: true})
-      done
-    })
+      next(directory, config)
+    }) {
+    | done => done
+    | exception JsExn(e) => Error(e->JsExn.message->Option.getOr("an exception"))
+    }
+    rmSync(config, {recursive: false, force: true})
+    done
   }
 }
 
@@ -353,7 +374,9 @@ let deployed = (w, ~dry, ~root, ~directory, ~config, ~scratch, ~hashed, worker) 
   let deploy = tag =>
     commanded(w, ~root, ~cwd=directory, ["deploy", "--config", config, "--tag", tag])
   let secrets = () => secretsPut(w, ~dry, ~root, ~directory, ~config, ~hashed, worker)
+  let build = () => compiled(w, ~dry, ~root, ~directory, worker)
   if dry {
+    build()->ignore
     let bundle = commanded(
       w,
       ~root,
@@ -366,7 +389,9 @@ let deployed = (w, ~dry, ~root, ~directory, ~config, ~scratch, ~hashed, worker) 
     w.say(`would run ${shown(deploy("<the hash>"))}`)
     secrets()
   } else {
-    bundled(w, ~root, ~directory, ~config, ~out)->then(tag => {
+    build()
+    ->then(() => bundled(w, ~root, ~directory, ~config, ~out))
+    ->then(tag => {
       let deployOnce = () =>
         w.run(deploy(tag))->Result.map(_ => w.say(`the Worker ${worker.name} deployed, ${tag}`))
       switch w.run(versions) {
@@ -402,6 +427,10 @@ let install = (w, ~dry, ~root=root) => {
     hashOfStdin(w)->then(hashed => {
       if hashed == None {
         w.say(`nothing on stdin, so ${binding} is passed over on each Worker`)
+      }
+      switch value(w.env, location) {
+      | Some(hint) => w.say(`the database and the bucket placed by the hint ${hint}, ${location}`)
+      | None => w.say(`no ${location}, so Cloudflare places the database and the bucket`)
       }
       let scratch = dry ? "<a directory of its own>" : w.scratch()
       let installed = databaseOf(w, ~dry, ~root)->then(id =>

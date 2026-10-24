@@ -72,7 +72,9 @@ let answered = (account, command: Install.command) => {
         ),
       ),
     )
-  | ("wrangler", list{"d1", "create", name, "--location", "wnam"}) =>
+  | ("rescript", list{"build"}) => Ok("")
+  | ("wrangler", list{"d1", "create", name})
+  | ("wrangler", list{"d1", "create", name, "--location", _}) =>
     account.databases->Array.push(name)
     Ok("")
   | ("wrangler", list{"d1", "migrations", "apply", "driver", "--remote", "--config", config}) =>
@@ -83,7 +85,8 @@ let answered = (account, command: Install.command) => {
       ->Array.map(name => `name:           ${name}\ncreation_date:  2026-10-23T00:00:00.000Z`)
       ->Array.join("\n\n"),
     )
-  | ("wrangler", list{"r2", "bucket", "create", name, "--location", "wnam"}) =>
+  | ("wrangler", list{"r2", "bucket", "create", name})
+  | ("wrangler", list{"r2", "bucket", "create", name, "--location", _}) =>
     account.buckets->Array.push(name)
     Ok("")
   | ("wrangler", list{"deploy", "--dry-run", "--outdir", out, "--config", config}) =>
@@ -191,9 +194,14 @@ let make = (~env=credentials, ~stdin=token, ~answer) => {
   {world, ran, said, scratched}
 }
 
-/** Each line run with the paths a run makes written as names. */
+/** Each line run with the paths a run makes written as names, a build beside its Worker's. */
 let plain = faked =>
   faked.ran->Array.map(command => {
+    let within = switch Host.basename(command.program) {
+    | "rescript" if command.cwd->String.endsWith("/cloudflare/object") => " in <object>"
+    | "rescript" if command.cwd->String.endsWith("/cloudflare") => " in <driver>"
+    | _ => ""
+    }
     let words = line(command)->String.split(" ")
     words
     ->Array.mapWithIndex((word, i) =>
@@ -209,7 +217,7 @@ let plain = faked =>
         word
       }
     )
-    ->Array.join(" ")
+    ->Array.join(" ") ++ within
   })
 
 /** Whether any argument run or any line said holds a secret. */
@@ -227,17 +235,19 @@ let installed = (~env=?, ~stdin=?, account, root) => {
 
 let first = [
   "wrangler d1 list --json",
-  "wrangler d1 create driver --location wnam",
+  "wrangler d1 create driver",
   "wrangler d1 list --json",
   "wrangler d1 migrations apply driver --remote --config <driver>",
   "wrangler r2 bucket list",
-  "wrangler r2 bucket create objects --location wnam",
+  "wrangler r2 bucket create objects",
+  "rescript build in <driver>",
   "wrangler deploy --dry-run --outdir <out> --config <driver>",
   "wrangler versions list --json --config <driver>",
   "wrangler deploy --config <driver> --tag <tag>",
   "wrangler secret list --config <driver>",
   "wrangler secret put API_TOKEN --config <driver>",
   "wrangler secret put BINDING --config <driver>",
+  "rescript build in <object>",
   "wrangler deploy --dry-run --outdir <out> --config <object>",
   "wrangler versions list --json --config <object>",
   "wrangler deploy --config <object> --tag <tag>",
@@ -249,9 +259,11 @@ let again = [
   "wrangler d1 list --json",
   "wrangler d1 migrations apply driver --remote --config <driver>",
   "wrangler r2 bucket list",
+  "rescript build in <driver>",
   "wrangler deploy --dry-run --outdir <out> --config <driver>",
   "wrangler versions list --json --config <driver>",
   "wrangler secret list --config <driver>",
+  "rescript build in <object>",
   "wrangler deploy --dry-run --outdir <out> --config <object>",
   "wrangler versions list --json --config <object>",
   "wrangler secret list --config <object>",
@@ -271,9 +283,11 @@ test("a dry run runs nothing, writes nothing and shows no secret", () => {
   ok(moments(root)->Array.every(path => !Host.existsSync(path)))
   ok(
     [
-      "wrangler d1 create driver --location wnam",
+      "wrangler d1 create driver",
       "wrangler d1 migrations apply driver --remote",
-      "wrangler r2 bucket create objects --location wnam",
+      "wrangler r2 bucket create objects",
+      "rescript build in cloudflare",
+      "rescript build in cloudflare/object",
       "wrangler deploy --config",
       "wrangler secret put API_TOKEN",
       "wrangler secret put BINDING",
@@ -433,6 +447,116 @@ test("a token not of a binding's form is refused before anything runs", () => {
     ok(Install.install(faked.world, ~dry=false, ~root)->Result.isError, ~message=stdin)
     deepEqual(faked.ran, [])
   })
+})
+
+test("each Worker is built in its own directory before it is bundled", () => {
+  let root = fixture()
+  let (faked, result) = installed(empty(), root)
+  deepEqual(result, Ok())
+  let lines = plain(faked)
+  let at = line => lines->Array.indexOf(line)
+  ["driver", "object"]->Array.forEach(name => {
+    let built = at(`rescript build in <${name}>`)
+    ok(
+      built >= 0 && built < at(`wrangler deploy --dry-run --outdir <out> --config <${name}>`),
+      ~message=lines->Array.join("\n"),
+    )
+  })
+})
+
+test("DRIVER_API_TOKEN is in no command's environment, and the rest are", () => {
+  let root = fixture()
+  let (faked, result) = installed(empty(), root)
+  deepEqual(result, Ok())
+  ok(faked.ran->Array.length > 0)
+  faked.ran->Array.forEach(command => {
+    deepEqual(command.env->Dict.get("DRIVER_API_TOKEN"), None, ~message=line(command))
+    ok(
+      !(command.env->Dict.valuesToArray->Array.includes("the-driver-token")),
+      ~message=line(command),
+    )
+    deepEqual(
+      (
+        command.env->Dict.get("CLOUDFLARE_API_TOKEN"),
+        command.env->Dict.get("CLOUDFLARE_ACCOUNT_ID"),
+      ),
+      (Some("the-author-token"), Some("the-account")),
+    )
+  })
+  deepEqual(faked.world.env->Dict.get("DRIVER_API_TOKEN"), Some("the-driver-token"))
+})
+
+/** An install whose commands are answered by the account, the one `failing` names failed. */
+let failedAt = (root, failing) => {
+  let account = empty()
+  let faked = make(~answer=command =>
+    line(command)->String.includes(failing)
+      ? Error(`${failing} failed`)
+      : answered(account, command)
+  )
+  (faked, Install.install(faked.world, ~dry=false, ~root))
+}
+
+test("a step failing after a configuration of the moment is written leaves it removed", () => {
+  let root = fixture()
+  ["d1 migrations apply", "deploy --dry-run", "secret put BINDING"]->Array.forEach(failing => {
+    let (faked, result) = failedAt(root, failing)
+    deepEqual(result, Error(`${failing} failed`))
+    ok(moments(root)->Array.every(path => !named(path)), ~message=failing)
+    ok(faked.scratched->Array.every(path => !Host.existsSync(path)), ~message=failing)
+  })
+})
+
+test("a configuration that cannot be read or written is answered, and nothing is left", () => {
+  let root = fixture()
+  Host.rmSync(
+    Host.join([root, "cloudflare", "object", "wrangler.json"]),
+    {recursive: false, force: true},
+  )
+  let (faked, result) = installed(empty(), root)
+  ok(result->Result.isError && faked.scratched != [])
+  ok(moments(root)->Array.every(path => !named(path)))
+  ok(faked.scratched->Array.every(path => !Host.existsSync(path)))
+  // A configuration of the moment linked into no directory cannot be written.
+  let root = fixture()
+  let object = Host.join([root, "cloudflare", "object", Install.moment])
+  symlinkSync(Host.join([root, "nowhere", Install.moment]), object)
+  let (faked, result) = installed(empty(), root)
+  ok(result->Result.isError && faked.scratched != [])
+  ok(moments(root)->Array.every(path => !named(path)))
+  ok(faked.scratched->Array.every(path => !Host.existsSync(path)))
+})
+
+test("the database and the bucket are placed by DRIVER_LOCATION, or by Cloudflare", () => {
+  let creates = faked =>
+    plain(faked)->Array.filter(l =>
+      l->String.includes(" create ") && l->String.startsWith("wrangler")
+    )
+  let placed = [...credentials, ("DRIVER_LOCATION", "weur")]
+  let (faked, result) = installed(~env=placed, empty(), fixture())
+  deepEqual(result, Ok())
+  deepEqual(
+    creates(faked),
+    [
+      "wrangler d1 create driver --location weur",
+      "wrangler r2 bucket create objects --location weur",
+    ],
+  )
+  let (faked, result) = installed(empty(), fixture())
+  deepEqual(result, Ok())
+  deepEqual(creates(faked), ["wrangler d1 create driver", "wrangler r2 bucket create objects"])
+  let dry = env => {
+    let faked = make(~env, ~answer=command => Error(`ran ${line(command)}`))
+    deepEqual(Install.install(faked.world, ~dry=true, ~root=fixture()), Ok())
+    faked.said
+  }
+  let said = dry(placed)
+  ok(said->Array.includes("the database and the bucket placed by the hint weur, DRIVER_LOCATION"))
+  ok(said->Array.some(l => l->String.includes("wrangler d1 create driver --location weur")))
+  ok(said->Array.some(l => l->String.includes("wrangler r2 bucket create objects --location weur")))
+  let said = dry(credentials)
+  ok(said->Array.includes("no DRIVER_LOCATION, so Cloudflare places the database and the bucket"))
+  ok(said->Array.every(l => !(l->String.includes("--location"))), ~message=said->Array.join("\n"))
 })
 
 after(() => fixtures->Array.forEach(root => Host.rmSync(root, {recursive: true, force: true})))

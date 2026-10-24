@@ -59,7 +59,8 @@ let run: (sqlite, string, array<JSON.t>) => unit = %raw(`(db, sql, values) => {
 }`)
 
 // A bucket in memory answering as R2's binding does by the references `stores.res` names.
-// A range of no bytes is not modeled, and `before` sets a hook run once before an operation.
+// A range of no bytes is not modeled, and `before` sets a hook run once before an operation,
+// which fails the operation where it throws.
 let bucket: ref<float> => Object.bucket = %raw(`clock => {
   const objects = new Map()
   const encoder = new TextEncoder()
@@ -84,7 +85,12 @@ let bucket: ref<float> => Object.bucket = %raw(`clock => {
   }
   return {
     before: (operation, run) => hooks.set(operation, run),
-    head: async key => objects.has(key) ? stored(key, objects.get(key).bytes) : null,
+    failing: (operation, message) =>
+      hooks.set(operation, async () => { throw new Error(message) }),
+    head: async key => {
+      await hook("head")
+      return objects.has(key) ? stored(key, objects.get(key).bytes) : null
+    },
     get: async (key, options) => {
       const held = objects.get(key)
       if (!held) return null
@@ -133,8 +139,12 @@ let bucket: ref<float> => Object.bucket = %raw(`clock => {
 /** Every key the bucket in memory holds, in byte order. */
 @send external keys: Object.bucket => array<string> = "keys"
 
-/** A call run once before the bucket's next `put`, `list`, or `prefixes`, a list by delimiter. */
+/** A call run once before the bucket's next `head`, `put`, `list`, or `prefixes`, a list by
+ * delimiter. */
 @send external before: (Object.bucket, string, unit => promise<unit>) => unit = "before"
+
+/** The bucket's next `head`, `put`, `list` or `prefixes` failed with a message, as R2 throws. */
+@send external failing: (Object.bucket, string, string) => unit = "failing"
 
 /** A key written to the bucket as it stands, past the Worker. */
 @send external placed: (Object.bucket, string, Uint8Array.t) => promise<unit> = "put"

@@ -9,3 +9,9 @@ external deepEqual: ('a, 'a, ~message: string=?) => unit = "deepStrictEqual"
 type made = {recursive: bool}
 @module("node:fs") external mkdirSync: (string, made) => unit = "mkdirSync"
 @module("node:fs") external copyFileSync: (string, string) => unit = "copyFileSync"
+@module("node:fs") external symlinkSync: (string, string) => unit = "symlinkSync"
+type looked = {throwIfNoEntry: bool}
+@module("node:fs") external lstatSync: (string, looked) => Nullable.t<Host.stats> = "lstatSync"
+
+/** Whether a path names anything, a link to nothing among it. */
+let named = path => lstatSync(path, {throwIfNoEntry: false})->Nullable.toOption->Option.isSome

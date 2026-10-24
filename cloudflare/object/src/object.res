@@ -53,19 +53,18 @@ let written = async (env, item: option<Held.item>, input: Contracts.ObjectWrite.
   | None => refused(Interface.write, "storage_full", ~message="the binding holds no bucket")
   | Some(item) =>
     let name = input.name
+    let before = await Held.counted(env.db, ~item=item.id, name)
     if await Held.take(env.db, ~item, ~name, ~size=Int.toFloat(size)) {
       let key = keyOf(item, name)
       let put = await Stores.put(env.objects, key, input.content)
       // The count follows what R2 holds for the key once the put is done, whatever ran between.
-      let held = switch put {
-      | Ok(stored) => Ok(Some(stored->Option.mapOr(Int.toFloat(size), Stores.size)))
-      | Error(_) =>
-        (await Stores.head(env.objects, key))->Result.map(o => o->Option.map(Stores.size))
-      }
-      // A head that failed leaves the count as taken, until the key's next write or delete.
-      switch held {
-      | Ok(size) => await Held.settle(env.db, ~item=item.id, ~name, size)
-      | Error(_) => ()
+      switch (put, await Stores.head(env.objects, key)) {
+      | (_, Ok(stored)) =>
+        await Held.settle(env.db, ~item=item.id, ~name, stored->Option.map(Stores.size))
+      // A put that failed beside its head leaves the count as it stood before the write.
+      | (Error(_), Error(_)) => await Held.settle(env.db, ~item=item.id, ~name, before)
+      // A put that held beside a head that failed leaves the count as taken, the size written.
+      | (Ok(_), Error(_)) => ()
       }
       switch put {
       | Ok(_) => Contracts.Answer.Success(({}: Contracts.ObjectWritten.t))

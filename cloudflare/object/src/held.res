@@ -81,6 +81,16 @@ let take = async (db, ~item: item, ~name, ~size) => {
   ran.meta.changes > 0.
 }
 
+type sizeRow = {size: float}
+
+/** The size an object is counted at, none where it is not counted. */
+let counted = async (db, ~item, name) => {
+  let sql = "SELECT size FROM objects WHERE item = ? AND name = ?"
+  let row: option<sizeRow> =
+    (await db->prepare(sql)->bind([Number(item), Text(name)])->first)->Nullable.toOption
+  row->Option.map(row => row.size)
+}
+
 /** An object no longer counted. */
 let forget = async (db, ~item, name) =>
   ignore(
