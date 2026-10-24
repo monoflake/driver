@@ -10,13 +10,27 @@ let token = `1.${Envelope.Base64url.encode(secret)}`
 let binding = Envelope.Hex.encode(Keys.Hash.plain(secret))
 let other = Uint8Array.fromLength(32)->TypedArray.fillAll(9)
 
-let envOf = (~revision=?, ~db=database(), ()): Driver.env => {
-  db,
-  apiToken: "t0ken",
-  accountId: "023e105f4ecef8ad9ca31a8372d0c353",
-  binding,
-  ?revision,
-}
+/** A made-up install id, as install draws one. */
+let installId = "0a1b2c3d"
+
+let envOf = (
+  ~revision=?,
+  ~db=database(),
+  ~vars=dict{"INSTALL_ID": installId, "KINDS": "function,object,database"},
+  (),
+): Driver.env =>
+  withVars(
+    (
+      {
+        db,
+        apiToken: "t0ken",
+        accountId: "023e105f4ecef8ad9ca31a8372d0c353",
+        binding,
+        ?revision,
+      }: Driver.env
+    ),
+    vars,
+  )
 
 /** A call's answer, its status, its content type and its body's JSON. */
 let call = async (
@@ -110,9 +124,9 @@ test("a database item is made at the Worker `database`'s address, as an object i
     described,
     success(`{"generation": 1, "policy": 0, "grace": 604800, "items": [{"id": 1,
     "capacity": {"name": "object", "size": 1048576}, "state": {"name": "made",
-    "address": "object.my-subdomain.workers.dev"}}, {"id": 2,
+    "address": "object-0a1b2c3d.my-subdomain.workers.dev"}}, {"id": 2,
     "capacity": {"name": "database", "size": 1048576}, "state": {"name": "made",
-    "address": "database.my-subdomain.workers.dev"}}]}`),
+    "address": "database-0a1b2c3d.my-subdomain.workers.dev"}}]}`),
   )
 })
 
@@ -129,7 +143,7 @@ test(
       described,
       success(`{"generation": 1, "policy": 0, "grace": 604800, "items": [{"id": 1,
       "capacity": {"name": "object", "size": 1048576}, "state": {"name": "made",
-      "address": "object.my-subdomain.workers.dev"}}]}`),
+      "address": "object-0a1b2c3d.my-subdomain.workers.dev"}}]}`),
     )
     deepEqual(
       reasonOf(await manage(env, "end", `{"id": 1}`)),
@@ -250,11 +264,11 @@ test("a deployment is made a Worker of the account, kept in D1, and described", 
     let api = "https://api.cloudflare.com/client/v4/accounts/023e105f4ecef8ad9ca31a8372d0c353"
     switch (init.method, url->String.replace(api, "")) {
     | ("GET", "https://artifacts.example/hello") => answerBytes(artifact, {status: 200})
-    | ("GET", "/workers/scripts/app-1/deployments") =>
+    | ("GET", "/workers/scripts/app-1-0a1b2c3d/deployments") =>
       answerText(Documented.notFound, {status: 404})
-    | ("POST", "/workers/scripts/app-1/versions") =>
+    | ("POST", "/workers/scripts/app-1-0a1b2c3d/versions") =>
       answerText(Documented.versionUploaded, {status: 200})
-    | ("POST", "/workers/scripts/app-1/deployments") =>
+    | ("POST", "/workers/scripts/app-1-0a1b2c3d/deployments") =>
       answerText(Documented.deploymentCreated, {status: 200})
     | ("GET", "/workers/subdomain") => answerText(Documented.subdomainGot, {status: 200})
     | _ => answerText("{}", {status: 500})
@@ -268,7 +282,7 @@ test("a deployment is made a Worker of the account, kept in D1, and described", 
     "network": ["http", "tcp"]}}`
   let running = success(
     `{"runs": {"name": "app", "id": 1}, "version": "${hash}",
-    "state": {"name": "running", "address": "app-1.my-subdomain.workers.dev",
+    "state": {"name": "running", "address": "app-1-0a1b2c3d.my-subdomain.workers.dev",
     "runtime": "workers", "isolation": ["isolate"]}}`,
   )
   let deployed = await call(env, ~path="/deployments/deploy", ~body=deploy)
@@ -286,10 +300,10 @@ test("a deployment is made a Worker of the account, kept in D1, and described", 
       )
     ),
     [
-      "GET /workers/scripts/app-1/deployments",
+      "GET /workers/scripts/app-1-0a1b2c3d/deployments",
       "GET https://artifacts.example/hello",
-      "POST /workers/scripts/app-1/versions",
-      "POST /workers/scripts/app-1/deployments",
+      "POST /workers/scripts/app-1-0a1b2c3d/versions",
+      "POST /workers/scripts/app-1-0a1b2c3d/deployments",
       "GET /workers/subdomain",
       "GET /workers/subdomain",
     ],
@@ -484,4 +498,115 @@ test("the stub's answer in CBOR is the error stopped, as the codec reads it", as
       ),
     ),
   )
+})
+
+test("a Worker whose INSTALL_ID or KINDS is not as install sets it denies every call", async () => {
+  let denied = (403, Some(JSON.String("denied")))
+  let kinds = "function,object,database"
+  let answers = await Promise.all(
+    [
+      dict{"KINDS": kinds},
+      dict{"INSTALL_ID": "", "KINDS": kinds},
+      dict{"INSTALL_ID": "0A1B2C3D", "KINDS": kinds},
+      dict{"INSTALL_ID": "0a1b2c3", "KINDS": kinds},
+      dict{"INSTALL_ID": "0a1b2c3d0", "KINDS": kinds},
+      dict{"INSTALL_ID": installId, "KINDS": "function,instance"},
+    ]->Array.map(async vars => {
+      let env = envOf(~vars, ())
+      let answered = await manage(env, "describe", "{}")
+      (reasonOf(answered), messageOf(answered))
+    }),
+  )
+  answers->Array.forEach(answer =>
+    deepEqual(
+      answer,
+      (denied, Some(JSON.String("The call carries no credential, or one that does not allow it"))),
+    )
+  )
+  let (status, _, _) = await manage(
+    envOf(~vars=dict{"INSTALL_ID": installId}, ()),
+    "describe",
+    "{}",
+  )
+  deepEqual(status, 200)
+})
+
+test("a list naming a kind KINDS does not offer is refused whole as beyond_host", async () => {
+  let env = envOf(~vars=dict{"INSTALL_ID": installId}, ())
+  let asked = []
+  let restore = replaced(async (url, _) => {
+    asked->Array.push(url)
+    answerText("{}", {status: 500})
+  })
+  let refused = await manage(env, "apply", `{"generation": 1, "items": [${item}]}`)
+  deepEqual(
+    (reasonOf(refused), messageOf(refused)),
+    (
+      (400, Some(JSON.String("beyond_host"))),
+      Some(JSON.String("item 1: object is not offered, only function")),
+    ),
+  )
+  let (_, _, described) = await manage(env, "describe", "{}")
+  deepEqual(described, success(`{"generation": 0, "policy": 0, "grace": 604800, "items": []}`))
+  let objects = envOf(~db=database(), ~vars=dict{"INSTALL_ID": installId, "KINDS": "object"}, ())
+  ignore(await manage(objects, "apply", `{"generation": 2, "items": []}`))
+  // A list behind is answered by the generation held, before its kinds are read.
+  let behind = await manage(objects, "apply", `{"generation": 1, "items": [${item}]}`)
+  let database = `{"id": 2, "capacity": {"name": "database", "size": 1048576},
+    "credentials": ["af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"]}`
+  let unoffered = await manage(objects, "apply", `{"generation": 3, "items": [${database}]}`)
+  restore()
+  deepEqual(behind, (200, Some("application/json"), success(`{"generation": 2}`)))
+  deepEqual(reasonOf(unoffered), (400, Some(JSON.String("beyond_host"))))
+  deepEqual(asked, [])
+})
+
+test("only a name ending in its own install id is the driver's own", async () => {
+  let owned = name => Installed.owned(name, ~id=installId)
+  deepEqual(
+    [
+      "app-1-0a1b2c3d",
+      "component-hello-0a1b2c3d",
+      "driver-0a1b2c3d",
+      "app-1",
+      "driver",
+      "app-1-ffffffff",
+      "app-1-0a1b2c3d-0a1b2c3d0",
+      "-0a1b2c3d",
+      "Hello-0a1b2c3d",
+      "hello_world-0a1b2c3d",
+    ]->Array.map(owned),
+    [true, true, true, false, false, false, false, false, false, false],
+  )
+  deepEqual(Installed.named("app-1", ~id=installId), Ok("app-1-0a1b2c3d"))
+  ok(Installed.named("component-Hello", ~id=installId)->Result.isError)
+})
+
+test("a deployment whose Worker's name is not in the id form is refused untouched", async () => {
+  let env = envOf()
+  let asked = []
+  let restore = replaced(async (url, _) => {
+    asked->Array.push(url)
+    answerText("{}", {status: 500})
+  })
+  let runs = `{"name": "component", "component": "Hello_World"}`
+  let deploy = `{"interface": "deployments", "operation": "deploy", "input": {
+    "runs": ${runs}, "version": "${binding}", "form": "modules",
+    "isolation": ["isolate"], "artifact": {"address": "https://artifacts.example/hello",
+    "hash": "${binding}"}, "footing": "https://footing.invalid", "secrets": {},
+    "network": ["http", "tcp"]}}`
+  let deployed = await call(env, ~path="/deployments/deploy", ~body=deploy)
+  let delete = `{"interface": "deployments", "operation": "delete", "input": {"runs": ${runs}}}`
+  let deleted = await call(env, ~path="/deployments/delete", ~body=delete)
+  restore()
+  deepEqual(reasonOf(deployed), (400, Some(JSON.String("beyond_host"))))
+  deepEqual(
+    messageOf(deleted),
+    Some(
+      JSON.String(
+        "component-Hello_World-0a1b2c3d is not in the driver's id form, so it is never acted on",
+      ),
+    ),
+  )
+  deepEqual(asked, [])
 })

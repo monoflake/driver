@@ -13,5 +13,5 @@
 			"migrations_dir": "migrations"
 		}
 	],
-	"vars": { "ACCOUNT_ID": "" }
+	"vars": { "INSTALL_ID": "", "ACCOUNT_ID": "", "KINDS": "function" }
 }

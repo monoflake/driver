@@ -53,15 +53,54 @@ let stateTo = (s: Management.state): Contracts.ManagementState.t =>
 
 let hex = bytes => bytes->Array.map(Envelope.Hex.encode)
 
+/** The account's API, every name it acts on followed by the install id. */
+let accountOf = (env, ~id) =>
+  Function.ofAccount(~accountId=env.accountId, ~token=env.apiToken)->Installed.api(~id)
+
 /** A Worker's address, the Workers `object` and `database` made with the Worker `driver`, nrs5v. */
-let addressOf = async (env, worker) =>
-  switch await Function.ofAccount(~accountId=env.accountId, ~token=env.apiToken).address(worker) {
+let addressOf = async (env, worker, ~id) =>
+  switch await accountOf(env, ~id).address(worker) {
   | Ok(address) => Ok(address)
   | Error({reason, message}) => Error({Management.reason, message})
   }
 
+/** Nothing is ever written, so apply only says what it would answer. */
+let unwritten = (store: Management.store): Management.store => {
+  read: store.read,
+  write: async _ => (),
+}
+
+/**
+ * The list taken, or refused whole as `beyond_host` where it names a kind KINDS does not offer,
+ * after its own form and its generation are read, as a container is refused.
+ */
+let applied = async (store, ~now, ~generation, ~items, ~tokens, ~objects, ~databases, ~kinds) =>
+  switch Installed.unoffered(items, ~kinds) {
+  | None => await Management.apply(store, ~now, ~generation, ~items, ~tokens, ~objects, ~databases)
+  | Some(item) =>
+    let none = async () => Error({Management.reason: "beyond_host", message: ""})
+    switch await Management.apply(
+      unwritten(store),
+      ~now,
+      ~generation,
+      ~items,
+      ~tokens,
+      ~objects=none,
+      ~databases=none,
+    ) {
+    | Error(_) as refused => refused
+    // A list behind is answered by the generation held, as apply answers it.
+    | Ok(held) if held > generation => Ok(held)
+    | Ok(_) =>
+      let id = Float.toString(item.id)
+      let kind = Installed.kindOf(item)
+      let offered = kinds->Array.join(", ")
+      Error({reason: "beyond_host", message: `item ${id}: ${kind} is not offered, only ${offered}`})
+    }
+  }
+
 /** A management call on the list kept, its grace swept first. */
-let managed = async (env, store, call: Contracts.Interface.Management.call, form) => {
+let managed = async (env, store, call: Contracts.Interface.Management.call, form, ~id, ~kinds) => {
   let now = Date.now()
   // A swept item's store is cleared by its Worker, `object` or `database`, as requests come.
   ignore(await Management.sweep(store, ~now))
@@ -73,14 +112,15 @@ let managed = async (env, store, call: Contracts.Interface.Management.call, form
       capacity: capacityOf(item.capacity),
       credentials: hex(item.credentials),
     })
-    let result = await Management.apply(
+    let result = await applied(
       store,
       ~now,
       ~generation=input.generation,
       ~items,
       ~tokens=input.tokens->Option.map(hex),
-      ~objects=() => addressOf(env, "object"),
-      ~databases=() => addressOf(env, "database"),
+      ~objects=() => addressOf(env, "object", ~id),
+      ~databases=() => addressOf(env, "database", ~id),
+      ~kinds,
     )
     answered(Contracts.Interface.Management.apply, result->Result.map(held))->Answer.written(
       form,
@@ -271,9 +311,8 @@ let read = (form, bytes, operation, ~fromJson, ~fromCbor, ~named) =>
   | Error(_) as refused => refused
   }
 
-let serve = async (request, env, forms: Answer.forms) => {
-  let header = name => request->Web.requestHeaders->Web.header(name)->Nullable.toOption
-  let early = error => Answer.refused(error, forms.answer)
+/** A call of a Worker installed whole, held to the binding's token before it is read. */
+let held = async (request, env, forms: Answer.forms, ~header, ~early, ~id, ~kinds) => {
   let store = Kept.management(env.db)
   let given = env.binding->String.trim->String.toLowerCase
   // A caller not yet held to a token is told nothing of why its token could not be read.
@@ -303,7 +342,7 @@ let serve = async (request, env, forms: Answer.forms) => {
         ~fromCbor=Contracts.Interface.Management.fromCbor,
         ~named=e => managementOperation(e.call),
       ) {
-      | Ok(envelope) => await managed(env, store, envelope.call, forms.answer)
+      | Ok(envelope) => await managed(env, store, envelope.call, forms.answer, ~id, ~kinds)
       | Error(error) => early(error)
       }
     | "deployments" =>
@@ -317,7 +356,7 @@ let serve = async (request, env, forms: Answer.forms) => {
       ) {
       | Ok(envelope) =>
         let through: Function.through = {
-          api: Function.ofAccount(~accountId=env.accountId, ~token=env.apiToken),
+          api: accountOf(env, ~id),
           store: Kept.deployments(env.db),
           fetch: artifact,
         }
@@ -329,6 +368,16 @@ let serve = async (request, env, forms: Answer.forms) => {
   | (Ok(true), ["", _, _], "POST", None) =>
     early(Answer.malformed("a call's body is application/json or application/cbor"))
   | (Ok(true), _, _, _) => early(Answer.malformed("a call is POST /{interface}/{operation}"))
+  }
+}
+
+let serve = async (request, env, forms: Answer.forms) => {
+  let header = name => request->Web.requestHeaders->Web.header(name)->Nullable.toOption
+  let early = error => Answer.refused(error, forms.answer)
+  switch (Installed.idOf(env), Installed.kindsOf(env)) {
+  | (Some(id), Some(kinds)) => await held(request, env, forms, ~header, ~early, ~id, ~kinds)
+  // A Worker not installed whole denies every call, as an unset BINDING does, and says no more.
+  | (None, _) | (_, None) => early(Answer.error("denied"))
   }
 }
 

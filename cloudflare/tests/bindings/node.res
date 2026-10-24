@@ -130,3 +130,7 @@ type imported = {default: worker}
 
 /** A module's default export, imported from its source text. */
 let imported = source => importModule("data:text/javascript," ++ encodeURIComponent(source))
+
+/** A copy of `env` with `vars` set beside its own fields, as install sets a Worker's variables. */
+@val external assignedOf: (dict<string>, 'env, dict<string>) => 'env = "Object.assign"
+let withVars = (env: 'env, vars) => assignedOf(dict{}, env, vars)

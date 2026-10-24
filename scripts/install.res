@@ -1,6 +1,6 @@
 /***
- * driver(cloudflare) made on the account wrangler is given, each part only where it is absent, RFC
- * nrs5v, "What makes it on an account", every command run through a world a test fakes.
+ * driver(cloudflare) made on the account its inputs name, each part only where it is absent and
+ * named by its install id, RFC nrs5v's Ledger, every command run through a world a test fakes.
  */
 open Host
 
@@ -14,14 +14,34 @@ let userDatabase = "database"
 let bucket = "objects"
 
 /** What it is given, read from the environment alone, as this repository is public. */
-let credential = "CLOUDFLARE_API_TOKEN"
-let account = "CLOUDFLARE_ACCOUNT_ID"
+let account = "DRIVER_ACCOUNT_ID"
+let installToken = "DRIVER_INSTALL_TOKEN"
 let driverToken = "DRIVER_API_TOKEN"
 let databaseToken = "DATABASE_API_TOKEN"
-let inputs = [credential, account, driverToken, databaseToken]
+let kindsInput = "DRIVER_KINDS"
 
-/** The tokens handed to a Worker alone, on stdin, and kept out of every command's environment. */
-let tokens = [driverToken, databaseToken]
+/** The names wrangler reads, set in its own environment alone and never read from install's. */
+let wranglerToken = "CLOUDFLARE_API_TOKEN"
+let wranglerAccount = "CLOUDFLARE_ACCOUNT_ID"
+let ambient = "CLOUDFLARE_"
+
+/** The tokens kept out of every command's environment by their own names. */
+let tokens = [installToken, driverToken, databaseToken]
+
+/** The kinds the driver may offer, `function` alone where `DRIVER_KINDS` names none. */
+let kinds = ["function", "object", "database"]
+let defaultKinds = ["function"]
+
+@module("node:crypto") external randomBytes: int => Uint8Array.t = "randomBytes"
+
+/** An install id, 8 lowercase hex digits. */
+let installIdForm = /^[0-9a-f]{8}$/
+
+/** The driver's own D1 by its name, the one install id it holds. */
+let driverForm = /^driver-([0-9a-f]{8})$/
+
+/** A part's name followed by the install id. */
+let named = (name, ~id) => `${name}-${id}`
 
 /** The hint the database and the bucket are placed by, none given letting Cloudflare place them. */
 let location = "DRIVER_LOCATION"
@@ -31,6 +51,11 @@ type source = Environment(string) | Bound
 
 /** A Worker, its directory beneath the root and the secrets it is given by name. */
 type worker = {name: string, directory: array<string>, secrets: array<(string, source)>}
+
+/** What one install acts on, its install id and the kinds it offers. */
+type install = {id: string, kinds: array<string>}
+
+let offers = (install, kind) => install.kinds->Array.includes(kind)
 
 let apiToken = "API_TOKEN"
 let binding = "BINDING"
@@ -67,6 +92,8 @@ type world = {
   stdin: unit => string,
   /** A directory of its own, made empty. */
   scratch: unit => string,
+  /** A new install id drawn at random. */
+  draw: unit => string,
 }
 
 let then = (result, next) => result->Result.flatMap(next)
@@ -79,12 +106,29 @@ let shown = command => {
   command.input->Option.isSome ? `${line}, its value on stdin` : line
 }
 
-/** The environment the commands run in, quiet and unasking, the Workers' own tokens taken out. */
+/**
+ * The environment the commands run in, quiet and unasking, every token and every ambient
+ * `CLOUDFLARE_` name taken out.
+ */
 let quiet = env => {
   let given = Dict.copy(env)
-  tokens->Array.forEach(name => given->Dict.delete(name))
+  given
+  ->Dict.keysToArray
+  ->Array.forEach(name =>
+    if name->String.startsWith(ambient) || tokens->Array.includes(name) {
+      given->Dict.delete(name)
+    }
+  )
   given->Dict.set("WRANGLER_SEND_METRICS", "false")
   given->Dict.set("CI", "1")
+  given
+}
+
+/** The environment wrangler runs in, its account and token set from install's own inputs. */
+let accounted = env => {
+  let given = quiet(env)
+  given->Dict.set(wranglerToken, value(env, installToken)->Option.getOr(""))
+  given->Dict.set(wranglerAccount, value(env, account)->Option.getOr(""))
   given
 }
 
@@ -93,7 +137,7 @@ let commanded = (w, ~root, ~cwd, arguments) => {
   program: join([root, "cloudflare", "node_modules", ".bin", "wrangler"]),
   args: arguments,
   cwd,
-  env: quiet(w.env),
+  env: accounted(w.env),
 }
 
 /** A Worker's package compiled in its directory, so its bundle is this checkout's source. */
@@ -153,6 +197,55 @@ let listedDatabase = (body, name) =>
   ->Option.flatMap(all => all->Array.find(db => db->text("name") == Some(name)))
   ->Option.flatMap(db => db->text("uuid"))
 
+/** The names `d1 list` holds, and nothing more of any database. */
+let listedNames = body =>
+  parsed(body)
+  ->Option.flatMap(JSON.Decode.array)
+  ->Option.mapOr([], all => all->Array.filterMap(db => db->text("name")))
+
+/** The install ids the driver's D1 databases are named by, each `driver-<8 hex>`. */
+let installIds = names =>
+  names->Array.filterMap(name =>
+    switch driverForm->RegExp.exec(name) {
+    | Some(found) => found->RegExp.Result.matches->Array.get(0)->Option.flatMap(id => id)
+    | None => None
+    }
+  )
+
+/**
+ * The install id the account holds, read from its D1 databases' names alone, a new one drawn where
+ * none is, the one reused, and a refusal naming each where more than one is.
+ */
+let recovered = (w, ~dry, ~root) => {
+  let list = commanded(w, ~root, ~cwd=root, ["d1", "list", "--json"])
+  if dry {
+    w.say(`would run ${shown(list)}, and reuse the install id of the one driver-<8 hex> it names,`)
+    w.say(`  draw a new one where it names none, and refuse where it names more than one`)
+    Ok(("<install id>", []))
+  } else {
+    w.run(list)
+    ->Result.map(listedNames)
+    ->then(names =>
+      switch installIds(names) {
+      | [] =>
+        let id = w.draw()
+        if installIdForm->RegExp.test(id) {
+          w.say(`no driver-<8 hex> on the account, so the install id ${id} is drawn`)
+          Ok((id, names))
+        } else {
+          Error(`an install id drawn is not 8 lowercase hex digits, ${id}`)
+        }
+      | [id] =>
+        w.say(`the install id ${id} is reused, the account holding ${named(database, ~id)}`)
+        Ok((id, names))
+      | ids =>
+        let all = ids->Array.map(id => named(database, ~id))->Array.join(", ")
+        Error(`the account holds more than one driver's D1, ${all}, so none is chosen`)
+      }
+    )
+  }
+}
+
 /** The buckets `r2 bucket list` prints, each on a line of its own beginning `name`. */
 let listedBuckets = body =>
   body
@@ -194,7 +287,7 @@ let databaseOf = (w, ~dry, ~root, database) => {
 }
 
 /** The bucket made with its hint where the account lists none by its name. */
-let bucketOf = (w, ~dry, ~root) => {
+let bucketOf = (w, ~dry, ~root, ~bucket) => {
   let list = commanded(w, ~root, ~cwd=root, ["r2", "bucket", "list"])
   let create = commanded(w, ~root, ~cwd=root, ["r2", "bucket", "create", bucket, ...placed(w)])
   if dry {
@@ -211,36 +304,55 @@ let bucketOf = (w, ~dry, ~root) => {
   }
 }
 
+/** Each of a configuration's entries under `key` with `change` made to its object. */
+let eachOf = (filled, config, key, change) =>
+  config
+  ->Dict.get(key)
+  ->Option.flatMap(JSON.Decode.array)
+  ->Option.forEach(entries =>
+    filled->Dict.set(
+      key,
+      JSON.Array(
+        entries->Array.map(entry =>
+          switch entry->JSON.Decode.object {
+          | Some(o) =>
+            let d = Dict.copy(o)
+            change(d)
+            JSON.Object(d)
+          | None => entry
+          }
+        ),
+      ),
+    )
+  )
+
 /**
- * A Worker's own configuration, each D1 database's real id by its name, and the variables given
- * set beside its own.
+ * A Worker's own configuration with its name, its databases' and its bucket's followed by the
+ * install id, each D1 database's real id by its name, and the variables given set beside its own.
  */
-let configured = (given, ~ids: dict<string>, ~vars as set: dict<string>) =>
+let configured = (given, ~id, ~ids: dict<string>, ~vars as set: dict<string>) =>
   switch parsed(given)->Option.flatMap(JSON.Decode.object) {
   | None => Error("a Worker's wrangler.json is not JSON")
   | Some(config) =>
     let filled = Dict.copy(config)
     config
-    ->Dict.get("d1_databases")
-    ->Option.flatMap(JSON.Decode.array)
-    ->Option.forEach(databases =>
-      filled->Dict.set(
-        "d1_databases",
-        JSON.Array(
-          databases->Array.map(db =>
-            switch (
-              db->JSON.Decode.object,
-              db->text("database_name")->Option.flatMap(n => ids->Dict.get(n)),
-            ) {
-            | (Some(o), Some(id)) =>
-              let d = Dict.copy(o)
-              d->Dict.set("database_id", JSON.String(id))
-              JSON.Object(d)
-            | _ => db
-            }
-          ),
-        ),
-      )
+    ->Dict.get("name")
+    ->Option.flatMap(JSON.Decode.string)
+    ->Option.forEach(name => filled->Dict.set("name", JSON.String(named(name, ~id))))
+    filled->eachOf(config, "d1_databases", d =>
+      d
+      ->Dict.get("database_name")
+      ->Option.flatMap(JSON.Decode.string)
+      ->Option.forEach(name => {
+        d->Dict.set("database_name", JSON.String(named(name, ~id)))
+        ids->Dict.get(name)->Option.forEach(real => d->Dict.set("database_id", JSON.String(real)))
+      })
+    )
+    filled->eachOf(config, "r2_buckets", d =>
+      d
+      ->Dict.get("bucket_name")
+      ->Option.flatMap(JSON.Decode.string)
+      ->Option.forEach(name => d->Dict.set("bucket_name", JSON.String(named(name, ~id))))
     )
     let vars =
       config
@@ -253,9 +365,18 @@ let configured = (given, ~ids: dict<string>, ~vars as set: dict<string>) =>
     Ok(JSON.stringify(JSON.Object(filled), ~space=2))
   }
 
-/** The variables a Worker is given, the account's id, and the database's to `database` alone. */
-let varsOf = (w, ~ids: dict<string>, worker) => {
-  let vars = dict{"ACCOUNT_ID": value(w.env, account)->Option.getOr("")}
+/**
+ * The variables a Worker is given, the install id and the account's, the kinds offered to `driver`
+ * alone, and the database's id to `database` alone.
+ */
+let varsOf = (w, ~install, ~ids: dict<string>, worker) => {
+  let vars = dict{
+    "INSTALL_ID": install.id,
+    "ACCOUNT_ID": value(w.env, account)->Option.getOr(""),
+  }
+  if worker.name == driver.name {
+    vars->Dict.set("KINDS", install.kinds->Array.join(","))
+  }
   if worker.name == databaseWorker.name {
     vars->Dict.set("DATABASE_ID", ids->Dict.get(userDatabase)->Option.getOr(""))
   }
@@ -266,20 +387,23 @@ let varsOf = (w, ~ids: dict<string>, worker) => {
  * `next` run with a Worker's configuration of the moment written, removed after whatever it
  * answered or threw, a throw answered as an error.
  */
-let within = (w, ~dry, ~root, ~ids, worker, next) => {
+let within = (w, ~dry, ~root, ~install, ~ids, worker, next) => {
   let directory = join([root, ...worker.directory])
   let config = join([directory, moment])
   if dry {
     let shortened = [...worker.directory, moment]->Array.join("/")
-    let named = varsOf(w, ~ids, worker)->Dict.keysToArray->Array.join(" and ")
-    w.say(`would write ${shortened}, ${worker.name}'s wrangler.json with its databases' ids`)
-    w.say(`  and ${named} filled in, and remove it once ${worker.name} is done`)
+    let given = varsOf(w, ~install, ~ids, worker)->Dict.keysToArray->Array.join(", ")
+    let full = named(worker.name, ~id=install.id)
+    w.say(`would write ${shortened}, ${worker.name}'s wrangler.json with every name followed by`)
+    w.say(`  the install id, its databases' ids, and the variables ${given} filled in,`)
+    w.say(`  and remove it once ${full} is done`)
     next(directory, config)
   } else {
     let done = switch configured(
       readFileSync(join([directory, "wrangler.json"])),
+      ~id=install.id,
       ~ids,
-      ~vars=varsOf(w, ~ids, worker),
+      ~vars=varsOf(w, ~install, ~ids, worker),
     )->then(text => {
       writeFileSync(config, text)
       next(directory, config)
@@ -293,7 +417,7 @@ let within = (w, ~dry, ~root, ~ids, worker, next) => {
 }
 
 /** The database's migrations applied, wrangler applying only those not applied yet. */
-let migrated = (w, ~dry, ~root, ~directory, ~config) => {
+let migrated = (w, ~dry, ~root, ~directory, ~config, ~database) => {
   let apply = commanded(
     w,
     ~root,
@@ -447,56 +571,162 @@ let hashOfStdin = w =>
   | token => bindingHash(token)->Result.map(hash => Some(hash))
   }
 
+/** The kinds `DRIVER_KINDS` names, comma-separated, `function` alone where it names none. */
+let kindsOf = env =>
+  switch value(env, kindsInput) {
+  | None => Ok(defaultKinds)
+  | Some(listed) =>
+    let named = listed->String.split(",")->Array.map(String.trim)
+    switch named->Array.find(kind => !(kinds->Array.includes(kind))) {
+    | Some(other) =>
+      Error(`${kindsInput} names "${other}", where each is one of ${kinds->Array.join(", ")}`)
+    // Each kind once, in the order the driver names them.
+    | None => Ok(kinds->Array.filter(kind => named->Array.includes(kind)))
+    }
+  }
+
+/** What install reads before anything runs, every input it needs and the kinds offered. */
+let inputsOf = env =>
+  kindsOf(env)->then(offered => {
+    let needed = [
+      account,
+      installToken,
+      driverToken,
+      ...offered->Array.includes("database") ? [databaseToken] : [],
+    ]
+    switch needed->Array.filter(name => value(env, name) == None) {
+    | [] => Ok(offered)
+    | missing =>
+      Error(`${missing->Array.join(", ")} unset in the environment, which alone gives them`)
+    }
+  })
+
+/** What a kind no longer offered holds, its Worker first, as install names it. */
+let heldBy = kind =>
+  switch kind {
+  | "object" => Some((object, `the bucket ${bucket}`))
+  | "database" => Some((databaseWorker, `the D1 database ${userDatabase}`))
+  | _ => None
+  }
+
+/**
+ * Each kind not offered whose Worker the account holds, named with what it holds and left as it
+ * is, since install never removes what a kind dropped from the list holds.
+ */
+let left = (w, ~dry, ~root, ~install) =>
+  kinds
+  ->Array.filter(kind => !offers(install, kind))
+  ->Array.filterMap(kind => heldBy(kind)->Option.map(held => (kind, held)))
+  ->Array.reduce(Ok(), (done, (kind, (worker, holds))) =>
+    done->then(() => {
+      let full = named(worker.name, ~id=install.id)
+      let store = named(holds, ~id=install.id)
+      let versions = commanded(w, ~root, ~cwd=root, ["versions", "list", "--json", "--name", full])
+      if dry {
+        w.say(`would run ${shown(versions)}, and where ${full} is there name it and ${store},`)
+        w.say(`  left as they are, ${kind} not being offered`)
+      } else {
+        switch w.run(versions) {
+        | Ok(_) =>
+          w.say(`${kind} is not offered, and ${full} and ${store} are left as they are;`)
+          w.say(`  install removes neither, so remove them by hand where they are not wanted`)
+        // A Worker not found was never made, or is gone already.
+        | Error(_) => ()
+        }
+      }
+      Ok()
+    })
+  )
+
 /** driver(cloudflare) on the account, each part made where it is absent, in nrs5v's order. */
-let install = (w, ~dry, ~root=root) => {
-  let missing = inputs->Array.filter(name => value(w.env, name) == None)
-  if missing != [] {
-    Error(`${missing->Array.join(", ")} unset in the environment, which alone gives them`)
-  } else {
+let install = (w, ~dry, ~root=root) =>
+  inputsOf(w.env)->then(offered =>
     hashOfStdin(w)->then(hashed => {
       if hashed == None {
         w.say(`nothing on stdin, so ${binding} is passed over on each Worker`)
       }
+      w.say(`the kinds offered are ${offered->Array.join(", ")}, ${kindsInput}`)
       switch value(w.env, location) {
       | Some(hint) => w.say(`the databases and the bucket placed by the hint ${hint}, ${location}`)
       | None => w.say(`no ${location}, so Cloudflare places the databases and the bucket`)
       }
       let scratch = dry ? "<a directory of its own>" : w.scratch()
-      let deployedIn = (ids, worker) =>
-        within(w, ~dry, ~root, ~ids, worker, (directory, config) =>
-          deployed(w, ~dry, ~root, ~directory, ~config, ~scratch, ~hashed, worker)
-        )
-      let installed =
-        databaseOf(w, ~dry, ~root, database)
-        ->then(driverId =>
-          databaseOf(w, ~dry, ~root, userDatabase)->Result.map(
-            id => Dict.fromArray([(database, driverId), (userDatabase, id)]),
+      let installed = recovered(w, ~dry, ~root)->then(
+        ((id, _)) => {
+          let install = {id, kinds: offered}
+          let full = name => named(name, ~id)
+          let deployedIn = (ids, worker) =>
+            within(
+              w,
+              ~dry,
+              ~root,
+              ~install,
+              ~ids,
+              worker,
+              (directory, config) =>
+                deployed(
+                  w,
+                  ~dry,
+                  ~root,
+                  ~directory,
+                  ~config,
+                  ~scratch,
+                  ~hashed,
+                  {...worker, name: full(worker.name)},
+                ),
+            )
+          let made = (kind, step) => offers(install, kind) ? step() : Ok()
+          databaseOf(w, ~dry, ~root, full(database))
+          ->then(
+            driverId => {
+              let ids = Dict.fromArray([(database, driverId)])
+              made(
+                "database",
+                () =>
+                  databaseOf(w, ~dry, ~root, full(userDatabase))->Result.map(
+                    id => ids->Dict.set(userDatabase, id),
+                  ),
+              )->Result.map(() => ids)
+            },
           )
-        )
-        ->then(ids =>
-          within(
-            w,
-            ~dry,
-            ~root,
-            ~ids,
-            driver,
-            (directory, config) =>
-              migrated(w, ~dry, ~root, ~directory, ~config)
-              ->then(() => bucketOf(w, ~dry, ~root))
-              ->then(
-                () => deployed(w, ~dry, ~root, ~directory, ~config, ~scratch, ~hashed, driver),
-              ),
+          ->then(
+            ids =>
+              within(
+                w,
+                ~dry,
+                ~root,
+                ~install,
+                ~ids,
+                driver,
+                (directory, config) =>
+                  migrated(w, ~dry, ~root, ~directory, ~config, ~database=full(database))
+                  ->then(() => made("object", () => bucketOf(w, ~dry, ~root, ~bucket=full(bucket))))
+                  ->then(
+                    () =>
+                      deployed(
+                        w,
+                        ~dry,
+                        ~root,
+                        ~directory,
+                        ~config,
+                        ~scratch,
+                        ~hashed,
+                        {...driver, name: full(driver.name)},
+                      ),
+                  ),
+              )
+              ->then(() => made("object", () => deployedIn(ids, object)))
+              ->then(() => made("database", () => deployedIn(ids, databaseWorker))),
           )
-          ->then(() => deployedIn(ids, object))
-          ->then(() => deployedIn(ids, databaseWorker))
-        )
+          ->then(() => left(w, ~dry, ~root, ~install))
+        },
+      )
       if !dry {
         rmSync(scratch, {recursive: true, force: true})
       }
       installed
     })
-  }
-}
+  )
 
 /** The world as it is, each command run to its end with its output kept. */
 let real = {
@@ -530,6 +760,7 @@ let real = {
       }
     },
   scratch: () => mkdtempSync(join([tmpdir(), "driver-install-"])),
+  draw: () => fromBytes(randomBytes(4))->encoded("hex"),
 }
 
 if isMain {

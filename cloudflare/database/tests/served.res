@@ -8,6 +8,9 @@ let secret = Uint8Array.fromLength(32)->TypedArray.fillAll(5)
 let token = `1.${Envelope.Base64url.encode(secret)}`
 let binding = Envelope.Hex.encode(Keys.Hash.plain(secret))
 
+/** A made-up install id, as install draws one. */
+let installId = "0a1b2c3d"
+
 let accountId = "023e105f4ecef8ad9ca31a8372d0c353"
 let databaseId = "1fc0aa2e-b5a1-4b8e-8f0e-3c6f2c1d9a7b"
 let apiToken = "d1-t0ken"
@@ -65,14 +68,19 @@ let make = (~size=?, ~at=1_790_000_000_000.) => {
   // D1 keeps a table of its own in every database, which no user's call reaches.
   sqlite->exec("CREATE TABLE _cf_KV (key TEXT PRIMARY KEY, value BLOB)")
   let database = asDatabase(sqlite, clock)
-  let env: Database.env = {
-    db: asDatabase(driver, clock),
-    database,
-    binding,
-    apiToken,
-    accountId,
-    databaseId,
-  }
+  let env = withVars(
+    (
+      {
+        db: asDatabase(driver, clock),
+        database,
+        binding,
+        apiToken,
+        accountId,
+        databaseId,
+      }: Database.env
+    ),
+    dict{"INSTALL_ID": installId},
+  )
   let served = {env, driver, sqlite, clock, sent: [], refusing: ref(None)}
   answering(served.sent, async (url, init) => {
     let parts = Web.parts(url)

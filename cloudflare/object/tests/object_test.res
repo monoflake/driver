@@ -40,6 +40,18 @@ test("an unset or empty BINDING holds no token, so every caller is denied", asyn
   }
 })
 
+test("a Worker whose INSTALL_ID is unset or not 8 lowercase hex denies every call", async () => {
+  let served = Served.make(~size=1024.)
+  let ids = [unset, "", "0A1B2C3D", "0a1b2c3", "0a1b2c3d0"]
+  for at in 0 to Array.length(ids) - 1 {
+    let env = withVars(served.env, dict{"INSTALL_ID": ids->Array.getUnsafe(at)})
+    let answered = await {...served, env}->Served.call("describe", `{"name": "a"}`)
+    deepEqual(reasonOf(answered), (403, Some("denied")))
+  }
+  let (status, _) = await served->Served.call("describe", `{"name": "a"}`)
+  deepEqual(status, 200)
+})
+
 test(
   "with no object item a read is not found, a list holds nothing and a write no room",
   async () => {

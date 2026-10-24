@@ -5,6 +5,9 @@ let secret = Uint8Array.fromLength(32)->TypedArray.fillAll(5)
 let token = `1.${Envelope.Base64url.encode(secret)}`
 let binding = Envelope.Hex.encode(Keys.Hash.plain(secret))
 
+/** A made-up install id, as install draws one. */
+let installId = "0a1b2c3d"
+
 /** What a test reaches, the Worker's env, its SQLite and the bucket's clock in milliseconds. */
 type served = {env: Object.env, sqlite: sqlite, clock: ref<float>}
 
@@ -37,7 +40,8 @@ let item = (served, ~id=1., ~kind="object", ~state="made", ~address=?, ~since=?,
 let make = (~size=?) => {
   let sqlite = migrated()
   let clock = ref(0.)
-  let served = {env: {db: asDatabase(sqlite), objects: bucket(clock), binding}, sqlite, clock}
+  let env: Object.env = {db: asDatabase(sqlite), objects: bucket(clock), binding}
+  let served = {env: withVars(env, dict{"INSTALL_ID": installId}), sqlite, clock}
   size->Option.forEach(size => served->item(size))
   served
 }

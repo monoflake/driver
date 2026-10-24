@@ -46,6 +46,18 @@ test("an unset or empty BINDING holds no token, so every caller is denied", asyn
   }
 })
 
+test("a Worker whose INSTALL_ID is unset or not 8 lowercase hex denies every call", async () => {
+  let served = Served.make(~size=1024.)
+  let ids = [unset, "", "0A1B2C3D", "0a1b2c3", "0a1b2c3d0"]
+  for at in 0 to Array.length(ids) - 1 {
+    let env = withVars(served.env, dict{"INSTALL_ID": ids->Array.getUnsafe(at)})
+    let answered = await {...served, env}->Served.call("execute", `{"statements": []}`)
+    deepEqual(reasonOf(answered), (403, Some("denied")))
+  }
+  let (status, _) = await served->Served.call("execute", `{"statements": []}`)
+  deepEqual(status, 200)
+})
+
 test("a call not at its path, or not as the path names it, is malformed", async () => {
   let served = Served.make(~size=1_000_000.)
   let empty = `{"statements": []}`

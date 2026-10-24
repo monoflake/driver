@@ -239,7 +239,8 @@ let called = async (request, env, forms: Answer.forms, parts, ~holding) => {
   }
 }
 
-let serve = async (request, env, forms: Answer.forms) => {
+/** A call of a Worker installed whole, held to the binding's token before it is read. */
+let held = async (request, env, forms: Answer.forms) => {
   let header = name => request->Web.requestHeaders->Web.header(name)->Nullable.toOption
   let early = error => Answer.refused(error, forms.answer)
   // An unset or empty BINDING holds no token, so every caller is denied.
@@ -267,6 +268,12 @@ let serve = async (request, env, forms: Answer.forms) => {
     await called(request, env, forms, parts, ~holding)
   }
 }
+
+/** A call answered, denied unread where the Worker is not installed whole, as an unset BINDING. */
+let serve = (request, env, forms: Answer.forms) =>
+  Installed.whole(env)
+    ? held(request, env, forms)
+    : Promise.resolve(Answer.refused(Answer.error("denied"), forms.answer))
 
 let fetch = async (request, env) => {
   let header = name => request->Web.requestHeaders->Web.header(name)->Nullable.toOption

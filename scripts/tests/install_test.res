@@ -1,8 +1,12 @@
 /***
  * `install` against an account faked as wrangler shows it, its plan dry, its first run making each
- * part in order and a second changing nothing.
+ * part in order and a second changing nothing, every name followed by the install id.
  */
 open Asserted
+
+/** A made-up install id, the one each faked draw answers. */
+let id = "0a1b2c3d"
+let full = name => `${name}-${id}`
 
 /** What a Worker on the faked account holds, its versions with their tags and its secrets. */
 type held = {
@@ -23,9 +27,14 @@ let empty = () => {
   databases: [],
   buckets: [],
   workers: dict{
-    "driver": {versions: [], secrets: dict{}, bundle: "the driver's bundle", deployed: []},
-    "object": {versions: [], secrets: dict{}, bundle: "the object's bundle", deployed: []},
-    "database": {versions: [], secrets: dict{}, bundle: "the database's bundle", deployed: []},
+    "driver-0a1b2c3d": {versions: [], secrets: dict{}, bundle: "the driver's bundle", deployed: []},
+    "object-0a1b2c3d": {versions: [], secrets: dict{}, bundle: "the object's bundle", deployed: []},
+    "database-0a1b2c3d": {
+      versions: [],
+      secrets: dict{},
+      bundle: "the database's bundle",
+      deployed: [],
+    },
   },
 }
 
@@ -78,8 +87,14 @@ let answered = (account, command: Install.command) => {
   | ("wrangler", list{"d1", "create", name, "--location", _}) =>
     account.databases->Array.push(name)
     Ok("")
-  | ("wrangler", list{"d1", "migrations", "apply", "driver", "--remote", "--config", config}) =>
+  | ("wrangler", list{"d1", "migrations", "apply", name, "--remote", "--config", config})
+    if account.databases->Array.includes(name) =>
     worker(config)->Result.map(_ => "")
+  | ("wrangler", list{"versions", "list", "--json", "--name", name}) =>
+    switch account.workers->Dict.get(name) {
+    | Some(held) if held.versions != [] => Ok(versionsOf(held))
+    | Some(_) | None => missing
+    }
   | ("wrangler", list{"r2", "bucket", "list"}) =>
     Ok(
       account.buckets
@@ -159,15 +174,35 @@ for i in 0 to 31 {
 let token = "7.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
 let hashed = "e528e95798037df410543d9f31e396ecdd458d71b157d6014398bae32fb56c65"
 
+/** Cloudflare's documented example account ids. */
+let accountId = "023e105f4ecef8ad9ca31a8372d0c353"
+let anotherAccount = "699d98642c564d2e855e9661899b7252"
+
+/** Install's own inputs, every kind offered. */
 let credentials = [
-  ("CLOUDFLARE_API_TOKEN", "the-author-token"),
-  ("CLOUDFLARE_ACCOUNT_ID", "the-account"),
+  ("DRIVER_ACCOUNT_ID", accountId),
+  ("DRIVER_INSTALL_TOKEN", "the-install-token"),
   ("DRIVER_API_TOKEN", "the-driver-token"),
   ("DATABASE_API_TOKEN", "the-database-token"),
+  ("DRIVER_KINDS", "function,object,database"),
+]
+
+/** What the environment holds besides, which install never reads. */
+let ambient = [
+  ("CLOUDFLARE_API_TOKEN", "the-ambient-token"),
+  ("CLOUDFLARE_ACCOUNT_ID", anotherAccount),
+  ("CLOUDFLARE_EMAIL", "author@example.com"),
 ]
 
 /** Every value no argument and no line said may hold. */
-let secrets = ["the-author-token", "the-driver-token", "the-database-token", token, hashed]
+let secrets = [
+  "the-install-token",
+  "the-ambient-token",
+  "the-driver-token",
+  "the-database-token",
+  token,
+  hashed,
+]
 
 type faked = {
   world: Install.world,
@@ -176,7 +211,7 @@ type faked = {
   scratched: array<string>,
 }
 
-let make = (~env=credentials, ~stdin=token, ~answer) => {
+let make = (~env=credentials, ~stdin=token, ~drawn=id, ~answer) => {
   let ran = []
   let said = []
   let scratched = []
@@ -193,6 +228,7 @@ let make = (~env=credentials, ~stdin=token, ~answer) => {
       scratched->Array.push(made)
       made
     },
+    draw: () => drawn,
   }
   {world, ran, said, scratched}
 }
@@ -233,22 +269,23 @@ let shows = faked =>
       faked.said->Array.some(l => l->String.includes(s))
   )
 
-let installed = (~env=?, ~stdin=?, account, root) => {
-  let faked = make(~env?, ~stdin?, ~answer=command => answered(account, command))
+let installed = (~env=?, ~stdin=?, ~drawn=?, account, root) => {
+  let faked = make(~env?, ~stdin?, ~drawn?, ~answer=command => answered(account, command))
   let result = Install.install(faked.world, ~dry=false, ~root)
   (faked, result)
 }
 
 let first = [
   "wrangler d1 list --json",
-  "wrangler d1 create driver",
+  "wrangler d1 list --json",
+  "wrangler d1 create driver-0a1b2c3d",
   "wrangler d1 list --json",
   "wrangler d1 list --json",
-  "wrangler d1 create database",
+  "wrangler d1 create database-0a1b2c3d",
   "wrangler d1 list --json",
-  "wrangler d1 migrations apply driver --remote --config <driver>",
+  "wrangler d1 migrations apply driver-0a1b2c3d --remote --config <driver>",
   "wrangler r2 bucket list",
-  "wrangler r2 bucket create objects",
+  "wrangler r2 bucket create objects-0a1b2c3d",
   "rescript build in <driver>",
   "wrangler deploy --dry-run --outdir <out> --config <driver>",
   "wrangler versions list --json --config <driver>",
@@ -274,7 +311,8 @@ let first = [
 let again = [
   "wrangler d1 list --json",
   "wrangler d1 list --json",
-  "wrangler d1 migrations apply driver --remote --config <driver>",
+  "wrangler d1 list --json",
+  "wrangler d1 migrations apply driver-0a1b2c3d --remote --config <driver>",
   "wrangler r2 bucket list",
   "rescript build in <driver>",
   "wrangler deploy --dry-run --outdir <out> --config <driver>",
@@ -305,14 +343,16 @@ test("a dry run runs nothing, writes nothing and shows no secret", () => {
   ok(moments(root)->Array.every(path => !Host.existsSync(path)))
   ok(
     [
-      "wrangler d1 create driver",
-      "wrangler d1 create database",
-      "wrangler d1 migrations apply driver --remote",
-      "wrangler r2 bucket create objects",
+      "wrangler d1 list --json, and reuse the install id of the one driver-<8 hex>",
+      "wrangler d1 create driver-<install id>",
+      "wrangler d1 create database-<install id>",
+      "wrangler d1 migrations apply driver-<install id> --remote",
+      "wrangler r2 bucket create objects-<install id>",
       "rescript build in cloudflare",
       "rescript build in cloudflare/object",
       "rescript build in cloudflare/database",
-      "ACCOUNT_ID and DATABASE_ID filled in",
+      "the variables INSTALL_ID, ACCOUNT_ID, KINDS filled in",
+      "the variables INSTALL_ID, ACCOUNT_ID, DATABASE_ID filled in",
       "wrangler deploy --config",
       "wrangler secret put API_TOKEN",
       "wrangler secret put BINDING",
@@ -321,20 +361,30 @@ test("a dry run runs nothing, writes nothing and shows no secret", () => {
   )
 })
 
-test("a missing input is refused by its name before anything runs", () => {
+test("a missing input is refused by its name before anything runs, none read in its stead", () => {
   let root = fixture()
-  let env = [("CLOUDFLARE_API_TOKEN", "the-author-token"), ("CLOUDFLARE_ACCOUNT_ID", "")]
+  let env = [...ambient, ("DRIVER_ACCOUNT_ID", "")]
   [false, true]->Array.forEach(dry => {
     let faked = make(~env, ~answer=_ => Ok(""))
-    switch Install.install(faked.world, ~dry, ~root) {
-    | Ok() => ok(false, ~message="it installed")
-    | Error(why) =>
-      ok(
-        why->String.includes("CLOUDFLARE_ACCOUNT_ID, DRIVER_API_TOKEN, DATABASE_API_TOKEN") &&
-          !(why->String.includes("CLOUDFLARE_API_TOKEN")),
-        ~message=why,
-      )
-    }
+    deepEqual(
+      Install.install(faked.world, ~dry, ~root),
+      Error(
+        "DRIVER_ACCOUNT_ID, DRIVER_INSTALL_TOKEN, DRIVER_API_TOKEN unset in the environment, " ++ "which alone gives them",
+      ),
+    )
+    deepEqual(faked.ran, [])
+  })
+})
+
+test("DRIVER_ACCOUNT_ID unset is refused, though CLOUDFLARE_ACCOUNT_ID is set", () => {
+  let root = fixture()
+  let env = [...credentials->Array.filter(((name, _)) => name != "DRIVER_ACCOUNT_ID"), ...ambient]
+  [false, true]->Array.forEach(dry => {
+    let faked = make(~env, ~answer=_ => Ok(""))
+    deepEqual(
+      Install.install(faked.world, ~dry, ~root),
+      Error("DRIVER_ACCOUNT_ID unset in the environment, which alone gives them"),
+    )
     deepEqual(faked.ran, [])
   })
 })
@@ -371,23 +421,23 @@ test("a first install makes each part in order, and a second changes nothing", (
 test("each part the account holds already is passed over", () => {
   let root = fixture()
   let account = empty()
-  account.databases = ["other", "driver", "database"]
-  account.buckets = ["objects"]
+  account.databases = ["other", "driver", "driver-0a1b2c3d", "database-0a1b2c3d"]
+  account.buckets = ["objects", "objects-0a1b2c3d"]
   let (faked, result) = installed(account, root)
   deepEqual(result, Ok())
   let lines = plain(faked)
   ok(lines->Array.every(l => !(l->String.includes(" create "))), ~message=lines->Array.join("\n"))
-  ok(faked.said->Array.includes("the database driver is there already"))
-  ok(faked.said->Array.includes("the database database is there already"))
-  ok(faked.said->Array.includes("the bucket objects is there already"))
+  ok(faked.said->Array.includes("the database driver-0a1b2c3d is there already"))
+  ok(faked.said->Array.includes("the database database-0a1b2c3d is there already"))
+  ok(faked.said->Array.includes("the bucket objects-0a1b2c3d is there already"))
 })
 
 test("a Worker is deployed again only where its bundle or its configuration changed", () => {
   let root = fixture()
   let account = empty()
   let _ = installed(account, root)
-  let object = account.workers->Dict.getUnsafe("object")
-  let driver = account.workers->Dict.getUnsafe("driver")
+  let object = account.workers->Dict.getUnsafe(full("object"))
+  let driver = account.workers->Dict.getUnsafe(full("driver"))
   object.bundle = "the object's bundle, changed"
   let (faked, result) = installed(account, root)
   deepEqual(result, Ok())
@@ -397,7 +447,7 @@ test("a Worker is deployed again only where its bundle or its configuration chan
   )
   deepEqual((driver.deployed->Array.length, object.deployed->Array.length), (1, 2))
   // The account's id is the configuration's, so a new one deploys each again.
-  let env = [...credentials, ("CLOUDFLARE_ACCOUNT_ID", "another-account")]
+  let env = [...credentials, ("DRIVER_ACCOUNT_ID", anotherAccount)]
   let (faked, _) = installed(~env, account, root)
   deepEqual(
     plain(faked)->Array.filter(l => l->String.startsWith("wrangler deploy --config")),
@@ -434,17 +484,39 @@ test("each configuration of the moment holds its databases' ids and the account'
       vars->Install.text("DATABASE_ID"),
     )
   }
-  let driver = (Some("DB"), Some("uuid-driver"))
-  deepEqual(seen("driver"), (Some("driver"), [driver], Some("the-account"), None))
-  deepEqual(seen("object"), (Some("object"), [driver], Some("the-account"), None))
+  let driver = (Some("DB"), Some("uuid-driver-0a1b2c3d"))
+  let account = Some(accountId)
+  deepEqual(seen(full("driver")), (Some(full("driver")), [driver], account, None))
+  deepEqual(seen(full("object")), (Some(full("object")), [driver], account, None))
   deepEqual(
-    seen("database"),
+    seen(full("database")),
     (
-      Some("database"),
-      [driver, (Some("DATABASE"), Some("uuid-database"))],
-      Some("the-account"),
-      Some("uuid-database"),
+      Some(full("database")),
+      [driver, (Some("DATABASE"), Some("uuid-database-0a1b2c3d"))],
+      account,
+      Some("uuid-database-0a1b2c3d"),
     ),
+  )
+  let named = (name, key, field) =>
+    configOf(full(name))
+    ->Install.member(key)
+    ->JSON.Decode.array
+    ->Option.getOr([])
+    ->Array.map(entry => entry->Install.text(field))
+  deepEqual(named("driver", "d1_databases", "database_name"), [Some(full("driver"))])
+  deepEqual(
+    named("database", "d1_databases", "database_name"),
+    [Some(full("driver")), Some(full("database"))],
+  )
+  deepEqual(named("object", "r2_buckets", "bucket_name"), [Some(full("objects"))])
+  let varOf = (name, var) => configOf(full(name))->Install.member("vars")->Install.text(var)
+  deepEqual(
+    ["driver", "object", "database"]->Array.map(name => varOf(name, "INSTALL_ID")),
+    [Some(id), Some(id), Some(id)],
+  )
+  deepEqual(
+    ["driver", "object", "database"]->Array.map(name => varOf(name, "KINDS")),
+    [Some("function,object,database"), None, None],
   )
 })
 
@@ -453,9 +525,9 @@ test("a secret is put only where its name is missing, on stdin and never in an a
   let account = empty()
   let (made, _) = installed(account, root)
   ok(!shows(made), ~message="a secret was in an argument or said")
-  let driver = account.workers->Dict.getUnsafe("driver")
-  let object = account.workers->Dict.getUnsafe("object")
-  let database = account.workers->Dict.getUnsafe("database")
+  let driver = account.workers->Dict.getUnsafe(full("driver"))
+  let object = account.workers->Dict.getUnsafe(full("object"))
+  let database = account.workers->Dict.getUnsafe(full("database"))
   deepEqual(
     (driver.secrets, object.secrets, database.secrets),
     (
@@ -490,9 +562,9 @@ test("with nothing on stdin BINDING is passed over and said so", () => {
       "wrangler secret put API_TOKEN --config <database>",
     ],
   )
-  ok(faked.said->Array.includes("BINDING of driver passed over, nothing on stdin"))
-  ok(faked.said->Array.includes("BINDING of object passed over, nothing on stdin"))
-  ok(faked.said->Array.includes("BINDING of database passed over, nothing on stdin"))
+  ok(faked.said->Array.includes("BINDING of driver-0a1b2c3d passed over, nothing on stdin"))
+  ok(faked.said->Array.includes("BINDING of object-0a1b2c3d passed over, nothing on stdin"))
+  ok(faked.said->Array.includes("BINDING of database-0a1b2c3d passed over, nothing on stdin"))
 })
 
 test("BINDING is keys' own BLAKE3 of the token's secret, in lowercase hex", () => {
@@ -543,12 +615,14 @@ test("DRIVER_API_TOKEN and DATABASE_API_TOKEN are in no command's environment", 
       !(values->Array.includes("the-driver-token") || values->Array.includes("the-database-token")),
       ~message=line(command),
     )
+    let wrangler = Host.basename(command.program) == "wrangler"
     deepEqual(
       (
         command.env->Dict.get("CLOUDFLARE_API_TOKEN"),
         command.env->Dict.get("CLOUDFLARE_ACCOUNT_ID"),
       ),
-      (Some("the-author-token"), Some("the-account")),
+      wrangler ? (Some("the-install-token"), Some(accountId)) : (None, None),
+      ~message=line(command),
     )
   })
   deepEqual(faked.world.env->Dict.get("DRIVER_API_TOKEN"), Some("the-driver-token"))
@@ -607,9 +681,9 @@ test("the databases and the bucket are placed by DRIVER_LOCATION, or by Cloudfla
   deepEqual(
     creates(faked),
     [
-      "wrangler d1 create driver --location weur",
-      "wrangler d1 create database --location weur",
-      "wrangler r2 bucket create objects --location weur",
+      "wrangler d1 create driver-0a1b2c3d --location weur",
+      "wrangler d1 create database-0a1b2c3d --location weur",
+      "wrangler r2 bucket create objects-0a1b2c3d --location weur",
     ],
   )
   let (faked, result) = installed(empty(), fixture())
@@ -617,9 +691,9 @@ test("the databases and the bucket are placed by DRIVER_LOCATION, or by Cloudfla
   deepEqual(
     creates(faked),
     [
-      "wrangler d1 create driver",
-      "wrangler d1 create database",
-      "wrangler r2 bucket create objects",
+      "wrangler d1 create driver-0a1b2c3d",
+      "wrangler d1 create database-0a1b2c3d",
+      "wrangler r2 bucket create objects-0a1b2c3d",
     ],
   )
   let dry = env => {
@@ -629,12 +703,157 @@ test("the databases and the bucket are placed by DRIVER_LOCATION, or by Cloudfla
   }
   let said = dry(placed)
   ok(said->Array.includes("the databases and the bucket placed by the hint weur, DRIVER_LOCATION"))
-  ok(said->Array.some(l => l->String.includes("wrangler d1 create driver --location weur")))
-  ok(said->Array.some(l => l->String.includes("wrangler d1 create database --location weur")))
-  ok(said->Array.some(l => l->String.includes("wrangler r2 bucket create objects --location weur")))
+  let includes = text => said->Array.some(l => l->String.includes(text))
+  ok(includes("wrangler d1 create driver-<install id> --location weur"))
+  ok(includes("wrangler d1 create database-<install id> --location weur"))
+  ok(includes("wrangler r2 bucket create objects-<install id> --location weur"))
   let said = dry(credentials)
   ok(said->Array.includes("no DRIVER_LOCATION, so Cloudflare places the databases and the bucket"))
   ok(said->Array.every(l => !(l->String.includes("--location"))), ~message=said->Array.join("\n"))
+})
+
+test("the install id is drawn where no driver-<8 hex> is listed, and reused where one is", () => {
+  let account = empty()
+  account.databases = ["driver", "driver-0A1B2C3D", "driver-0a1b2c3d-old", "objects-4e5f6a7b"]
+  let (drawn, result) = installed(account, fixture())
+  deepEqual(result, Ok())
+  ok(
+    drawn.said->Array.includes(
+      "no driver-<8 hex> on the account, so the install id 0a1b2c3d is drawn",
+    ),
+  )
+  ok(account.databases->Array.includes(full("driver")))
+  // A second install draws another, which is never taken while one is listed.
+  let (reused, result) = installed(~drawn="4e5f6a7b", account, fixture())
+  deepEqual(result, Ok())
+  ok(
+    reused.said->Array.includes(
+      "the install id 0a1b2c3d is reused, the account holding driver-0a1b2c3d",
+    ),
+  )
+  ok(plain(reused)->Array.every(l => !(l->String.includes("4e5f6a7b"))))
+})
+
+test("more than one driver-<8 hex> is refused by name, and nothing is made", () => {
+  let account = empty()
+  account.databases = ["driver-0a1b2c3d", "other", "driver-4e5f6a7b"]
+  let (faked, result) = installed(account, fixture())
+  deepEqual(
+    result,
+    Error(
+      "the account holds more than one driver's D1, driver-0a1b2c3d, driver-4e5f6a7b, " ++ "so none is chosen",
+    ),
+  )
+  deepEqual(plain(faked), ["wrangler d1 list --json"])
+})
+
+test("a drawn id not of the id form is refused before anything is made", () => {
+  let (faked, result) = installed(~drawn="0A1B2C3D", empty(), fixture())
+  deepEqual(result, Error("an install id drawn is not 8 lowercase hex digits, 0A1B2C3D"))
+  deepEqual(plain(faked), ["wrangler d1 list --json"])
+})
+
+let only = (kinds: option<string>) =>
+  [
+    ...credentials->Array.filter(((name, _)) =>
+      name != "DRIVER_KINDS" && name != "DATABASE_API_TOKEN"
+    ),
+    ...kinds->Option.mapOr([], k => [("DRIVER_KINDS", k)]),
+  ]
+
+test(
+  "function alone by default makes the driver's Worker and D1, and asks no database token",
+  () => {
+    let account = empty()
+    let (faked, result) = installed(~env=only(None), account, fixture())
+    deepEqual(result, Ok())
+    deepEqual(
+      plain(faked),
+      [
+        "wrangler d1 list --json",
+        "wrangler d1 list --json",
+        "wrangler d1 create driver-0a1b2c3d",
+        "wrangler d1 list --json",
+        "wrangler d1 migrations apply driver-0a1b2c3d --remote --config <driver>",
+        "rescript build in <driver>",
+        "wrangler deploy --dry-run --outdir <out> --config <driver>",
+        "wrangler versions list --json --config <driver>",
+        "wrangler deploy --config <driver> --tag <tag>",
+        "wrangler secret list --config <driver>",
+        "wrangler secret put API_TOKEN --config <driver>",
+        "wrangler secret put BINDING --config <driver>",
+        "wrangler versions list --json --name object-0a1b2c3d",
+        "wrangler versions list --json --name database-0a1b2c3d",
+      ],
+    )
+    ok(faked.said->Array.includes("the kinds offered are function, DRIVER_KINDS"))
+    deepEqual((account.databases, account.buckets), ([full("driver")], []))
+    let driver = account.workers->Dict.getUnsafe(full("driver"))
+    let kinds =
+      driver.deployed
+      ->Array.get(0)
+      ->Option.flatMap(Install.parsed)
+      ->Option.map(config => config->Install.member("vars")->Install.text("KINDS"))
+    deepEqual(kinds, Some(Some("function")))
+  },
+)
+
+test("a kind listed on a rerun is added, and one dropped is named and left as it is", () => {
+  let account = empty()
+  let root = fixture()
+  let _ = installed(~env=only(None), account, root)
+  let (added, result) = installed(~env=only(Some("object,function")), account, root)
+  deepEqual(result, Ok())
+  deepEqual(
+    plain(added)->Array.filter(l =>
+      l->String.includes(" create ") || l->String.startsWith("wrangler deploy --config")
+    ),
+    [
+      "wrangler r2 bucket create objects-0a1b2c3d",
+      "wrangler deploy --config <driver> --tag <tag>",
+      "wrangler deploy --config <object> --tag <tag>",
+    ],
+  )
+  ok(added.said->Array.includes("the kinds offered are function, object, DRIVER_KINDS"))
+  let (dropped, result) = installed(~env=only(Some("function")), account, root)
+  deepEqual(result, Ok())
+  ok(plain(dropped)->Array.every(l => !(l->String.includes("delete"))))
+  deepEqual(account.buckets, [full("objects")])
+  ok(
+    dropped.said->Array.includes(
+      "object is not offered, and object-0a1b2c3d and the bucket objects-0a1b2c3d " ++ "are left as they are;",
+    ),
+    ~message=dropped.said->Array.join("\n"),
+  )
+  ok(dropped.said->Array.every(l => !(l->String.includes("database-0a1b2c3d and"))))
+})
+
+test("DRIVER_KINDS naming anything but function, object and database is refused", () => {
+  ["function,instance", "function,", "Function", "function object"]->Array.forEach(kinds => {
+    let faked = make(~env=only(Some(kinds)), ~answer=_ => Ok(""))
+    ok(Install.install(faked.world, ~dry=false, ~root=fixture())->Result.isError, ~message=kinds)
+    deepEqual(faked.ran, [])
+  })
+})
+
+test("no ambient CLOUDFLARE_ name reaches a command, wrangler given install's own", () => {
+  let (faked, result) = installed(~env=[...ambient, ...credentials], empty(), fixture())
+  deepEqual(result, Ok())
+  ok(!shows(faked))
+  faked.ran->Array.forEach(command => {
+    let values = command.env->Dict.valuesToArray
+    ok(
+      !(values->Array.includes("the-ambient-token") || values->Array.includes(anotherAccount)),
+      ~message=line(command),
+    )
+    deepEqual(command.env->Dict.get("CLOUDFLARE_EMAIL"), None)
+    deepEqual(command.env->Dict.get("DRIVER_INSTALL_TOKEN"), None)
+  })
+  ok(
+    faked.ran->Array.some(c =>
+      c.env->Dict.get("CLOUDFLARE_API_TOKEN") == Some("the-install-token")
+    ),
+  )
 })
 
 after(() => fixtures->Array.forEach(root => Host.rmSync(root, {recursive: true, force: true})))

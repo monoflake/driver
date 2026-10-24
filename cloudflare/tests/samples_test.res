@@ -71,12 +71,17 @@ let rec matches = (expect: JSON.t, actual: JSON.t) =>
 /** One case's steps, each call sent to the Worker and answered as it expects; sends counted. */
 let ran = async (case: JSON.t, ~interface) => {
   let hash = Envelope.Hex.encode(await sha256(echo))
-  let env: Driver.env = {
-    db: database(),
-    apiToken: "t0ken",
-    accountId: "023e105f4ecef8ad9ca31a8372d0c353",
-    binding: Envelope.Hex.encode(Keys.Hash.plain(secret)),
-  }
+  let env = withVars(
+    (
+      {
+        db: database(),
+        apiToken: "t0ken",
+        accountId: "023e105f4ecef8ad9ca31a8372d0c353",
+        binding: Envelope.Hex.encode(Keys.Hash.plain(secret)),
+      }: Driver.env
+    ),
+    dict{"INSTALL_ID": "0a1b2c3d", "KINDS": "function,object,database"},
+  )
   let artifacts = Dict.fromArray([(addressOf("echo-modules"), echo)])
   let restore = replaced(Account.make(~artifacts))
   let steps = case->member("steps")->Option.flatMap(JSON.Decode.array)->Option.getOr([])

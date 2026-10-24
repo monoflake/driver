@@ -123,6 +123,15 @@ Decided by the author on 2026-10-23, from the research the Options below record.
   grace is swept as each request to the management arrives, never one to a kind, and which machine
   calls the sweep on a timer, and how, is **Pending**.
 - **A database is D1**, where `database` is offered.
+- **Each `database` item gets a D1 of its own**, decided by the author on 2026-10-24, made for it
+  and removed with it, never handed to another item; this supersedes "a binding holds one
+  database" below. With no hand-over there is nothing for a late write to land in, so the gap the
+  clearing lease leaves is closed by design. Rejected: a guard statement before every batch, which
+  patches the hand-over, and leaving the gap. It is built when `database` is first offered on a
+  Cloudflare binding, since an organization's free account is not offered it, so nothing uses it
+  today; until then the one database, its clearing lease and its change of owner below stand, and
+  they are replaced once it is built. Its cost: the free plan allows 10 D1 databases an account,
+  the paid plan many more.
 - **The first slice is management and function**, hello deployed through the platform to an empty
   test account; then object on R2; then database on D1.
 - **Settled as it is built, provisionally, and written here then**: how a deployment's `network` is
@@ -335,3 +344,24 @@ Choices made provisionally while the thread runs, read by the author at its end.
   deploys that deployment to the listed name instead of `app-<id>-<install id>`. It is that
   deployment's Worker, never a management item. A listed bucket or D1 stands for a management
   item's id.
+- **The install id is recorded in driver's model**, provisional, chosen by the advisor on 2026-10-24:
+  `INSTALL_ID` and `KINDS` in the env type, the kinds in `Management.apply`, and the install id in
+  `workerOf`, with no cast left. The name check in `cloudflare/src/installed.res` stays the guard:
+  every call to Cloudflare holds the name to `<name>-<own install id>`, the author's "everything
+  else is ignored" enforced in code.
+- **With `KINDS` lacking `function`, every deployments call is refused as `beyond_host`**,
+  provisional, chosen by the advisor on 2026-10-24, as a list naming a kind not offered is refused.
+- **The dry run says which, by a read-only `d1 list`**, provisional, chosen by the advisor on
+  2026-10-24, a dry run writing nothing rather than reading nothing. Where the account cannot be
+  read, for want of credentials or a failed list, it prints the rule and says why it could not say
+  which.
+- **A misinstall fails closed, answered `fault`, never `denied`**, provisional, chosen by the
+  advisor on 2026-10-24: `denied` is a caller's credential missing or wrong, RFC fhg6w, and a bad
+  install the implementation's own fault, RFC ge55b. `INSTALL_ID` unset or malformed, and `KINDS`
+  unset, empty or holding an unknown kind, all answer `fault`, naming the variable in the message.
+  install always writes `KINDS`, validated before anything deploys, `function` its default, so
+  `KINDS` unset at run time is a broken install, not a default.
+- **To try on the empty test account**, provisional, chosen by the advisor on 2026-10-24: install
+  finding what a dropped kind left by `wrangler versions list --json --name <Worker>`.
+- **Each item's D1 is named `database-<item id>-<install id>`**, provisional, chosen by the advisor
+  on 2026-10-24.

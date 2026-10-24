@@ -154,3 +154,7 @@ type requestInit = {method: string, headers: dict<string>, body?: Uint8Array.t}
 
 /** A secret the Worker is given unset, as where none was put. */
 let unset: string = %raw(`undefined`)
+
+/** A copy of `env` with `vars` set beside its own fields, as install sets a Worker's variables. */
+@val external assignedOf: (dict<string>, 'env, dict<string>) => 'env = "Object.assign"
+let withVars = (env: 'env, vars) => assignedOf(dict{}, env, vars)

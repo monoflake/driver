@@ -17,5 +17,5 @@
 			"database_id": "00000000-0000-0000-0000-000000000000"
 		}
 	],
-	"vars": { "ACCOUNT_ID": "", "DATABASE_ID": "" }
+	"vars": { "INSTALL_ID": "", "ACCOUNT_ID": "", "DATABASE_ID": "" }
 }
