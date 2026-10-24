@@ -16,7 +16,7 @@ ids = "monoflake"
 
 # Suffixes this repository alone tracks, formatted by nothing, the workspace's docs/lint-format.md.
 [format]
-unformatted = [".capnp"]
+unformatted = [".capnp", ".sql"]
 # The readings a test reads, kept byte for byte, which neither the suffixes part nor a hook touches.
 test_data = [
 	"machine/management/tests/first/sys/fs/cgroup",
@@ -49,4 +49,16 @@ spelled = ["MONOFLAKE_FOOTING"]
 
 [[names.data]]
 file = "machine/function/tests/workerd/echo.capnp"
+spelled = ["MONOFLAKE_FOOTING"]
+
+[[names.data]]
+file = "cloudflare/function/src/function.res"
+spelled = ["MONOFLAKE_FOOTING"]
+
+[[names.data]]
+file = "cloudflare/function/tests/cloudflare_test.res"
+spelled = ["MONOFLAKE_FOOTING"]
+
+[[names.data]]
+file = "cloudflare/function/tests/function_test.res"
 spelled = ["MONOFLAKE_FOOTING"]

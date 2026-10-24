@@ -1,0 +1,18 @@
+{
+	"name": "@monoflake/driver-cloudflare",
+	"namespace": "DriverCloudflare",
+	"sources": [
+		{ "dir": "src", "subdirs": true },
+		{ "dir": "tests", "subdirs": true, "type": "dev" }
+	],
+	"dependencies": [
+		"@monoflake/envelope",
+		"@monoflake/codec",
+		"@monoflake/keys",
+		"@monoflake/driver-cloudflare-function",
+		"@monoflake/driver-cloudflare-management"
+	],
+	"package-specs": [{ "module": "esmodule", "in-source": true }],
+	"suffix": ".res.mjs",
+	"warnings": { "number": "+4", "error": "+a-110" }
+}
