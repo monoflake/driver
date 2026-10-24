@@ -173,17 +173,15 @@ Decided by the author on 2026-10-23, from the research the Options below record.
   - **What is cleared and what is counted, after review**: a prefix or a row is cleared only where
     its item is absent from the driver's `items`, read after the bucket was listed, so an item that
     exists keeps its keys though it holds the bucket no more, until the driver removes it; after a
-    put, its row is settled to what R2 holds for the key. Two gaps are left: where the put and the
-    head after it both fail, the row stays as counted before; and a put settling its row between a
-    delete's removal of the key and of its row leaves that object uncounted, closing which would
-    ask a head after every delete.
-
-  The third slice's, database on D1, each provisional, chosen by the advisor on 2026-10-24:
+    put, its row is settled by a head of the key, forgotten where the key is gone, and where the put
+    and that head both fail it goes back to what it counted before. One gap is left: a put settling
+    its row between a delete's removal of the key and of its row leaves that object uncounted,
+    closing which would ask a head after every delete.
   - **A binding holds one database**, as it holds one bucket: a list holding two `database` items
     or more is refused whole as `beyond_host`, and one past 10 GB too, D1's bound on a database; a
     new item is failed as `beyond_host` while an older one unasked still holds it.
   - **Names.** The block `cloudflare/database`, the Worker `database` and its D1 database
-    `database`, made with the rest by `install` with the hint `wnam`, answering
+    `database`, made with the rest by `install` where `DRIVER_LOCATION` places them, answering
     `POST /database/{operation}`, the binding's token held as the driver holds it; a `database`
     item is `made` at the Worker's address.
   - **A new item holds nothing of an old one.** The driver's D1 records which item the database
@@ -213,8 +211,10 @@ Decided by the author on 2026-10-23, from the research the Options below record.
     `DRIVER_API_TOKEN`. The binding's token is read on stdin, as `driver-machine bind` reads it,
     and put as `BINDING` by its BLAKE3; with nothing on stdin that step is passed over, how a
     binding is made waiting on monoflake/platform's RFC 7i2at.
-  - **The database and the bucket are placed by the hint `wnam`** on the test account alone; a user
-    binding an account of their own chooses where its parts are placed.
+  - **Where the parts are placed is `DRIVER_LOCATION`**, a location hint given to the database and
+    the bucket, `wnam` on the test account; with none given no hint is passed and Cloudflare places
+    them, so a user binding an account of their own chooses. `install` builds each Worker's package
+    before it bundles it.
 
 Out of date in this repository's neighbors, to be corrected when one is decided: a Worker's size is
 64 MiB uncompressed on every plan, where RFC vr5lw and `monoflake/platform`'s
