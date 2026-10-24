@@ -159,6 +159,17 @@ Decided by the author on 2026-10-23, from the research the Options below record.
     `storage_full` and an object past 16 MiB as `too_large`. A second write to one key within a
     second, which R2 refuses, is a `fault` whose message names R2's limit on a key and asks for a
     retry, never `storage_full`, which would tell a caller to make room, RFC 49qyg.
+  - **An item's objects are kept apart by its id**, each key `<item id>/<name>` and each row of
+    `objects` naming its item, and the Worker `object` reads and writes under the prefix of the one
+    `object` item made now alone, so a new item never sees an ended one's objects, as a machine's
+    volume goes with its item. What belongs to no item made now is deleted a batch at a time, at
+    most 1,000 keys on each request the Worker `object` answers, the driver binding no R2. Its cost
+    is that what an ended item left stays in the bucket while no request comes.
+  - **Implementers' defaults, let stand by the advisor**: a new `object` item is failed as
+    `beyond_host` while an older one unasked still holds the bucket, as `bucketed` does; a list's
+    `after` is R2's `startAfter`; a range past an object's end is read empty with its size; an
+    object call's body is bounded as driver(machine)'s `LARGEST_OBJECT`, refused as `malformed`
+    past it.
 
 Out of date in this repository's neighbors, to be corrected when one is decided: a Worker's size is
 64 MiB uncompressed on every plan, where RFC vr5lw and `monoflake/platform`'s
