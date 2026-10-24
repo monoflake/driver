@@ -69,7 +69,7 @@ run = 'rescript build > /dev/null && node scripts/archive.res.mjs ${usage_dry_ru
 [tasks.dev]
 description = "Build driver-machine for a test machine, copy it in, restart and check it: `dev <host> [--watch] [--dry-run]`"
 usage = '''
-arg "<host>" help="The test machine as ssh reaches it, `root@buf`, or `local` for monoflake/machine's"
+arg "<host>" help="The test machine as ssh reaches it, `root@machine.example`, or `local` for monoflake/machine's"
 flag "--watch" help="Do it again on every save of what the program is built from"
 flag "-n --dry-run" help="Say what would be done and change nothing"
 '''

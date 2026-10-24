@@ -190,7 +190,9 @@ let watch = Base.args->Array.includes("--watch")
 if isMain {
   switch named {
   | None =>
-    Console.error("dev: name the machine as ssh reaches it, `dev root@buf`, or `dev local`")
+    Console.error(
+      "dev: name the machine as ssh reaches it, `dev root@machine.example`, or `dev local`",
+    )
     Base.process->Base.setExitCode(1)
   | Some(name) if dry =>
     let host = reached(name)
