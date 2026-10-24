@@ -191,8 +191,11 @@ Decided by the author on 2026-10-23, from the research the Options below record.
     the item was made, or within a second after, is refused as `beyond_window`, the second a margin
     for the Worker's clock against D1's, until a live account shows whether a Time Travel bookmark
     taken after the clear can bound it instead. What an ended item left stays while no request
-    comes. The item is taken over by one conditional update of `database_held`, and only the call
-    that changed it clears. One gap is left: a call of the old item that found it held before the
+    comes. The item is taken over by one conditional update of `database_held`, which records it
+    not yet cleared under a lease of 30 seconds; the call that changed it clears, every DROP
+    carrying IF EXISTS so a clear runs again, and records `since` once the clear is done. A call of
+    the item while the lease is fresh is answered `overloaded`, and one finding it passed takes it
+    by a conditional update and clears again. One gap is left: a call of the old item that found it held before the
     old item ended, its batch landing after the clear, writes into the new item's database; a
     marker checked by every batch would close it, which waits on the author.
   - **A rewind is Time Travel's restore**, a REST call, by a token of its own holding D1 Edit
@@ -210,8 +213,9 @@ Decided by the author on 2026-10-23, from the research the Options below record.
     `copies.json` is left out, since the driver sees one copy of a D1 database and cannot be
     read-only below a majority of copies.
   - **What D1 cannot answer as the contract asks**: an integer and a real alike come back as
-    numbers, so a whole real reads as an integer; an integer past 2^53 is found once the batch
-    ran, so a write returning one has already happened; and a batch's rows come back as objects,
+    numbers, so a whole real reads as an integer; a value of no known type, a number not finite
+    and an integer past 2^53 are found once the batch ran and answered as errors, so a write
+    returning one has already happened; and a batch's rows come back as objects,
     workerd's `batch()` ending in `toArrayOfObjects` (`src/cloudflare/internal/d1-api.ts`), so a
     result's columns are read from its first row, in the order JavaScript gives an object's keys,
     integer-like names first, a statement with no rows names none, and two columns of one name are
