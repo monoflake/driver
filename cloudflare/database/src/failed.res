@@ -18,6 +18,10 @@ let reasonOf = message => {
     "overloaded"
   } else if (
     has("SQLITE_ERROR") ||
+    has("SQLITE_AUTH") ||
+    has("not authorized") ||
+    has("must contain only one statement") ||
+    has("Wrong number of parameter bindings") ||
     has("SQLITE_RANGE") ||
     has("SQLITE_MISMATCH") ||
     has("syntax error") ||

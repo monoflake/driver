@@ -151,3 +151,6 @@ let bucket: ref<float> => Object.bucket = %raw(`clock => {
 
 type requestInit = {method: string, headers: dict<string>, body?: Uint8Array.t}
 @new external request: (string, requestInit) => Web.request = "Request"
+
+/** A secret the Worker is given unset, as where none was put. */
+let unset: string = %raw(`undefined`)

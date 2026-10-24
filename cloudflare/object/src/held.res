@@ -22,7 +22,7 @@ let same = (a, b) => {
 
 /**
  * Whether a token's secret by its BLAKE3 in hex is held, `given` the secret `BINDING` until an
- * apply names the tokens, as the management's `holds` reads them.
+ * apply names the tokens, as the management's `holds` reads them, none where `BINDING` is unset.
  */
 let holds = async (db, ~given, hash) => {
   let held: option<heldRow> =
@@ -31,7 +31,7 @@ let holds = async (db, ~given, hash) => {
   | Some({listed}) if listed == 1. =>
     let rows: rows<tokenRow> = await db->prepare("SELECT hash FROM tokens")->bind([])->all
     rows.results->Array.map(t => t.hash)
-  | Some(_) => [given]
+  | Some(_) => given->Option.mapOr([], given => [given])
   | None => throw(Unkept("the driver's D1 holds no row of held, as its migrations write"))
   }
   tokens->Array.reduce(false, (found, held) => same(held, hash) || found)

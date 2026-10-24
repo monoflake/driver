@@ -229,7 +229,12 @@ let called = async (request, env, forms: Answer.forms, parts, ~holding) => {
 let serve = async (request, env, forms: Answer.forms) => {
   let header = name => request->Web.requestHeaders->Web.header(name)->Nullable.toOption
   let early = error => Answer.refused(error, forms.answer)
-  let given = env.binding->String.trim->String.toLowerCase
+  // An unset or empty BINDING holds no token, so every caller is denied.
+  let given =
+    Secrets.read(env.binding)
+    ->Nullable.toOption
+    ->Option.map(binding => binding->String.trim->String.toLowerCase)
+    ->Option.filter(binding => binding != "")
   // A caller not yet held to a token is told nothing of why its token could not be read.
   let held = switch Bearer.hashOf(header("authorization")) {
   | Some(hash) =>

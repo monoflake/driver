@@ -22,7 +22,7 @@ let same = (a, b) => {
 
 /**
  * Whether a token's secret by its BLAKE3 in hex is held, `given` the secret `BINDING` until an
- * apply names the tokens, as the management's `holds` reads them.
+ * apply names the tokens, as the management's `holds` reads them, none where `BINDING` is unset.
  */
 let holds = async (db, ~given, hash) => {
   let held: option<heldRow> =
@@ -31,7 +31,7 @@ let holds = async (db, ~given, hash) => {
   | Some({listed}) if listed == 1. =>
     let rows: rows<tokenRow> = await db->prepare("SELECT hash FROM tokens")->bind([])->all
     rows.results->Array.map(t => t.hash)
-  | Some(_) => [given]
+  | Some(_) => given->Option.mapOr([], given => [given])
   | None => throw(Unkept("the driver's D1 holds no row of held, as its migrations write"))
   }
   tokens->Array.reduce(false, (found, held) => same(held, hash) || found)
@@ -64,20 +64,23 @@ let held = async db => {
   row
 }
 
-/** The database recorded as held for an item since a moment, at a size. */
-let hold = async (db, held: held) => {
+/**
+ * The database taken for an item from the one `was` recorded, none for none, in one statement, and
+ * whether this call took it, so only one call of several clears it.
+ */
+let handed = async (db, ~was, held: held) => {
   let sql =
     [
       "INSERT INTO database_held (one, item, since, size) VALUES (1, ?, ?, ?)",
       "ON CONFLICT (one) DO UPDATE SET item = excluded.item, since = excluded.since,",
-      "size = excluded.size",
+      "size = excluded.size WHERE database_held.item IS ?",
     ]->Array.join(" ")
-  ignore(
-    await db
-    ->prepare(sql)
-    ->bind([Number(held.item), Number(held.since), Number(held.size)])
-    ->run,
-  )
+  let was = was->Option.mapOr(Null, item => Number(item))
+  let ran = await db
+  ->prepare(sql)
+  ->bind([Number(held.item), Number(held.since), Number(held.size), was])
+  ->run
+  ran.meta.changes > 0.
 }
 
 /** The database's size after a batch, recorded only while it is held for that item still. */

@@ -1,6 +1,6 @@
 /***
- * The database restored by D1 Time Travel, as https://developers.cloudflare.com/api/resources/d1/
- * subresources/database/subresources/time_travel/methods/restore/ documents it, RFC nrs5v.
+ * The database restored by D1 Time Travel, as the page below documents it, RFC nrs5v.
+ * https://developers.cloudflare.com/api/resources/d1/subresources/database/subresources/time_travel/methods/restore/
  */
 
 let origin = "https://api.cloudflare.com/client/v4"

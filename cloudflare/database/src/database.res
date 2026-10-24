@@ -23,6 +23,9 @@ let largest = 100_000_000
 let window =
   30. *. 24. *. 60. *. 60. *. 1000.
 
+/** The second after the database was emptied that a rewind reaches, past a skew of clocks. */
+let settled = 1000.
+
 /** An answer of an operation, its error by a reason the operation declares and its message. */
 let refused = (operation: Contracts.operation, reason, ~message=?) => Contracts.Answer.Error(
   Answer.error(~declared=operation.reasons, reason, ~message?),
@@ -31,17 +34,22 @@ let refused = (operation: Contracts.operation, reason, ~message=?) => Contracts.
 let unheld = "the binding holds no database item"
 
 /**
- * The database held for an item, emptied first where it was held for another or for none, and
- * what is recorded of it.
+ * The database held for an item, emptied where it was held for another or for none by the one call
+ * that took it, and what is recorded of it.
  */
-let heldFor = async (env, item: Held.item) =>
+let rec heldFor = async (env, item: Held.item) =>
   switch await Held.held(env.db) {
   | Some(held) if held.item == item.id => held
-  | Some(_) | None =>
-    let size = await Cleared.clear(env.database)
+  | was =>
+    let size = was->Option.mapOr(0., was => was.size)
     let held: Held.held = {item: item.id, since: Date.now(), size}
-    await Held.hold(env.db, held)
-    held
+    if await Held.handed(env.db, ~was=was->Option.map(was => was.item), held) {
+      let size = await Cleared.clear(env.database)
+      await Held.sized(env.db, ~item=item.id, size)
+      {...held, size}
+    } else {
+      await heldFor(env, item)
+    }
   }
 
 /** A statement's rows, its columns named as D1 keys each, in the order the first row holds them. */
@@ -93,8 +101,12 @@ let executed = async (env, item: option<Held.item>, input: Contracts.DatabaseExe
       )
       switch await env.database->Stores.batch(statements) {
       | ran =>
+        // The batch committed, so a size not recorded is read again after the next batch.
         switch ran->Array.at(-1) {
-        | Some(last) => await Held.sized(env.db, ~item=item.id, last.meta.sizeAfter)
+        | Some(last) =>
+          try await Held.sized(env.db, ~item=item.id, last.meta.sizeAfter) catch {
+          | JsExn(_) => ()
+          }
         | None => ()
         }
         let results =
@@ -126,8 +138,9 @@ let rewound = async (env, item: option<Held.item>, input: Contracts.DatabaseRewi
   | Some(item) =>
     let held = await heldFor(env, item)
     let now = Date.now()
-    if input.to < held.since {
-      refused(operation, "beyond_window", ~message="the moment is before the item was made")
+    if input.to < held.since +. settled {
+      let message = "the moment is not a second past when the database was emptied for the item"
+      refused(operation, "beyond_window", ~message)
     } else if input.to < now -. window || input.to > now {
       refused(operation, "beyond_window", ~message="a rewind is to a moment of the last 30 days")
     } else {
@@ -139,7 +152,13 @@ let rewound = async (env, item: option<Held.item>, input: Contracts.DatabaseRewi
         ~token=env.apiToken,
         ~to=input.to,
       ) {
-      | Ok() => Contracts.Answer.Success(({before: before}: Contracts.DatabaseRewound.t))
+      | Ok() =>
+        // The size the restore left, read again where it can be and else after the next batch.
+        switch await env.database->Stores.prepare("SELECT 1")->Stores.bind([])->Stores.run {
+        | ran => await Held.sized(env.db, ~item=item.id, ran.meta.sizeAfter)
+        | exception JsExn(_) => ()
+        }
+        Contracts.Answer.Success(({before: before}: Contracts.DatabaseRewound.t))
       | Error(message) => refused(operation, "fault", ~message)
       }
     }
@@ -196,7 +215,12 @@ let called = async (request, env, forms: Answer.forms, parts, ~holding) => {
 let serve = async (request, env, forms: Answer.forms) => {
   let header = name => request->Web.requestHeaders->Web.header(name)->Nullable.toOption
   let early = error => Answer.refused(error, forms.answer)
-  let given = env.binding->String.trim->String.toLowerCase
+  // An unset or empty BINDING holds no token, so every caller is denied.
+  let given =
+    Secrets.read(env.binding)
+    ->Nullable.toOption
+    ->Option.map(binding => binding->String.trim->String.toLowerCase)
+    ->Option.filter(binding => binding != "")
   // A caller not yet held to a token is told nothing of why its token could not be read.
   let held = switch Bearer.hashOf(header("authorization")) {
   | Some(hash) =>

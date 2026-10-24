@@ -28,6 +28,18 @@ test("a call is answered only for the binding's token, or the tokens an apply na
   deepEqual(await describe(theirs), (200, success("{}")))
 })
 
+test("an unset or empty BINDING holds no token, so every caller is denied", async () => {
+  let served = Served.make(~size=1024.)
+  let bindings = [unset, "", "  "]
+  for at in 0 to Array.length(bindings) - 1 {
+    let unbound = {...served, env: {...served.env, binding: bindings->Array.getUnsafe(at)}}
+    let describe = authorization =>
+      unbound->Served.call(~authorization, "describe", `{"name": "a"}`)
+    deepEqual(reasonOf(await describe("")), (403, Some("denied")))
+    deepEqual(reasonOf(await describe(`Bearer ${Served.token}`)), (403, Some("denied")))
+  }
+})
+
 test(
   "with no object item a read is not found, a list holds nothing and a write no room",
   async () => {

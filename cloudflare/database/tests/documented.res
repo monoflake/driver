@@ -1,9 +1,8 @@
 /***
- * Time Travel's restore answered by the example of https://developers.cloudflare.com/api/resources/
- * d1/subresources/database/subresources/ at the path above it, copied as `docs/code.md` asks.
+ * Time Travel's restore answered by the example of the page below, copied as `docs/code.md` asks.
+ * https://developers.cloudflare.com/api/resources/d1/subresources/database/subresources/time_travel/methods/restore/
  */
 
-// time_travel/methods/restore/
 let restored = `{
   "errors": [
     {
@@ -33,7 +32,7 @@ let restored = `{
   "success": true
 }`
 
-// The errors envelope the page above documents, its example's own error, `success` false.
+// The errors envelope the page documents, its example's own error, `success` false.
 let refused = `{
   "errors": [
     {

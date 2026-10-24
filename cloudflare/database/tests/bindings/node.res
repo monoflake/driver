@@ -31,11 +31,20 @@ type sqlite
  */
 let asDatabase: (sqlite, ref<float>) => Database.database = %raw(`(db, clock) => {
   const codes = { 1: "ERROR", 8: "READONLY", 13: "FULL", 18: "TOOBIG", 19: "CONSTRAINT",
-    20: "MISMATCH", 25: "RANGE" }
+    20: "MISMATCH", 23: "AUTH" }
+  // D1 attaches nothing, and words a statement's tail and a binding past its count itself.
+  const attaching = action => action === 24 ? 1 : 0
+  db.setAuthorizer(attaching)
+  const refusal = message => Object.assign(new Error(message), { refusal: true })
   const failed = e => {
-    const code = codes[(e.errcode ?? 1) & 0xff] ?? "ERROR"
-    return new Error("D1_ERROR: " + e.message + ": SQLITE_" + code)
+    if (e.refusal) return new Error("D1_ERROR: " + e.message)
+    if (e.errcode === 25)
+      return new Error("D1_ERROR: Wrong number of parameter bindings for SQL query.")
+    const code = codes[e.errcode & 0xff]
+    return new Error("D1_ERROR: " + e.message + (code ? ": SQLITE_" + code : ""))
   }
+  const tail = (sql, statement) => sql.slice(statement.sourceSQL.length)
+    .replace(/--[^\n]*|\/\*[\s\S]*?(\*\/|$)|[\s;]/g, "")
   const cell = v => typeof v === "bigint" ? Number(v) : v instanceof Uint8Array ? Array.from(v) : v
   const bound = v => typeof v === "number" && Number.isInteger(v) ? BigInt(v) : v
   const one = (sql, values) => {
@@ -50,6 +59,8 @@ let asDatabase: (sqlite, ref<float>) => Database.database = %raw(`(db, clock) =>
   const ran = (sql, values) => {
     const before = [total(), schema()]
     const statement = one(sql, values)
+    if (tail(sql, statement) !== "")
+      throw refusal("A prepared SQL statement must contain only one statement.")
     const args = values.map(bound)
     let results
     if (statement.columns().length > 0) {
@@ -64,21 +75,33 @@ let asDatabase: (sqlite, ref<float>) => Database.database = %raw(`(db, clock) =>
     return { success: true, results, meta: { changes, changed_db, size_after: size() } }
   }
   const snapshots = [{ time: -Infinity, bytes: db.serialize() }]
+  // A statement a test holds back is run at once and answered once released, or failed unrun.
+  const gates = []
+  const gated = async (sql, answer) => {
+    const at = gates.findIndex(gate => sql.includes(gate.text))
+    if (at < 0) return answer()
+    const [gate] = gates.splice(at, 1)
+    if (gate.fails) throw failed(refusal("Network connection lost."))
+    const result = answer()
+    gate.reach()
+    await gate.released
+    return result
+  }
   const statement = (sql, values) => ({
     sql,
     values,
     bind: (...bound) => statement(sql, bound),
-    first: async () => {
+    first: () => gated(sql, () => {
       const row = db.prepare(sql).get(...values.map(bound))
       return row ? Object.fromEntries(Object.entries(row).map(([k, v]) => [k, cell(v)])) : null
-    },
-    all: async () => ({
+    }),
+    all: () => gated(sql, () => ({
       results: db.prepare(sql).all(...values.map(bound)).map(row =>
         Object.fromEntries(Object.entries(row).map(([k, v]) => [k, cell(v)]))),
-    }),
-    run: async () => {
+    })),
+    run: () => gated(sql, () => {
       try { return ran(sql, values) } catch (e) { throw failed(e) }
-    },
+    }),
   })
   return {
     prepare: sql => statement(sql, []),
@@ -96,11 +119,21 @@ let asDatabase: (sqlite, ref<float>) => Database.database = %raw(`(db, clock) =>
     },
     restore: time => {
       const at = snapshots.filter(s => s.time <= time).at(-1)
+      db.setAuthorizer(null)
       db.deserialize(at.bytes)
+      db.setAuthorizer(attaching)
       clock.contents += 1
       snapshots.push({ time: clock.contents, bytes: db.serialize() })
     },
     batches: () => snapshots.length - 1,
+    holdBack: text => {
+      const gate = { text }
+      const reached = new Promise(resolve => { gate.reach = resolve })
+      gate.released = new Promise(resolve => { gate.release = resolve })
+      gates.push(gate)
+      return { reached, release: () => gate.release() }
+    },
+    failOnce: text => { gates.push({ text, fails: true }) },
   }
 }`)
 
@@ -109,6 +142,15 @@ let asDatabase: (sqlite, ref<float>) => Database.database = %raw(`(db, clock) =>
 
 /** How many batches were done and restores made, every one kept as a snapshot. */
 @send external batches: Database.database => int = "batches"
+
+/** A statement held back, run at once but answered once released, and when it was reached. */
+type gate = {reached: promise<unit>, release: unit => unit}
+
+/** The next statement holding a text, held back until the gate is released. */
+@send external holdBack: (Database.database, string) => gate = "holdBack"
+
+/** The next statement holding a text failed before it runs, as D1 fails a lost connection. */
+@send external failOnce: (Database.database, string) => unit = "failOnce"
 
 /** node's SQLite in memory with the driver's migrations applied in order. */
 let migrated = () => {
@@ -155,3 +197,6 @@ let answering: (array<sent>, (string, Web.init) => promise<Web.response>) => uni
 type params
 @get external searchParams: Web.parts => params = "searchParams"
 @send external searchGet: (params, string) => Nullable.t<string> = "get"
+
+/** A secret the Worker is given unset, as where none was put. */
+let unset: string = %raw(`undefined`)

@@ -34,6 +34,18 @@ test("a call is answered only for the binding's token, or the tokens an apply na
   deepEqual(await select(theirs), (200, success(`{"results": []}`)))
 })
 
+test("an unset or empty BINDING holds no token, so every caller is denied", async () => {
+  let served = Served.make(~size=1_000_000.)
+  let bindings = [unset, "", "  "]
+  for at in 0 to Array.length(bindings) - 1 {
+    let unbound = {...served, env: {...served.env, binding: bindings->Array.getUnsafe(at)}}
+    let select = authorization =>
+      unbound->Served.call(~authorization, "execute", `{"statements": []}`)
+    deepEqual(reasonOf(await select("")), (403, Some("denied")))
+    deepEqual(reasonOf(await select(`Bearer ${Served.token}`)), (403, Some("denied")))
+  }
+})
+
 test("a call not at its path, or not as the path names it, is malformed", async () => {
   let served = Served.make(~size=1_000_000.)
   let empty = `{"statements": []}`
@@ -106,6 +118,41 @@ test("the first call for another item drops whatever a user made, and D1's own s
   )
 })
 
+test(
+  "a table named before one whose rows name it is dropped with it for another item",
+  async () => {
+    let served = Served.make(~size=1_000_000.)
+    let made = [
+      "CREATE TABLE a_parent (id INTEGER PRIMARY KEY)",
+      "CREATE TABLE b_child (parent INTEGER REFERENCES a_parent (id))",
+      "INSERT INTO a_parent VALUES (1)",
+      "INSERT INTO b_child VALUES (1)",
+    ]
+    deepEqual((await served->Served.execute(made))->Pair.first, 200)
+    served->Served.forget(1.)
+    served->Served.item(~id=2., 1_000_000.)
+    deepEqual((await served->Served.execute(["SELECT 1"]))->Pair.first, 200)
+    deepEqual(names(served), ["_cf_KV", "sqlite_autoindex__cf_KV_1"])
+  },
+)
+
+test("two first calls for a new item clear the database once, and keep what it made", async () => {
+  let served = Served.make(~size=1_000_000.)
+  deepEqual((await served->Served.execute(["CREATE TABLE old (i INTEGER)"]))->Pair.first, 200)
+  served->Served.forget(1.)
+  served->Served.item(~id=2., 1_000_000.)
+  let done = served.env.database->batches
+  // The late call reads the old item, and is answered that read once the early call is done.
+  let gate = served.env.db->holdBack("FROM database_held")
+  let late = served->Served.execute(["CREATE TABLE late (i INTEGER)"])
+  await gate.reached
+  deepEqual((await served->Served.execute(["CREATE TABLE early (i INTEGER)"]))->Pair.first, 200)
+  gate.release()
+  deepEqual((await late)->Pair.first, 200)
+  deepEqual(names(served), ["_cf_KV", "early", "late", "sqlite_autoindex__cf_KV_1"])
+  deepEqual(served.env.database->batches, done + 3)
+})
+
 test("an item unasked once made still holds the database, within its grace", async () => {
   let served = Served.make()
   let address = "database.my-subdomain.workers.dev"
@@ -155,6 +202,45 @@ test("a statement past the bound is refused before D1 runs anything of its batch
   )
   deepEqual(served.env.database->batches, done)
 })
+
+test(
+  "a batch that committed is answered, its size recorded by a later batch where not",
+  async () => {
+    let served = Served.make(~size=1_000_000.)
+    deepEqual((await served->Served.execute(["CREATE TABLE t (b BLOB)"]))->Pair.first, 200)
+    let held = () =>
+      served.driver
+      ->rows("SELECT size FROM database_held")
+      ->Array.filterMap(row => row->Dict.get("size")->Option.flatMap(JSON.Decode.float))
+    let before = held()
+    served.env.db->failOnce("UPDATE database_held SET size")
+    let fill = "INSERT INTO t VALUES (zeroblob(50000))"
+    deepEqual((await served->Served.execute([fill]))->Pair.first, 200)
+    deepEqual(held(), before)
+    deepEqual((await served->Served.execute(["INSERT INTO t VALUES (NULL)"]))->Pair.first, 200)
+    ok(held()->Array.every(size => before->Array.every(was => size > was +. 40_000.)))
+    deepEqual(await served->count, (200, counted("2")))
+  },
+)
+
+test(
+  "a statement D1 will not run is invalid, a tail, a binding past its count or an attach",
+  async () => {
+    let served = Served.make(~size=1_000_000.)
+    let one = `{"kind": "integer", "value": 1}`
+    let refused = [
+      (`{"sql": "SELECT 1; SELECT 2"}`, "only one statement"),
+      (`{"sql": "SELECT ?", "parameters": [${one}, ${one}]}`, "parameter bindings"),
+      (`{"sql": "ATTACH ':memory:' AS other"}`, "SQLITE_AUTH"),
+    ]
+    for at in 0 to Array.length(refused) - 1 {
+      let (statement, said) = refused->Array.getUnsafe(at)
+      let answer = await served->Served.call("execute", `{"statements": [${statement}]}`)
+      deepEqual(reasonOf(answer), (400, Some("invalid")))
+      ok(messageOf(answer)->Option.mapOr(false, m => m->String.includes(said)))
+    }
+  },
+)
 
 test("a failed batch keeps nothing, its reason read from D1's message", async () => {
   let served = Served.make(~size=1_000_000.)
@@ -262,6 +348,56 @@ test(
     deepEqual(reasonOf(await served->rewind(served.clock.contents +. 1.)), beyond)
     deepEqual(served.sent, [])
     deepEqual((await served->rewind(start +. 2. *. 86_400_000.))->Pair.first, 200)
+  },
+)
+
+test(
+  "a rewind within 30 days but before the database was emptied is beyond the window",
+  async () => {
+    let served = Served.make(~size=1_000_000.)
+    let start = served.clock.contents
+    deepEqual((await served->Served.execute(["SELECT 1"]))->Pair.first, 200)
+    served.clock := start +. 86_400_000.
+    deepEqual(reasonOf(await served->rewind(start -. 60_000.)), (400, Some("beyond_window")))
+    deepEqual(served.sent, [])
+  },
+)
+
+test("a rewind reaches a second past when the database was emptied, never sooner", async () => {
+  let served = Served.make(~size=1_000_000.)
+  let start = served.clock.contents
+  deepEqual((await served->Served.execute(["SELECT 1"]))->Pair.first, 200)
+  served.clock := start +. 60_000.
+  deepEqual(reasonOf(await served->rewind(start)), (400, Some("beyond_window")))
+  deepEqual(reasonOf(await served->rewind(start +. 999.)), (400, Some("beyond_window")))
+  deepEqual(served.sent, [])
+  deepEqual((await served->rewind(start +. 1000.))->Pair.first, 200)
+})
+
+test(
+  "a rewind that brings rows back holds the size it left, so a write finds no room",
+  async () => {
+    let served = Served.make(~size=100_000.)
+    let start = served.clock.contents
+    deepEqual((await served->Served.execute(["CREATE TABLE t (b BLOB)"]))->Pair.first, 200)
+    served.clock := start +. 60_000.
+    let fill = "INSERT INTO t VALUES (zeroblob(50000))"
+    deepEqual((await served->Served.execute([fill]))->Pair.first, 200)
+    served.clock := start +. 120_000.
+    deepEqual((await served->rewind(start +. 1000.))->Pair.first, 200)
+    // A batch after the first rewind records the size small, whatever that rewind kept.
+    deepEqual((await served->Served.execute(["CREATE TABLE u (i INTEGER)"]))->Pair.first, 200)
+    served.clock := start +. 180_000.
+    deepEqual((await served->rewind(start +. 90_000.))->Pair.first, 200)
+    let text = String.repeat("a", 40_000)
+    let parameter = `{"kind": "text", "value": "${text}"}`
+    let write = `{"sql": "INSERT INTO t VALUES (?)", "parameters": [${parameter}]}`
+    deepEqual(
+      reasonOf(await served->Served.call("execute", `{"statements": [${write}]}`)),
+      (503, Some("storage_full")),
+    )
+    // Read last, as a read batch records the size too.
+    deepEqual(await served->count, (200, counted("1")))
   },
 )
 
