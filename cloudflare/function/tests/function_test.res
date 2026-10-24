@@ -196,6 +196,18 @@ test("a Worker made for a deployment that failed is told failed, and may be dele
   deepEqual(await Function.delete(through, of_), Success({}))
 })
 
+test(
+  "a first deploy failing where the Worker may be made is told failed, as one made is",
+  async () => {
+    let (through, account, _, _) = setUp()
+    account.refusing := Some((Deploy, failing))
+    account.seeing := Some(1)
+    deepEqual(reasonOf(await Function.deploy(through, await deployOf())), Some((Unknown, "fault")))
+    account.seeing := None
+    deepEqual(stateOf(await Function.describe(through, of_)), Some(Failed({reason: "fault"})))
+  },
+)
+
 test("a first deploy refused before any Worker is made keeps nothing", async () => {
   let (through, account, kept, _) = setUp()
   account.refusing := Some((Upload, failing))

@@ -161,6 +161,17 @@ let bounded = async response =>
     }
   }
 
+/** A body not to be read closed, so its connection is not held open past the answer. */
+let dropped = async response =>
+  switch response->Web.body->Nullable.toOption {
+  | Some(stream) =>
+    switch await stream->Web.discard {
+    | () => ()
+    | exception JsExn(_) => ()
+    }
+  | None => ()
+  }
+
 /**
  * An artifact fetched from its address by https alone, each redirect followed only to https, and
  * refused past the bound by its length before it is read, as machine's `container/src/fetch.rs`.
@@ -174,16 +185,20 @@ let rec fetchedFrom = async (address, ~left) =>
       let header = name => response->Web.responseHeaders->Web.header(name)->Nullable.toOption
       switch (status, header("location")) {
       | (301 | 302 | 303 | 307 | 308, Some(location)) =>
+        await dropped(response)
         switch Web.partsIn(location, address)->Web.href {
         | next if left > 0 => await fetchedFrom(next, ~left=left - 1)
         | _ => unfetchable("the artifact's address redirects too often")
         | exception JsExn(_) => unfetchable("the artifact's address redirects to no URL")
         }
       | _ if status < 200 || status >= 300 =>
+        await dropped(response)
         unfetchable(`the artifact's address answered ${Int.toString(status)}`)
       | _ =>
         switch header("content-length")->Option.flatMap(n => Float.fromString(n)) {
-        | Some(length) if length > Int.toFloat(largest) => tooLarge()
+        | Some(length) if length > Int.toFloat(largest) =>
+          await dropped(response)
+          tooLarge()
         | Some(_) | None =>
           switch await bounded(response) {
           | read => read

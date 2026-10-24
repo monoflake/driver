@@ -12,13 +12,21 @@ type account = {
   runs: Map.t<string, string>,
   asked: array<string>,
   refusing: ref<option<(step, Function.refused)>>,
+  /** How many more times asking what a Worker runs is answered before it fails, if it ever does. */
+  seeing: ref<option<int>>,
 }
 
 /** The version a Worker made runs first, the stub, which holds no tag. */
 let made = "made"
 
 let fake = () => {
-  let account = {versions: Map.make(), runs: Map.make(), asked: [], refusing: ref(None)}
+  let account = {
+    versions: Map.make(),
+    runs: Map.make(),
+    asked: [],
+    refusing: ref(None),
+    seeing: ref(None),
+  }
   let refused = step =>
     switch account.refusing.contents {
     | Some((refusing, r)) if refusing == step => Some(Error(r))
@@ -47,14 +55,22 @@ let fake = () => {
         Ok()
       }
     },
-    running: async name => Ok(
-      account.runs
-      ->Map.get(name)
-      ->Option.map(id => {
-        Function.id,
-        tag: account.versions->Map.get(id)->Option.map(u => u.tag),
-      }),
-    ),
+    running: async name =>
+      switch account.seeing.contents {
+      | Some(0) => Error({Function.reason: "fault", message: "Cloudflare's API answered 500"})
+      | Some(n) =>
+        account.seeing := Some(n - 1)
+        Ok(None)
+      | None =>
+        Ok(
+          account.runs
+          ->Map.get(name)
+          ->Option.map(id => {
+            Function.id,
+            tag: account.versions->Map.get(id)->Option.map(u => u.tag),
+          }),
+        )
+      },
     delete: async name => {
       account.asked->Array.push(`delete ${name}`)
       account.runs->Map.delete(name)->ignore

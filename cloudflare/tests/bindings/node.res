@@ -91,6 +91,18 @@ type answerInit = {status: int}
 @new external answerText: (string, answerInit) => answer = "Response"
 @new external answerBytes: (Uint8Array.t, answerInit) => answer = "Response"
 
+/** A body that never ends, a MiB at each pull, and how many times it was pulled. */
+let endless: unit => (answer, ref<int>) = %raw(`() => {
+  const pulled = { contents: 0 }
+  const body = new ReadableStream({
+    pull(controller) {
+      pulled.contents += 1
+      controller.enqueue(new Uint8Array(1 << 20))
+    },
+  })
+  return [new Response(body, { status: 200 }), pulled]
+}`)
+
 /** The global `fetch` answered by `answer` until `restore` is called, each address it was asked. */
 let replaced: ((string, fetchInit) => promise<answer>) => unit => unit = %raw(`answer => {
   const kept = globalThis.fetch

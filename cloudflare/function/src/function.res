@@ -212,11 +212,11 @@ let deploying = async (through, input: Contracts.DeploymentDeploy.t) => {
             await through.store.write(worker, kept)
             await described(through, input.runs, kept)
           | Error(refused) =>
-            // A Worker made for nothing kept is told failed, so deleting it removes it.
+            // A Worker made, or not known to be absent, for nothing kept is told failed for delete.
             switch (kept, await through.api.running(worker)) {
-            | (None, Ok(Some(_))) =>
+            | (None, Ok(Some(_)) | Error(_)) =>
               await through.store.write(worker, {version, state: #failed, reason: refused.reason})
-            | (Some(_), _) | (None, Ok(None) | Error(_)) => ()
+            | (Some(_), _) | (None, Ok(None)) => ()
             }
             Error(refused)
           }

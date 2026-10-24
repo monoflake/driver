@@ -338,6 +338,15 @@ test("an artifact past the bound is too large, by its length or by what came", a
   deepEqual(reasonOf(byBytes), tooLarge)
 })
 
+test("an artifact's body is read no further than the bound, though it never ends", async () => {
+  let (body, pulled) = endless()
+  let (answered, _) = await deployedFrom("https://artifacts.example/endless", ~served=url =>
+    url->String.startsWith("https://artifacts.example") ? Some(body) : None
+  )
+  deepEqual(reasonOf(answered), tooLarge)
+  ok(pulled.contents <= largest / 1048576 + 2)
+})
+
 test("an artifact's redirect is followed to https alone, and only so often", async () => {
   let redirect = location => Some(
     answerWith(Uint8Array.fromLength(0), {status: 302, headers: dict{"location": location}}),

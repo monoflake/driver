@@ -43,6 +43,7 @@ type chunk = {done: bool, value: Nullable.t<Uint8Array.t>}
 @send external reader: stream => reader = "getReader"
 @send external read: reader => promise<chunk> = "read"
 @send external cancel: reader => promise<unit> = "cancel"
+@send external discard: stream => promise<unit> = "cancel"
 
 type encoder
 @new external encoder: unit => encoder = "TextEncoder"
