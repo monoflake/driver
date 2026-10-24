@@ -340,8 +340,8 @@ Choices made provisionally while the thread runs, read by the author at its end.
 - **The exception list reaches the driver through management**, provisional, chosen by the advisor
   on 2026-10-24: `apply` carries it, the driver keeps it in its state, and management describe
   reports every listed name and its item.
-- **The "delete it by hand" message is a warning on describe**, provisional, chosen by the advisor on
-  2026-10-24, naming each released resource, kept until that resource no longer exists.
+- **The "delete it by hand" message is a warning on describe**, provisional, chosen by the advisor
+  on 2026-10-24, naming each released resource, kept until that resource no longer exists.
 - **A field carrying the list in a kind's management contract is monoflake/platform's**,
   provisional, chosen by the advisor on 2026-10-24: it is reported as a fact before building, and
   recorded in platform's RFCs, citing nrs5v.
@@ -353,11 +353,11 @@ Choices made provisionally while the thread runs, read by the author at its end.
   deploys that deployment to the listed name instead of `app-<id>-<install id>`. It is that
   deployment's Worker, never a management item. A listed bucket or D1 stands for a management
   item's id.
-- **The install id is recorded in driver's model**, provisional, chosen by the advisor on 2026-10-24:
-  `INSTALL_ID` and `KINDS` in the env type, the kinds in `Management.apply`, and the install id in
-  `workerOf`, with no cast left. The name check in `cloudflare/src/installed.res` stays the guard:
-  every call to Cloudflare holds the name to `<name>-<own install id>`, the author's "everything
-  else is ignored" enforced in code.
+- **The install id is recorded in driver's model**, provisional, chosen by the advisor on
+  2026-10-24: `INSTALL_ID` and `KINDS` in the env type, the kinds in `Management.apply`, and the
+  install id in `workerOf`, with no cast left. The name check in `cloudflare/src/installed.res`
+  stays the guard: every call to Cloudflare holds the name to `<name>-<own install id>`, the
+  author's "everything else is ignored" enforced in code.
 - **With `KINDS` lacking `function`, every deployments call is refused as `beyond_host`**,
   provisional, chosen by the advisor on 2026-10-24, as a list naming a kind not offered is refused.
 - **The dry run says which, by a read-only `d1 list`**, provisional, chosen by the advisor on
@@ -374,3 +374,44 @@ Choices made provisionally while the thread runs, read by the author at its end.
   finding what a dropped kind left by `wrangler versions list --json --name <Worker>`.
 - **Each item's D1 is named `database-<item id>-<install id>`**, provisional, chosen by the advisor
   on 2026-10-24.
+- **Reasons the deployments contract already declares**, provisional, chosen by the advisor on
+  2026-10-24, monoflake/platform's contract unchanged. With `KINDS` lacking `function`, `deploy`
+  answers `beyond_host`, since the host cannot hold it, and `stop`, `resume` and `describe` answer
+  `not_found`, since no deployment can exist on a binding that offers no `function`; `delete` as
+  the entry below has it. A name check
+  refusing a name the driver formed itself is the implementation's own inconsistency, so it answers
+  `fault` on every operation. A name entering through the exception list is checked against the
+  list, once the list is built.
+- **A dry run lists the missing inputs**, provisional, chosen by the advisor on 2026-10-24, runs
+  nothing that needs them, and exits 0 once it has reported; a real run refuses when any input is
+  missing.
+- **Every read-only check install makes runs before its first write**, provisional, chosen by the
+  advisor on 2026-10-24: the D1 list and the marker reads, the dropped kinds' queries, and the
+  inputs and kinds validation. A failed check stops install with nothing changed.
+- **`through` carries `installId: string`**, provisional, chosen by the advisor on 2026-10-24, the
+  same decision as keeping the install id in the model with no casts.
+- **The marker goes first, in a table of its own**, provisional, chosen by the advisor on
+  2026-10-24, replacing the order first built.
+  - Right after the D1 is made, before any migration, one `d1 execute` creates a table `install`
+    holding the install id and inserts it.
+  - The migrations never touch that table, and the recovery rule reads it.
+  - The marker column 0005 adds to `held` is dropped, which is safe since 0005 has never run on any
+    account.
+  - That shrinks the orphan window to the gap between making the database and its first statement,
+    a gap two API calls cannot close.
+  - For what is left: a `driver-<8 hex>` database with no tables at all is reported by the dry run
+    and the run as "possibly an interrupted install of this driver; delete it by hand if it is
+    yours". It is still never touched, and a non-conflicting id is drawn.
+- **curl for List Workers, the token on stdin as a header**, provisional, chosen by the advisor on
+  2026-10-24, wrangler listing no Workers. If paging exists, install reads every page before
+  deciding anything; a list it could not read whole counts as a failed read-only check, so install
+  stops with nothing changed.
+- **`delete` answers Success with no Cloudflare call when `KINDS` lacks `function`**, provisional,
+  chosen by the advisor on 2026-10-24, replacing `not_found` for `delete` alone: it keeps the
+  contract's own delete, where deleting what does not exist succeeds, and keeps "install never
+  removes what a dropped kind holds". `stop`, `resume` and `describe` keep `not_found`.
+- **Also to try on the empty test account**: whether `d1 execute <name> --remote` resolves a name
+  with no configuration and its `--json` form, the text of a missing table, whether one `d1 execute
+  --command` runs two statements apart by `;`, whether D1 answers a query of `sqlite_master`, and
+  whether List Workers, read by curl since wrangler lists no Workers, pages its answer; its
+  documentation shows no paging, so install reads one answer and refuses one that says it is part.

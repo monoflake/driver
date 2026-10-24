@@ -42,7 +42,7 @@ let defaultKinds = ["function"]
 /** An install id, 8 lowercase hex digits. */
 let installIdForm = /^[0-9a-f]{8}$/
 
-/** The driver's own D1 by its name, the one install id it holds. */
+/** A D1 name in the driver's form, `driver-<8 hex>`, its own only where it holds its marker. */
 let driverForm = /^driver-([0-9a-f]{8})$/
 
 /** A part's name followed by the install id. */
@@ -220,74 +220,256 @@ let listedDatabase = (body, name) =>
 let listedNames = body =>
   listed(body)->Result.map(all => all->Array.filterMap(db => db->text("name")))
 
-/** The install ids the driver's D1 databases are named by, each `driver-<8 hex>`. */
-let installIds = names =>
-  names->Array.filterMap(name =>
-    switch driverForm->RegExp.exec(name) {
-    | Some(found) => found->RegExp.Result.matches->Array.get(0)->Option.flatMap(id => id)
-    | None => None
+/** The install id a name in the driver's D1 form ends in, `driver-<8 hex>`. */
+let suffixOf = name =>
+  driverForm
+  ->RegExp.exec(name)
+  ->Option.flatMap(found => found->RegExp.Result.matches->Array.get(0)->Option.flatMap(id => id))
+
+/** The read-only query of a D1's tables, which says whether it holds the marker's table. */
+let tablesQuery = "SELECT name FROM sqlite_master WHERE type = 'table'"
+
+/** The read-only query of the driver's marker, the install id its table `install` holds. */
+let markerQuery = "SELECT id FROM install WHERE one = 1"
+
+/** The marker's table made and its one row written, the first statement a new D1 runs. */
+let markerWrite = id =>
+  [
+    "CREATE TABLE install (one INTEGER PRIMARY KEY CHECK (one = 1), id TEXT NOT NULL);",
+    `INSERT INTO install (one, id) VALUES (1, '${id}')`,
+  ]->Array.join(" ")
+
+/** The rows `d1 execute --json` printed for its one statement. */
+let rowsOf = body =>
+  switch parsed(body)->Option.flatMap(JSON.Decode.array) {
+  | None => Error("d1 execute printed no JSON array")
+  | Some(answers) =>
+    switch answers->Array.get(0)->Option.flatMap(a => a->member("results")->JSON.Decode.array) {
+    | Some(rows) => Ok(rows)
+    | None => Error("d1 execute printed no results")
     }
+  }
+
+/** A table SQLite or Cloudflare keeps in every D1, never one a migration or install made. */
+let internal = name => name->String.startsWith("_cf_") || name->String.startsWith("sqlite_")
+
+/** The tables a D1 holds, its internal ones left out. */
+let tablesOf = body =>
+  rowsOf(body)->Result.map(rows =>
+    rows->Array.filterMap(row => row->text("name"))->Array.filter(name => !internal(name))
   )
 
-/** The install ids the account's D1 names hold, or why they are not known. */
-let idsOf = (w, list) => w.run(list)->then(listedNames)->Result.map(installIds)
+/** The install id `d1 execute --json` printed for the marker query, None where it holds none. */
+let markOf = body =>
+  rowsOf(body)->Result.map(rows => rows->Array.get(0)->Option.flatMap(row => row->text("id")))
+
+/** What the account's D1 list and markers say, read alone before anything is written. */
+type surveyed = {
+  /** Every D1's name, so a drawn id is drawn again while one ends in it. */
+  names: array<string>,
+  /** The install ids of the D1s in the driver's form holding the driver's marker. */
+  marked: array<string>,
+  /** The names in the driver's form holding tables but no marker, passed over. */
+  foreign: array<string>,
+  /** The names in the driver's form holding no table at all, passed over and said apart. */
+  empty: array<string>,
+}
+
+/** What one D1 in the driver's form holds, read by its tables and then its marker. */
+type held = Marked(string) | Foreign | Empty
+
+/** One D1 in the driver's form read, its marker only where its tables hold `install`. */
+let heldIn = (w, ~root, name) => {
+  let known = result => result->Result.mapError(why => `the marker of ${name} is not known, ${why}`)
+  let execute = ["d1", "execute", name, "--remote", "--command"]
+  let read = query => w.run(commanded(w, ~root, ~cwd=root, [...execute, query, "--json"]))->known
+  read(tablesQuery)
+  ->then(body => known(tablesOf(body)))
+  ->then(tables =>
+    switch tables {
+    | [] => Ok(Empty)
+    | tables if tables->Array.includes("install") =>
+      read(markerQuery)
+      ->then(body => known(markOf(body)))
+      ->Result.map(mark => mark->Option.mapOr(Foreign, mark => Marked(mark)))
+    | _ => Ok(Foreign)
+    }
+  )
+}
 
 /**
- * The install id the account holds, read from its D1 databases' names alone, a new one drawn where
- * none is, the one reused, and a refusal naming each where more than one is.
+ * The account's D1 list, each name in the driver's form read for its marker, its install id equal
+ * to the name's suffix, any read failing refused.
  */
-let recovered = (w, ~dry, ~root) => {
-  let list = commanded(w, ~root, ~cwd=root, ["d1", "list", "--json"])
-  if dry {
-    let rule = () => {
-      w.say(`  it reuses the install id of the one driver-<8 hex> d1 list names, draws a new one`)
-      w.say(`  where it names none, and refuses where it names more than one`)
+let surveyed = (w, ~root) =>
+  w.run(commanded(w, ~root, ~cwd=root, ["d1", "list", "--json"]))
+  ->then(listedNames)
+  ->then(names =>
+    names
+    ->Array.filterMap(name => suffixOf(name)->Option.map(id => (name, id)))
+    ->Array.reduce(Ok({names, marked: [], foreign: [], empty: []}), (done, (name, id)) =>
+      done->then(
+        survey =>
+          heldIn(w, ~root, name)->Result.map(
+            held =>
+              switch held {
+              | Marked(mark) if mark == id => {...survey, marked: [...survey.marked, id]}
+              | Marked(_) | Foreign => {...survey, foreign: [...survey.foreign, name]}
+              | Empty => {...survey, empty: [...survey.empty, name]}
+              },
+          ),
+      )
+    )
+  )
+
+/** Each foreign D1 said, and each empty one as possibly an interrupted install, none written. */
+let passedOver = (w, survey) => {
+  survey.foreign->Array.forEach(name =>
+    w.say(`${name} holds no driver's marker, so it is passed over and never written`)
+  )
+  survey.empty->Array.forEach(name =>
+    w.say(
+      [
+        `${name} holds no tables, possibly an interrupted install of this driver;`,
+        " delete it by hand if it is yours",
+      ]->Array.join(""),
+    )
+  )
+}
+
+/** The Workers the account holds, by Cloudflare's documented List Workers, read alone. */
+let workersList = (w, ~root) => {
+  program: "curl",
+  // `-q` first, so curl reads no .curlrc.
+  args: [
+    "-q",
+    "--silent",
+    "--show-error",
+    "--fail-with-body",
+    "--header",
+    "@-",
+    `https://api.cloudflare.com/client/v4/accounts/${value(w.env, account)->Option.getOr(
+        "",
+      )}/workers/scripts`,
+  ],
+  cwd: root,
+  // The token reaches curl on stdin alone, as a header, never in an argument.
+  input: `Authorization: Bearer ${value(w.env, installToken)->Option.getOr("")}`,
+  env: quiet(w.env),
+}
+
+/** Whether an answer says it holds one page of more, as no documented List Workers answer does. */
+let paged = json => {
+  let info = json->member("result_info")
+  let number = name => info->member(name)->JSON.Decode.float
+  switch (number("total_pages"), number("count"), number("total_count")) {
+  | (Some(pages), _, _) if pages > 1. => true
+  | (_, Some(count), Some(total)) if count < total => true
+  | _ => info->text("cursor")->Option.mapOr(false, cursor => cursor != "")
+  }
+}
+
+/**
+ * The names List Workers answered, each script's id, its answer one page by the documentation,
+ * developers.cloudflare.com/api/resources/workers/subresources/scripts/methods/list, read whole.
+ */
+let listedWorkers = body => {
+  let unknown = why => Error(`the Workers list ${why}, so the account's Workers are not known`)
+  switch parsed(body) {
+  | Some(json) if json->member("success") != JSON.Boolean(true) => unknown("did not succeed")
+  | Some(json) if paged(json) => unknown("came in pages and was not read whole")
+  | Some(json) =>
+    switch json->member("result")->JSON.Decode.array {
+    | Some(all) => Ok(all->Array.filterMap(script => script->text("id")))
+    | None => unknown("printed no result array")
     }
-    // A dry run writes nothing, so it reads the list alone, and only where it has the account.
-    let id = switch [account, installToken]->Array.filter(name => value(w.env, name) == None) {
+  | None => unknown("printed no result array")
+  }
+}
+
+/** How many ids are drawn at most before install gives up. */
+let draws = 8
+
+/** An id drawn and drawn again while a D1's or a Worker's name ends in it. */
+let drawn = (w, ~root, ~names) =>
+  w.run(workersList(w, ~root))
+  ->then(listedWorkers)
+  ->then(workers => {
+    let taken = id => [...names, ...workers]->Array.some(name => name->String.endsWith(`-${id}`))
+    let rec draw = left =>
+      switch w.draw() {
+      | id if !(installIdForm->RegExp.test(id)) =>
+        Error(`an install id drawn is not 8 lowercase hex digits, ${id}`)
+      | id if taken(id) && left > 1 =>
+        w.say(`the install id ${id} drawn ends a name the account holds, so another is drawn`)
+        draw(left - 1)
+      | id if taken(id) => Error(`no install id drawn was free in ${Int.toString(draws)} draws`)
+      | id => Ok(id)
+      }
+    draw(draws)
+  })
+
+/** The rule, said where a dry run cannot say which install id. */
+let rule = w => {
+  w.say(`  it reuses the install id of the one driver-<8 hex> holding the driver's marker, draws a`)
+  w.say(`  new one where none does, and refuses where more than one does`)
+}
+
+let more = marked => {
+  let all = marked->Array.map(id => named(database, ~id))->Array.join(", ")
+  Error(`the account holds more than one driver's D1, ${all}, so none is chosen`)
+}
+
+/** The install id read from the D1s' markers alone, drawn where none is marked, reused where one
+ * is, and refused where more are, with whether it was drawn so the new D1 is marked. */
+let recovered = (w, ~dry, ~root) =>
+  if dry {
+    // A dry run writes nothing, so it reads the list and the markers alone, given the account.
+    let unknown = () => Ok(("<install id>", true))
+    switch [account, installToken]->Array.filter(name => value(w.env, name) == None) {
     | [] =>
-      switch idsOf(w, list) {
-      | Ok([]) =>
-        w.say(`d1 list names no driver-<8 hex>, so a new install id would be drawn`)
-        Ok("<install id>")
-      | Ok([id]) =>
-        w.say(`d1 list names ${named(database, ~id)}, so the install id ${id} would be reused`)
-        Ok(id)
-      | Ok(ids) =>
-        let all = ids->Array.map(id => named(database, ~id))->Array.join(", ")
-        Error(`the account holds more than one driver's D1, ${all}, so none is chosen`)
+      switch surveyed(w, ~root) {
+      | Ok(survey) =>
+        passedOver(w, survey)
+        switch survey.marked {
+        | [] =>
+          let none = "d1 list names no driver's D1 holding its marker"
+          w.say(`${none}, so a new install id would be drawn`)
+          w.say(`  by ${shown(workersList(w, ~root))}, again while a D1 or a Worker ends in it`)
+          unknown()
+        | [id] =>
+          w.say(`d1 list names ${named(database, ~id)}, so the install id ${id} would be reused`)
+          Ok((id, false))
+        | marked => more(marked)
+        }
       | Error(why) =>
-        w.say(`the install id is not known, as ${shown(list)} failed, ${why};`)
-        rule()
-        Ok("<install id>")
+        w.say(`the install id is not known, as ${why};`)
+        rule(w)
+        unknown()
       }
     | unset =>
       w.say(`the install id is not known, as ${unset->Array.join(" and ")} unset;`)
-      rule()
-      Ok("<install id>")
+      rule(w)
+      unknown()
     }
-    id->Result.map(id => (id, []))
   } else {
-    idsOf(w, list)->then(ids =>
-      switch ids {
+    surveyed(w, ~root)->then(survey => {
+      passedOver(w, survey)
+      switch survey.marked {
       | [] =>
-        let id = w.draw()
-        if installIdForm->RegExp.test(id) {
-          w.say(`no driver-<8 hex> on the account, so the install id ${id} is drawn`)
-          Ok((id, []))
-        } else {
-          Error(`an install id drawn is not 8 lowercase hex digits, ${id}`)
-        }
+        drawn(w, ~root, ~names=survey.names)->Result.map(id => {
+          w.say(
+            `no driver's D1 holding its marker on the account, so the install id ${id} is drawn`,
+          )
+          (id, true)
+        })
       | [id] =>
         w.say(`the install id ${id} is reused, the account holding ${named(database, ~id)}`)
-        Ok((id, []))
-      | ids =>
-        let all = ids->Array.map(id => named(database, ~id))->Array.join(", ")
-        Error(`the account holds more than one driver's D1, ${all}, so none is chosen`)
+        Ok((id, false))
+      | marked => more(marked)
       }
-    )
+    })
   }
-}
 
 /** The buckets `r2 bucket list` prints, each on a line of its own beginning `name`. */
 let listedBuckets = body =>
@@ -300,21 +482,44 @@ let listedBuckets = body =>
     }
   )
 
-/** A database made with its hint where the account lists none by its name, and its id. */
-let databaseOf = (w, ~dry, ~root, database) => {
+/**
+ * A database made with its hint where the account lists none by its name, and its id, marked with
+ * `marker` by its first statement where one is given, so it must be made here.
+ */
+let databaseOf = (w, ~dry, ~root, ~marker=?, database) => {
   let list = commanded(w, ~root, ~cwd=root, ["d1", "list", "--json"])
   let create = commanded(w, ~root, ~cwd=root, ["d1", "create", database, ...placed(w)])
+  let marking =
+    marker->Option.map(id =>
+      commanded(
+        w,
+        ~root,
+        ~cwd=root,
+        ["d1", "execute", database, "--remote", "--command", markerWrite(id)],
+      )
+    )
+  let marked = () =>
+    switch marking {
+    | Some(write) => w.run(write)->Result.map(_ => w.say(`${database} marked as the driver's`))
+    | None => Ok()
+    }
   if dry {
     w.say(`would run ${shown(list)}, and ${shown(create)} unless ${database} is listed`)
+    marking->Option.forEach(write =>
+      w.say(`  and right after it ${shown(write)}, before any migration`)
+    )
     Ok(`<${database}'s id>`)
   } else {
     switch w.run(list)->then(body => listedDatabase(body, database)) {
     | Error(why) => Error(why)
+    | Ok(Some(_)) if marking != None =>
+      Error(`${database} is listed already, though its install id was drawn as free`)
     | Ok(Some(id)) =>
       w.say(`the database ${database} is there already`)
       Ok(id)
     | Ok(None) =>
       w.run(create)
+      ->then(_ => marked())
       ->then(_ => w.run(list))
       ->then(body => listedDatabase(body, database))
       ->then(found =>
@@ -689,7 +894,10 @@ let left = (w, ~dry, ~root, ~install) =>
     })
   )
 
-/** driver(cloudflare) on the account, each part made where it is absent, in nrs5v's order. */
+/**
+ * driver(cloudflare) on the account, each part made where it is absent, in nrs5v's order, every
+ * read-only check run first, so a failed one stops install with nothing changed.
+ */
 let install = (w, ~dry, ~root=root) =>
   inputsOf(w, ~dry)->then(offered =>
     hashOfStdin(w)->then(hashed => {
@@ -701,81 +909,86 @@ let install = (w, ~dry, ~root=root) =>
       | Some(hint) => w.say(`the databases and the bucket placed by the hint ${hint}, ${location}`)
       | None => w.say(`no ${location}, so Cloudflare places the databases and the bucket`)
       }
-      let scratch = dry ? "<a directory of its own>" : w.scratch()
-      let installed = recovered(w, ~dry, ~root)->then(
-        ((id, _)) => {
+      recovered(w, ~dry, ~root)->then(
+        ((id, fresh)) => {
           let install = {id, kinds: offered}
-          let full = name => named(name, ~id)
-          let deployedIn = (ids, worker) =>
-            within(
-              w,
-              ~dry,
-              ~root,
-              ~install,
-              ~ids,
-              worker,
-              (directory, config) =>
-                deployed(
+          left(w, ~dry, ~root, ~install)->then(
+            () => {
+              let scratch = dry ? "<a directory of its own>" : w.scratch()
+              let full = name => named(name, ~id)
+              let made = (kind, step) => offers(install, kind) ? step() : Ok()
+              let deployedIn = (ids, worker) =>
+                within(
                   w,
                   ~dry,
                   ~root,
-                  ~directory,
-                  ~config,
-                  ~scratch,
-                  ~hashed,
-                  {...worker, name: full(worker.name)},
-                ),
-            )
-          let made = (kind, step) => offers(install, kind) ? step() : Ok()
-          databaseOf(w, ~dry, ~root, full(database))
-          ->then(
-            driverId => {
-              let ids = Dict.fromArray([(database, driverId)])
-              made(
-                "database",
-                () =>
-                  databaseOf(w, ~dry, ~root, full(userDatabase))->Result.map(
-                    id => ids->Dict.set(userDatabase, id),
-                  ),
-              )->Result.map(() => ids)
+                  ~install,
+                  ~ids,
+                  worker,
+                  (directory, config) =>
+                    deployed(
+                      w,
+                      ~dry,
+                      ~root,
+                      ~directory,
+                      ~config,
+                      ~scratch,
+                      ~hashed,
+                      {...worker, name: full(worker.name)},
+                    ),
+                )
+              let marker = fresh ? Some(id) : None
+              let installed = databaseOf(w, ~dry, ~root, ~marker?, full(database))->then(
+                driverId => {
+                  let ids = Dict.fromArray([(database, driverId)])
+                  within(
+                    w,
+                    ~dry,
+                    ~root,
+                    ~install,
+                    ~ids,
+                    driver,
+                    (directory, config) =>
+                      migrated(w, ~dry, ~root, ~directory, ~config, ~database=full(database))
+                      ->then(
+                        () =>
+                          made(
+                            "database",
+                            () =>
+                              databaseOf(w, ~dry, ~root, full(userDatabase))->Result.map(
+                                id => ids->Dict.set(userDatabase, id),
+                              ),
+                          ),
+                      )
+                      ->then(
+                        () => made("object", () => bucketOf(w, ~dry, ~root, ~bucket=full(bucket))),
+                      )
+                      ->then(
+                        () =>
+                          deployed(
+                            w,
+                            ~dry,
+                            ~root,
+                            ~directory,
+                            ~config,
+                            ~scratch,
+                            ~hashed,
+                            {...driver, name: full(driver.name)},
+                          ),
+                      ),
+                  )
+                  ->then(() => made("object", () => deployedIn(ids, object)))
+                  ->then(() => made("database", () => deployedIn(ids, databaseWorker)))
+                },
+              )
+              if !dry {
+                rmSync(scratch, {recursive: true, force: true})
+              }
+              installed
             },
           )
-          ->then(
-            ids =>
-              within(
-                w,
-                ~dry,
-                ~root,
-                ~install,
-                ~ids,
-                driver,
-                (directory, config) =>
-                  migrated(w, ~dry, ~root, ~directory, ~config, ~database=full(database))
-                  ->then(() => made("object", () => bucketOf(w, ~dry, ~root, ~bucket=full(bucket))))
-                  ->then(
-                    () =>
-                      deployed(
-                        w,
-                        ~dry,
-                        ~root,
-                        ~directory,
-                        ~config,
-                        ~scratch,
-                        ~hashed,
-                        {...driver, name: full(driver.name)},
-                      ),
-                  ),
-              )
-              ->then(() => made("object", () => deployedIn(ids, object)))
-              ->then(() => made("database", () => deployedIn(ids, databaseWorker))),
-          )
-          ->then(() => left(w, ~dry, ~root, ~install))
         },
       )
-      if !dry {
-        rmSync(scratch, {recursive: true, force: true})
-      }
-      installed
     })
   )
 

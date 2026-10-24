@@ -103,10 +103,13 @@ let served = (addresses: dict<Uint8Array.t>, fetched) =>
     }
   }
 
+/** The install id every fake Worker's name ends in, a made-up one. */
+let installId = "0a1b2c3d"
+
 let setUp = (~addresses=dict{"hello": artifact}) => {
   let (account, api) = fake()
   let (kept, store) = memory()
   let fetched = []
-  let through: Function.through = {api, store, fetch: served(addresses, fetched)}
+  let through: Function.through = {api, store, fetch: served(addresses, fetched), installId}
   (through, account, kept, fetched)
 }

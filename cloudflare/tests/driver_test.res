@@ -4,6 +4,7 @@
  */
 open Node
 module Contracts = Envelope.Contracts
+module Function = DriverCloudflareFunction.Function
 
 let secret = Uint8Array.fromLength(32)->TypedArray.fillAll(7)
 let token = `1.${Envelope.Base64url.encode(secret)}`
@@ -257,7 +258,8 @@ let artifact = Tar.archive([
 ])
 
 test("a deployment is made a Worker of the account, kept in D1, and described", async () => {
-  let env = envOf()
+  let sqlite = migrated()
+  let env = envOf(~db=asDatabase(sqlite), ())
   let asked = []
   let restore = replaced(async (url, init) => {
     asked->Array.push(`${init.method} ${url}`)
@@ -308,6 +310,8 @@ test("a deployment is made a Worker of the account, kept in D1, and described", 
       "GET /workers/subdomain",
     ],
   )
+  // The deployment is kept by its Worker's whole name, the install id in it.
+  ok(rows(sqlite)->String.includes(`"worker":"app-1-0a1b2c3d"`), ~message=rows(sqlite))
 })
 
 test(
@@ -584,43 +588,53 @@ test("a list naming a kind KINDS does not offer is refused whole as beyond_host"
   deepEqual(asked, [])
 })
 
-test("with KINDS lacking function, every deployments call is refused as beyond_host", async () => {
-  let env = envOf(~vars=dict{"INSTALL_ID": installId, "KINDS": "object,database"}, ())
-  let asked = []
-  let restore = replaced(async (url, _) => {
-    asked->Array.push(url)
-    answerText("{}", {status: 500})
-  })
-  let runs = `{"runs": {"name": "app", "id": 1}}`
-  let deploy = `{"runs": {"name": "app", "id": 1}, "version": "${binding}", "form": "modules",
+test(
+  "with KINDS lacking function, deploy is beyond the host and no deployment is found",
+  async () => {
+    let env = envOf(~vars=dict{"INSTALL_ID": installId, "KINDS": "object,database"}, ())
+    let asked = []
+    let restore = replaced(async (url, _) => {
+      asked->Array.push(url)
+      answerText("{}", {status: 500})
+    })
+    let runs = `{"runs": {"name": "app", "id": 1}}`
+    let deploy = `{"runs": {"name": "app", "id": 1}, "version": "${binding}", "form": "modules",
     "isolation": ["isolate"], "artifact": {"address": "https://artifacts.example/hello",
     "hash": "${binding}"}, "footing": "https://footing.invalid", "secrets": {},
     "network": ["http", "tcp"]}`
-  let answers = await Promise.all(
-    [
-      ("deploy", deploy),
-      ("stop", runs),
-      ("resume", runs),
-      ("describe", runs),
-      ("delete", runs),
-    ]->Array.map(async ((operation, input)) => {
-      let body = `{"interface": "deployments", "operation": "${operation}", "input": ${input}}`
-      let answered = await call(env, ~path=`/deployments/${operation}`, ~body)
-      let (_, reason) = reasonOf(answered)
-      (operation, reason, messageOf(answered))
-    }),
-  )
-  restore()
-  // Only deploy declares beyond_host, so the others answer it as an unknown failure.
-  answers->Array.forEach(((operation, reason, message)) =>
-    deepEqual(
-      (reason, message),
-      (Some(JSON.String("beyond_host")), Some(JSON.String("function is not offered, by KINDS"))),
-      ~message=operation,
+    let answers = await Promise.all(
+      [
+        ("deploy", deploy),
+        ("stop", runs),
+        ("resume", runs),
+        ("describe", runs),
+        ("delete", runs),
+      ]->Array.map(async ((operation, input)) => {
+        let body = `{"interface": "deployments", "operation": "${operation}", "input": ${input}}`
+        let answered = await call(env, ~path=`/deployments/${operation}`, ~body)
+        let (_, reason) = reasonOf(answered)
+        (operation, reason, messageOf(answered))
+      }),
     )
-  )
-  deepEqual(asked, [])
-})
+    restore()
+    let none = Some(JSON.String("no deployment is kept, function not being offered, by KINDS"))
+    deepEqual(
+      answers,
+      [
+        (
+          "deploy",
+          Some(JSON.String("beyond_host")),
+          Some(JSON.String("function is not offered, by KINDS")),
+        ),
+        ("stop", Some(JSON.String("not_found")), none),
+        ("resume", Some(JSON.String("not_found")), none),
+        ("describe", Some(JSON.String("not_found")), none),
+        ("delete", None, None),
+      ],
+    )
+    deepEqual(asked, [])
+  },
+)
 
 test("only a name ending in its own install id is the driver's own", async () => {
   let owned = name => Installed.owned(name, ~id=installId)
@@ -639,8 +653,15 @@ test("only a name ending in its own install id is the driver's own", async () =>
     ]->Array.map(owned),
     [true, true, true, false, false, false, false, false, false, false],
   )
-  deepEqual(Installed.named("app-1", ~id=installId), Ok("app-1-0a1b2c3d"))
-  ok(Installed.named("component-Hello", ~id=installId)->Result.isError)
+  deepEqual(Installed.held("app-1-0a1b2c3d", ~id=installId), Ok("app-1-0a1b2c3d"))
+  deepEqual(
+    [
+      Installed.held("component-Hello-0a1b2c3d", ~id=installId),
+      Installed.held("app-1", ~id=installId),
+      Installed.held("app-1-ffffffff", ~id=installId),
+    ]->Array.map(held => held->Result.mapError(r => r.reason)),
+    [Error("fault"), Error("fault"), Error("fault")],
+  )
 })
 
 test("a deployment whose Worker's name is not in the id form is refused untouched", async () => {
@@ -660,7 +681,8 @@ test("a deployment whose Worker's name is not in the id form is refused untouche
   let delete = `{"interface": "deployments", "operation": "delete", "input": {"runs": ${runs}}}`
   let deleted = await call(env, ~path="/deployments/delete", ~body=delete)
   restore()
-  deepEqual(reasonOf(deployed), (400, Some(JSON.String("beyond_host"))))
+  deepEqual(reasonOf(deployed), (500, Some(JSON.String("fault"))))
+  deepEqual(reasonOf(deleted), (500, Some(JSON.String("fault"))))
   deepEqual(
     messageOf(deleted),
     Some(
@@ -670,4 +692,29 @@ test("a deployment whose Worker's name is not in the id form is refused untouche
     ),
   )
   deepEqual(asked, [])
+})
+
+test("the guard answers fault for a name the driver formed, never calling Cloudflare", async () => {
+  let asked = []
+  let reached = name => {
+    asked->Array.push(name)
+    Promise.resolve(Error({Function.reason: "fault", message: "reached"}))
+  }
+  let account: Function.api = {
+    upload: (name, _) => reached(name),
+    deploy: (name, _) => reached(name),
+    running: name => reached(name)->Promise.thenResolve(r => r->Result.map(_ => None)),
+    delete: name => reached(name)->Promise.thenResolve(r => r->Result.map(_ => ())),
+    address: reached,
+  }
+  let held = account->Installed.api(~id=installId)
+  let reasons = [
+    (await held.address("object-ffffffff"))->Result.mapError(r => r.reason),
+    (await held.address("object"))->Result.mapError(r => r.reason),
+    (await held.delete("app-1-ffffffff"))->Result.mapError(r => r.reason)->Result.map(_ => ""),
+  ]
+  deepEqual(reasons, [Error("fault"), Error("fault"), Error("fault")])
+  deepEqual(asked, [])
+  ignore(await held.address("object-0a1b2c3d"))
+  deepEqual(asked, ["object-0a1b2c3d"])
 })

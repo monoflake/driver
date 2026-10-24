@@ -51,7 +51,12 @@ type store = {
   forget: string => promise<unit>,
 }
 
-type through = {api: api, store: store, fetch: string => promise<result<Uint8Array.t, refused>>}
+type through = {
+  api: api,
+  store: store,
+  fetch: string => promise<result<Uint8Array.t, refused>>,
+  installId: string,
+}
 
 /** The most an artifact may be, a Worker's 64 MiB on every plan, RFC nrs5v. */
 let largest = 67_108_864
@@ -65,14 +70,14 @@ let footing = "MONOFLAKE_FOOTING"
 /** The tag the stub is uploaded with, which no version's tag is. */
 let stopping = "stopped"
 
-/** A deployment's Worker before the install id, which `through` does not carry yet, nrs5v. */
-let baseOf = (runs: Contracts.DeploymentRuns.t) =>
+let workerOf = (runs: Contracts.DeploymentRuns.t, ~installId) =>
   switch runs {
-  | App({id}) => `app-${Float.toString(id)}`
-  | Component({component}) => `component-${component}`
+  | App({id}) => `app-${Float.toString(id)}-${installId}`
+  | Component({component}) => `component-${component}-${installId}`
   }
 
-let workerOf = (runs, ~installId) => `${baseOf(runs)}-${installId}`
+/** The Worker of a deployment on this install, by `through`'s install id. */
+let nameOf = (through, runs) => workerOf(runs, ~installId=through.installId)
 
 let tagOf = hash => `version-${Envelope.Hex.encode(hash)}`->String.slice(~start=0, ~end=tagged)
 
@@ -139,7 +144,7 @@ let described = async (through, runs, kept: kept): result<Contracts.DeploymentDe
   | #stopped => Ok({runs, version, state: Stopped})
   | #failed => Ok({runs, version, state: Failed({reason: kept.reason->Option.getOr("fault")})})
   | #running =>
-    switch await through.api.address(baseOf(runs)) {
+    switch await through.api.address(nameOf(through, runs)) {
     | Ok(address) =>
       Ok({runs, version, state: Running({address, runtime: Workers, isolation: [Isolate]})})
     | Error(_) as refused => refused
@@ -180,7 +185,7 @@ let bindingsOf = (input: Contracts.DeploymentDeploy.t) =>
   )
 
 let deploying = async (through, input: Contracts.DeploymentDeploy.t) => {
-  let worker = baseOf(input.runs)
+  let worker = nameOf(through, input.runs)
   let version = Envelope.Hex.encode(input.version)
   let tag = tagOf(input.version)
   let kept = await through.store.read(worker)
@@ -237,7 +242,7 @@ let deploy = async (through, input: Contracts.DeploymentDeploy.t) =>
     | Ok(given) =>
       if given != [] {
         let named = given->Array.map(wayName)->Array.join(" and ")
-        let worker = baseOf(input.runs)
+        let worker = nameOf(through, input.runs)
         let why = "an ordinary account holding no Worker back, RFC nrs5v"
         Console.warn(`${worker} is given ${named} beyond the network it asks, ${why}`)
       }
@@ -245,10 +250,7 @@ let deploy = async (through, input: Contracts.DeploymentDeploy.t) =>
     },
   )
 
-let notFound = (runs: Contracts.DeploymentRuns.t) => Error({
-  reason: "not_found",
-  message: `no deployment of ${baseOf(runs)} is kept`,
-})
+let notFound = worker => Error({reason: "not_found", message: `no deployment of ${worker} is kept`})
 
 /** A stop finding the Worker running another version than the one kept, which it never keeps. */
 let notRunning = worker => Error({
@@ -257,9 +259,9 @@ let notRunning = worker => Error({
 })
 
 let stopping_ = async (through, runs) => {
-  let worker = baseOf(runs)
+  let worker = nameOf(through, runs)
   switch await through.store.read(worker) {
-  | None => notFound(runs)
+  | None => notFound(worker)
   | Some({state: #stopped | #failed} as kept) => await described(through, runs, kept)
   | Some({state: #running} as kept) =>
     let keptTag = Envelope.Hex.decode(kept.version)->Option.map(tagOf)
@@ -294,9 +296,9 @@ let stop = async (through, input: Contracts.DeploymentOf.t) =>
   answered(Contracts.Interface.Deployments.stop, await stopping_(through, input.runs))
 
 let resuming = async (through, runs) => {
-  let worker = baseOf(runs)
+  let worker = nameOf(through, runs)
   switch await through.store.read(worker) {
-  | None => notFound(runs)
+  | None => notFound(worker)
   | Some({state: #running | #failed} as kept) => await described(through, runs, kept)
   | Some({state: #stopped} as kept) =>
     switch kept.replaced {
@@ -320,14 +322,14 @@ let resume = async (through, input: Contracts.DeploymentOf.t) =>
 let describe = async (through, input: Contracts.DeploymentOf.t) =>
   answered(
     Contracts.Interface.Deployments.describe,
-    switch await through.store.read(baseOf(input.runs)) {
-    | None => notFound(input.runs)
+    switch await through.store.read(nameOf(through, input.runs)) {
+    | None => notFound(nameOf(through, input.runs))
     | Some(kept) => await described(through, input.runs, kept)
     },
   )
 
 let deleting = async (through, runs) => {
-  let worker = baseOf(runs)
+  let worker = nameOf(through, runs)
   switch await through.store.read(worker) {
   | Some({state: #running}) =>
     Error({reason: "still_running", message: `${worker} is running; stop it first`})

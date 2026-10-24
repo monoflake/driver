@@ -43,29 +43,27 @@ let kindsOf = (given: option<string>) => {
 /** Whether a resource is the driver's own, its name ending in its own install id. */
 let owned = (name, ~id) => nameForm->RegExp.test(name) && name->String.endsWith(`-${id}`)
 
-/** A resource's name followed by the install id, refused where the whole is not in the id form. */
-let named = (name, ~id): result<string, Function.refused> => {
-  let full = `${name}-${id}`
-  owned(full, ~id)
-    ? Ok(full)
+/** A name the driver formed, refused as its own fault where it is not `<name>-<own id>`. */
+let held = (name, ~id): result<string, Function.refused> =>
+  owned(name, ~id)
+    ? Ok(name)
     : Error({
-        reason: "beyond_host",
-        message: `${full} is not in the driver's id form, so it is never acted on`,
+        reason: "fault",
+        message: `${name} is not in the driver's id form, so it is never acted on`,
       })
-}
 
-/** An account's API on owned names alone, each followed by the id, as `through` holds no id. */
+/** An account's API on owned names alone, every name held to the install id before a call. */
 let api = (api: Function.api, ~id): Function.api => {
   let through = async (name, act) =>
-    switch named(name, ~id) {
-    | Ok(full) => await act(full)
+    switch held(name, ~id) {
+    | Ok(name) => await act(name)
     | Error(_) as refused => refused
     }
   {
-    upload: (name, upload) => through(name, full => api.upload(full, upload)),
-    deploy: (name, version) => through(name, full => api.deploy(full, version)),
-    running: name => through(name, full => api.running(full)),
-    delete: name => through(name, full => api.delete(full)),
-    address: name => through(name, full => api.address(full)),
+    upload: (name, upload) => through(name, name => api.upload(name, upload)),
+    deploy: (name, version) => through(name, name => api.deploy(name, version)),
+    running: name => through(name, name => api.running(name)),
+    delete: name => through(name, name => api.delete(name)),
+    address: name => through(name, name => api.address(name)),
   }
 }

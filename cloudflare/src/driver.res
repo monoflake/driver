@@ -55,7 +55,7 @@ let stateTo = (s: Management.state): Contracts.ManagementState.t =>
 
 let hex = bytes => bytes->Array.map(Envelope.Hex.encode)
 
-/** The account's API, every name it acts on followed by the install id. */
+/** The account's API, every name it acts on held to the install id. */
 let accountOf = (env, ~id) =>
   Function.ofAccount(~accountId=env.accountId, ~token=env.apiToken)->Installed.api(~id)
 
@@ -86,8 +86,8 @@ let managed = async (env, store, call: Contracts.Interface.Management.call, form
       ~generation=input.generation,
       ~items,
       ~tokens=input.tokens->Option.map(hex),
-      ~objects=() => addressOf(env, "object", ~id),
-      ~databases=() => addressOf(env, "database", ~id),
+      ~objects=() => addressOf(env, `object-${id}`, ~id),
+      ~databases=() => addressOf(env, `database-${id}`, ~id),
     )
     answered(Contracts.Interface.Management.apply, result->Result.map(held))->Answer.written(
       form,
@@ -230,30 +230,30 @@ let rec fetchedFrom = async (address, ~left) =>
 
 let artifact = address => fetchedFrom(address, ~left=hops)
 
-/** A deployments call refused whole, `function` not being among the kinds offered, nrs5v. */
-let unoffered = (operation, form, ~toJson, ~toCbor) =>
-  answered(
-    operation,
-    Error({Management.reason: "beyond_host", message: "function is not offered, by KINDS"}),
-  )->Answer.written(form, ~toJson, ~toCbor)
-
-/** A deployments call answered beyond the host, every one, where `function` is not offered. */
-let refusedAll = (call: Contracts.Interface.Deployments.call, form) => {
-  let described = operation =>
-    unoffered(
-      operation,
+/**
+ * A deployments call where `function` is not offered, answered by reasons the contract declares,
+ * RFC nrs5v's Ledger. No deployment can exist, so delete finds none, and Cloudflare is not reached.
+ */
+let unoffered = (call: Contracts.Interface.Deployments.call, form) => {
+  let described = (operation, reason, message) =>
+    answered(operation, Error({Management.reason, message}))->Answer.written(
       form,
       ~toJson=Contracts.DeploymentDescribed.toJson,
       ~toCbor=Contracts.DeploymentDescribed.toCbor,
     )
+  let none = "no deployment is kept, function not being offered, by KINDS"
   switch call {
-  | Deploy(_) => described(Contracts.Interface.Deployments.deploy)
-  | Stop(_) => described(Contracts.Interface.Deployments.stop)
-  | Resume(_) => described(Contracts.Interface.Deployments.resume)
-  | Describe(_) => described(Contracts.Interface.Deployments.describe)
+  | Deploy(_) =>
+    described(
+      Contracts.Interface.Deployments.deploy,
+      "beyond_host",
+      "function is not offered, by KINDS",
+    )
+  | Stop(_) => described(Contracts.Interface.Deployments.stop, "not_found", none)
+  | Resume(_) => described(Contracts.Interface.Deployments.resume, "not_found", none)
+  | Describe(_) => described(Contracts.Interface.Deployments.describe, "not_found", none)
   | Delete(_) =>
-    unoffered(
-      Contracts.Interface.Deployments.delete,
+    Contracts.Answer.Success(({}: Contracts.DeploymentDeleted.t))->Answer.written(
       form,
       ~toJson=Contracts.DeploymentDeleted.toJson,
       ~toCbor=Contracts.DeploymentDeleted.toCbor,
@@ -353,12 +353,13 @@ let held = async (request, env, forms: Answer.forms, ~header, ~early, ~id, ~kind
         ~named=e => deploymentsOperation(e.call),
       ) {
       | Ok(envelope) if !(kinds->Array.includes(#function)) =>
-        refusedAll(envelope.call, forms.answer)
+        unoffered(envelope.call, forms.answer)
       | Ok(envelope) =>
         let through: Function.through = {
           api: accountOf(env, ~id),
           store: Kept.deployments(env.db),
           fetch: artifact,
+          installId: id,
         }
         await deployed(through, envelope.call, forms.answer)
       | Error(error) => early(error)

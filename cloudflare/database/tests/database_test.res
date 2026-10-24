@@ -538,16 +538,33 @@ test(
       served.named := names->Array.getUnsafe(at)
       answers->Array.push(await served->rewind(start +. 30_000.))
     }
+    let never = name =>
+      `the database ${Served.databaseId} is ${name}, not database-0a1b2c3d, so it is never restored`
     deepEqual(
       answers->Array.map(answer => (reasonOf(answer), messageOf(answer))),
-      names->Array.map(name => (
-        (500, Some("fault")),
-        Some(
-          `the database ${Served.databaseId} is ${name}, not database-0a1b2c3d, so it is never restored`,
-        ),
-      )),
+      names->Array.map(name => ((500, Some("fault")), Some(never(name)))),
     )
     deepEqual(served.sent->Array.map(s => s.init.method), ["GET", "GET", "GET"])
+  },
+)
+
+test(
+  "a rewind whose lookup of the database's name fails is a fault, nothing restored",
+  async () => {
+    let served = Served.make(~size=1_000_000.)
+    let start = served.clock.contents
+    deepEqual((await served->Served.execute(["CREATE TABLE t (i INTEGER)"]))->Pair.first, 200)
+    served.clock := start +. 60_000.
+    deepEqual((await served->Served.execute(["INSERT INTO t VALUES (1)"]))->Pair.first, 200)
+    served.clock := start +. 120_000.
+    served.getting := Some((403, Documented.refused))
+    let answer = await served->rewind(start +. 30_000.)
+    deepEqual(reasonOf(answer), (500, Some("fault")))
+    deepEqual(messageOf(answer), Some("D1's get answered 403, 1000 message"))
+    deepEqual(served.sent->Array.map(s => s.init.method), ["GET"])
+    // The row written after the moment asked for is still there, so nothing was restored.
+    served.getting := None
+    deepEqual(await served->count, (200, counted("1")))
   },
 )
 

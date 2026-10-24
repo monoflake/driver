@@ -28,6 +28,8 @@ type served = {
   refusing: ref<option<(int, string)>>,
   /** The name D1's get gives the database, `database-<install id>` unless a test changes it. */
   named: ref<string>,
+  /** The answer every D1's get is given where it is not the documented one. */
+  getting: ref<option<(int, string)>>,
 }
 
 let items =
@@ -87,10 +89,14 @@ let make = (~size=?, ~at=1_790_000_000_000.) => {
     dict{"INSTALL_ID": installId},
   )
   let named = ref(`database-${installId}`)
-  let served = {env, driver, sqlite, clock, sent: [], refusing: ref(None), named}
+  let getting = ref(None)
+  let served = {env, driver, sqlite, clock, sent: [], refusing: ref(None), named, getting}
   answering(served.sent, async (url, init) => {
     let parts = Web.parts(url)
     switch (init.method, parts->Web.pathname, served.refusing.contents) {
+    | ("GET", path, _) if path == databasePath && getting.contents != None =>
+      let (status, body) = getting.contents->Option.getOr((500, ""))
+      response(body, {status: status})
     | ("GET", path, _) if path == databasePath =>
       let got =
         Documented.got->String.replace(`"my-database"`, JSON.stringify(JSON.String(named.contents)))

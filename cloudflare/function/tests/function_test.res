@@ -31,7 +31,7 @@ let stateOf = (answer: Contracts.Answer.t<Contracts.DeploymentDescribed.t>) =>
   }
 
 let running = Contracts.DeploymentState.Running({
-  address: "app-1.example",
+  address: "app-1-0a1b2c3d.example",
   runtime: Workers,
   isolation: [Isolate],
 })
@@ -62,7 +62,10 @@ test("a deploy a Worker cannot give is beyond the host, and nothing is fetched",
   deepEqual(await beyond({...input, network: [Icmp]}), refused)
   deepEqual(await beyond({...input, runtime: Workers, network: [Tcp, Http]}), None)
   deepEqual(fetched, ["hello"])
-  deepEqual(account.asked, ["upload app-1 " ++ Function.tagOf(input.version), "deploy app-1 v1"])
+  deepEqual(
+    account.asked,
+    ["upload app-1-0a1b2c3d " ++ Function.tagOf(input.version), "deploy app-1-0a1b2c3d v1"],
+  )
 })
 
 test("a network a Worker gives more than is taken, each way out beyond it warned of", async () => {
@@ -77,7 +80,10 @@ test("a network a Worker gives more than is taken, each way out beyond it warned
   restore()
   deepEqual(states, [Some(running), Some(running), Some(running)])
   let beyond = "beyond the network it asks, an ordinary account holding no Worker back, RFC nrs5v"
-  deepEqual(said, [`app-1 is given tcp ${beyond}`, `app-1 is given http and tcp ${beyond}`])
+  deepEqual(
+    said,
+    [`app-1-0a1b2c3d is given tcp ${beyond}`, `app-1-0a1b2c3d is given http and tcp ${beyond}`],
+  )
 })
 
 test("an artifact too large, not its hash, unfetchable or no bundle is refused", async () => {
@@ -123,7 +129,7 @@ test("a deployment made runs at its Worker's address, its footing and secrets bo
   )
   deepEqual(uploaded.bundle.modules->Array.map(m => m.name), ["main.js"])
   deepEqual(
-    kept->Map.get("app-1"),
+    kept->Map.get("app-1-0a1b2c3d"),
     Some({Function.version: Envelope.Hex.encode(input.version), state: #running}),
   )
   deepEqual(await Function.describe(through, of_), answer)
@@ -136,7 +142,7 @@ test("deploying the same again is the one deployment, and nothing is fetched", a
   kept->Map.clear
   deepEqual(stateOf(await Function.deploy(through, input)), Some(running))
   deepEqual((fetched, account.versions->Map.size), (["hello"], 1))
-  ok(kept->Map.has("app-1"))
+  ok(kept->Map.has("app-1-0a1b2c3d"))
 })
 
 test("a deployment stopped runs the stub, and resumed runs the version it replaced", async () => {
@@ -150,18 +156,18 @@ test("a deployment stopped runs the stub, and resumed runs the version it replac
     ->Option.map(u => (u.bundle.modules->Array.map(m => m.name), u.tag)),
     Some((["stopped.js"], "stopped")),
   )
-  deepEqual(account.runs->Map.get("app-1"), Some("v2"))
-  deepEqual(kept->Map.get("app-1")->Option.flatMap(k => k.replaced), Some("v1"))
+  deepEqual(account.runs->Map.get("app-1-0a1b2c3d"), Some("v2"))
+  deepEqual(kept->Map.get("app-1-0a1b2c3d")->Option.flatMap(k => k.replaced), Some("v1"))
   // Stopped again, or deployed again the same while stopped, nothing changes.
   deepEqual(stateOf(await Function.stop(through, of_)), Some(Stopped))
   deepEqual(stateOf(await Function.deploy(through, input)), Some(Stopped))
   deepEqual(account.versions->Map.size, 2)
   deepEqual(stateOf(await Function.resume(through, of_)), Some(running))
-  deepEqual(account.runs->Map.get("app-1"), Some("v1"))
+  deepEqual(account.runs->Map.get("app-1-0a1b2c3d"), Some("v1"))
   deepEqual(stateOf(await Function.resume(through, of_)), Some(running))
   deepEqual(
     account.asked->Array.filter(a => a->String.startsWith("deploy")),
-    ["deploy app-1 v1", "deploy app-1 v2", "deploy app-1 v1"],
+    ["deploy app-1-0a1b2c3d v1", "deploy app-1-0a1b2c3d v2", "deploy app-1-0a1b2c3d v1"],
   )
 })
 
@@ -171,7 +177,7 @@ test("a deployment is deleted only once stopped, and is then not found", async (
   deepEqual(reasonOf(await Function.delete(through, of_)), Some((Rejected, "still_running")))
   ignore(await Function.stop(through, of_))
   deepEqual(await Function.delete(through, of_), Success({}))
-  deepEqual((kept->Map.size, account.runs->Map.has("app-1")), (0, false))
+  deepEqual((kept->Map.size, account.runs->Map.has("app-1-0a1b2c3d")), (0, false))
   deepEqual(reasonOf(await Function.describe(through, of_)), Some((Rejected, "not_found")))
 })
 
@@ -236,11 +242,11 @@ test("a stop finding another version running, or none, keeps nothing and is a fa
   let (through, account, kept, _) = setUp()
   let input = await deployOf()
   ignore(await Function.deploy(through, input))
-  let before = kept->Map.get("app-1")
+  let before = kept->Map.get("app-1-0a1b2c3d")
   let notKept = Some((
     Contracts.Failure.Unknown,
     "fault",
-    "the version running on app-1 is not the one kept, so nothing is stopped",
+    "the version running on app-1-0a1b2c3d is not the one kept, so nothing is stopped",
   ))
   let refusal = answer =>
     switch answer {
@@ -248,11 +254,11 @@ test("a stop finding another version running, or none, keeps nothing and is a fa
     | Success(_) => None
     }
   account.versions->Map.set("v9", {bundle: Function.stub, bindings: [], tag: "version-other"})
-  account.runs->Map.set("app-1", "v9")
+  account.runs->Map.set("app-1-0a1b2c3d", "v9")
   deepEqual(refusal(await Function.stop(through, of_)), notKept)
-  account.runs->Map.delete("app-1")->ignore
+  account.runs->Map.delete("app-1-0a1b2c3d")->ignore
   deepEqual(refusal(await Function.stop(through, of_)), notKept)
-  deepEqual(kept->Map.get("app-1"), before)
+  deepEqual(kept->Map.get("app-1-0a1b2c3d"), before)
   deepEqual(account.asked->Array.filter(a => a->String.includes("stopped")), [])
 })
 
@@ -261,7 +267,7 @@ test("the stub answers every request 503 stopped, in the form the call asks", as
   let source = Function.stub.modules->Array.getUnsafe(0)
   let worker = (await imported(Web.fromUtf8(source.bytes)->Option.getOrThrow)).default
   let asked = async headers => {
-    let answer = worker.fetch(request("https://app-1.example/echo", {headers: headers}))
+    let answer = worker.fetch(request("https://app-1-0a1b2c3d.example/echo", {headers: headers}))
     let bytes = Uint8Array.fromBuffer(await answer->answerBytes)
     (answer->answerStatus, answer->answerHeaders->header("content-type")->Nullable.toOption, bytes)
   }

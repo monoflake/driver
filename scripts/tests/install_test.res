@@ -21,11 +21,20 @@ type account = {
   mutable databases: array<string>,
   mutable buckets: array<string>,
   workers: Dict.t<held>,
+  /** The D1s whose migrations were applied, so the driver's tables are there. */
+  mutable migrated: array<string>,
+  /** The install id each D1's table `install` holds. */
+  marks: Dict.t<string>,
+  /** The tables a D1 not the driver's holds of its own. */
+  own: Dict.t<array<string>>,
 }
 
 let empty = () => {
   databases: [],
   buckets: [],
+  migrated: [],
+  marks: dict{},
+  own: dict{},
   workers: dict{
     "driver-0a1b2c3d": {versions: [], secrets: dict{}, bundle: "the driver's bundle", deployed: []},
     "object-0a1b2c3d": {versions: [], secrets: dict{}, bundle: "the object's bundle", deployed: []},
@@ -38,6 +47,34 @@ let empty = () => {
   },
 }
 
+/** A D1 the account holds, migrated and marked with `mark`, as a driver's own is. */
+let holding = (account, name, ~mark) => {
+  account.databases->Array.push(name)
+  account.migrated->Array.push(name)
+  account.marks->Dict.set(name, mark)
+}
+
+/** A Worker the account holds, one version deployed. */
+let running = (account, name) =>
+  account.workers->Dict.set(
+    name,
+    {versions: [(Some("a tag"), "upload")], secrets: dict{}, bundle: "", deployed: []},
+  )
+
+/** The tables query and the marker query install runs, and the line of the marker's write. */
+let tablesRead = name =>
+  `wrangler d1 execute ${name} --remote --command ${Install.tablesQuery} --json`
+let markerRead = name =>
+  `wrangler d1 execute ${name} --remote --command ${Install.markerQuery} --json`
+let markerWritten = name =>
+  `wrangler d1 execute ${name} --remote --command ${Install.markerWrite(id)}`
+
+/** The Workers list, by curl and the documented account id. */
+let workersListed = [
+  "curl -q --silent --show-error --fail-with-body --header @- ",
+  "https://api.cloudflare.com/client/v4/accounts/023e105f4ecef8ad9ca31a8372d0c353/workers/scripts",
+]->Array.join("")
+
 /** The Worker a configuration of the moment names, read from the file while it is there. */
 let heldBy = (account, config) =>
   switch Host.existsSync(config) {
@@ -45,7 +82,16 @@ let heldBy = (account, config) =>
   | true =>
     Install.parsed(Host.readFileSync(config))
     ->Option.flatMap(json => json->Install.text("name"))
-    ->Option.flatMap(name => account.workers->Dict.get(name))
+    ->Option.map(name =>
+      switch account.workers->Dict.get(name) {
+      | Some(held) => held
+      // A Worker of another install id is held as the three are, made empty where it is absent.
+      | None =>
+        let held = {versions: [], secrets: dict{}, bundle: `${name}'s bundle`, deployed: []}
+        account.workers->Dict.set(name, held)
+        held
+      }
+    )
   }
 
 let versionsOf = held =>
@@ -75,6 +121,19 @@ let line = (command: Install.command) =>
 /** What wrangler prints for a Worker the account does not hold. */
 let notFound = "This Worker does not exist on your account. [code: 10007]"
 
+/** What `d1 execute --json` prints for one statement answering `rows`. */
+let results = rows =>
+  JSON.stringify(
+    JSON.Array([
+      JSON.Object(
+        dict{
+          "results": JSON.Array(rows->Array.map(row => JSON.Object(row))),
+          "success": JSON.Boolean(true),
+        },
+      ),
+    ]),
+  )
+
 let answered = (account, command: Install.command) => {
   let worker = config =>
     switch heldBy(account, config) {
@@ -96,13 +155,63 @@ let answered = (account, command: Install.command) => {
       ),
     )
   | ("rescript", list{"build"}) => Ok("")
+  | ("curl", _) =>
+    Ok(
+      JSON.stringify(
+        JSON.Object(
+          dict{
+            "success": JSON.Boolean(true),
+            "result": JSON.Array(
+              account.workers
+              ->Dict.toArray
+              ->Array.filter(((_, held)) => held.versions != [])
+              ->Array.map(((name, _)) => JSON.Object(dict{"id": JSON.String(name)})),
+            ),
+          },
+        ),
+      ),
+    )
+  | ("wrangler", list{"d1", "execute", name, "--remote", "--command", _, "--json"})
+  | ("wrangler", list{"d1", "execute", name, "--remote", "--command", _})
+    if !(account.databases->Array.includes(name)) =>
+    Error(`Couldn't find a D1 DB with the name or binding '${name}' [code: 7404]`)
+  | ("wrangler", list{"d1", "execute", name, "--remote", "--command", query, "--json"})
+    if query == Install.tablesQuery =>
+    let tables = [
+      "_cf_KV",
+      ...account.marks->Dict.get(name)->Option.mapOr([], _ => ["install"]),
+      ...account.migrated->Array.includes(name) ? ["d1_migrations", "held", "items"] : [],
+      ...account.own->Dict.get(name)->Option.getOr([]),
+    ]
+    Ok(results(tables->Array.map(table => dict{"name": JSON.String(table)})))
+  | ("wrangler", list{"d1", "execute", name, "--remote", "--command", query, "--json"})
+    if query == Install.markerQuery =>
+    switch account.marks->Dict.get(name) {
+    | Some(mark) => Ok(results([dict{"id": JSON.String(mark)}]))
+    | None => Error("no such table: install: SQLITE_ERROR [code: 7500]")
+    }
+  | ("wrangler", list{"d1", "execute", name, "--remote", "--command", query})
+    if query->String.startsWith("CREATE TABLE install (") =>
+    if account.migrated->Array.includes(name) {
+      Error(`the marker written into ${name} after a migration`)
+    } else if account.marks->Dict.get(name) != None {
+      Error("table install already exists: SQLITE_ERROR [code: 7500]")
+    } else {
+      account.marks->Dict.set(name, query->String.slice(~start=-10, ~end=-2))
+      Ok("")
+    }
   | ("wrangler", list{"d1", "create", name})
   | ("wrangler", list{"d1", "create", name, "--location", _}) =>
     account.databases->Array.push(name)
     Ok("")
   | ("wrangler", list{"d1", "migrations", "apply", name, "--remote", "--config", config})
     if account.databases->Array.includes(name) =>
-    worker(config)->Result.map(_ => "")
+    worker(config)->Result.map(_ => {
+      if !(account.migrated->Array.includes(name)) {
+        account.migrated->Array.push(name)
+      }
+      ""
+    })
   | ("wrangler", list{"versions", "list", "--json", "--name", name}) =>
     switch account.workers->Dict.get(name) {
     | Some(held) if held.versions != [] => Ok(versionsOf(held))
@@ -224,8 +333,9 @@ type faked = {
   scratched: array<string>,
 }
 
-let make = (~env=credentials, ~stdin=token, ~drawn=id, ~answer) => {
+let make = (~env=credentials, ~stdin=token, ~drawn=id, ~draws=[], ~answer) => {
   let ran = []
+  let queued = draws->Array.copy
   let said = []
   let scratched = []
   let world: Install.world = {
@@ -241,7 +351,7 @@ let make = (~env=credentials, ~stdin=token, ~drawn=id, ~answer) => {
       scratched->Array.push(made)
       made
     },
-    draw: () => drawn,
+    draw: () => queued->Array.shift->Option.getOr(drawn),
   }
   {world, ran, said, scratched}
 }
@@ -282,21 +392,23 @@ let shows = faked =>
       faked.said->Array.some(l => l->String.includes(s))
   )
 
-let installed = (~env=?, ~stdin=?, ~drawn=?, account, root) => {
-  let faked = make(~env?, ~stdin?, ~drawn?, ~answer=command => answered(account, command))
+let installed = (~env=?, ~stdin=?, ~drawn=?, ~draws=?, account, root) => {
+  let faked = make(~env?, ~stdin?, ~drawn?, ~draws?, ~answer=command => answered(account, command))
   let result = Install.install(faked.world, ~dry=false, ~root)
   (faked, result)
 }
 
 let first = [
   "wrangler d1 list --json",
+  workersListed,
   "wrangler d1 list --json",
   "wrangler d1 create driver-0a1b2c3d",
+  markerWritten("driver-0a1b2c3d"),
   "wrangler d1 list --json",
+  "wrangler d1 migrations apply driver-0a1b2c3d --remote --config <driver>",
   "wrangler d1 list --json",
   "wrangler d1 create database-0a1b2c3d",
   "wrangler d1 list --json",
-  "wrangler d1 migrations apply driver-0a1b2c3d --remote --config <driver>",
   "wrangler r2 bucket list",
   "wrangler r2 bucket create objects-0a1b2c3d",
   "rescript build in <driver>",
@@ -323,9 +435,11 @@ let first = [
 
 let again = [
   "wrangler d1 list --json",
-  "wrangler d1 list --json",
+  tablesRead("driver-0a1b2c3d"),
+  markerRead("driver-0a1b2c3d"),
   "wrangler d1 list --json",
   "wrangler d1 migrations apply driver-0a1b2c3d --remote --config <driver>",
+  "wrangler d1 list --json",
   "wrangler r2 bucket list",
   "rescript build in <driver>",
   "wrangler deploy --dry-run --outdir <out> --config <driver>",
@@ -347,13 +461,21 @@ let moments = root => [
   Host.join([root, "cloudflare", "database", Install.moment]),
 ]
 
-/** A dry run whose commands are answered by `account`, any but the D1 list refused. */
+/** The reads a dry run may run, the D1 list, the tables queries and the marker queries. */
+let reads = command => {
+  let l = line(command)
+  l == "wrangler d1 list --json" ||
+    (l->String.startsWith("wrangler d1 execute ") &&
+      [Install.tablesQuery, Install.markerQuery]->Array.some(q =>
+        l->String.endsWith(`${q} --json`)
+      ))
+}
+
+/** A dry run whose commands are answered by `account`, any but the reads refused. */
 let dryOn = (~env=?, ~answer=?, account, root) => {
   let answer =
     answer->Option.getOr(command =>
-      line(command) == "wrangler d1 list --json"
-        ? answered(account, command)
-        : Error(`ran ${line(command)}`)
+      reads(command) ? answered(account, command) : Error(`ran ${line(command)}`)
     )
   let faked = make(~env?, ~answer)
   (faked, Install.install(faked.world, ~dry=true, ~root))
@@ -368,7 +490,8 @@ test("a dry run reads the D1 list alone, writes nothing and shows no secret", ()
   ok(moments(root)->Array.every(path => !Host.existsSync(path)))
   ok(
     [
-      "d1 list names no driver-<8 hex>, so a new install id would be drawn",
+      "d1 list names no driver's D1 holding its marker, so a new install id would be drawn",
+      "wrangler d1 execute driver-<install id> --remote --command CREATE TABLE install",
       "wrangler d1 create driver-<install id>",
       "wrangler d1 create database-<install id>",
       "wrangler d1 migrations apply driver-<install id> --remote",
@@ -386,9 +509,10 @@ test("a dry run reads the D1 list alone, writes nothing and shows no secret", ()
   )
 })
 
-test("a dry run says which install id it would reuse, and refuses where two are listed", () => {
+test("a dry run says which install id it would reuse, and refuses where two are marked", () => {
   let account = empty()
-  account.databases = ["other", "driver-0a1b2c3d"]
+  account.databases = ["other"]
+  account->holding("driver-0a1b2c3d", ~mark=id)
   let (faked, result) = dryOn(account, fixture())
   deepEqual(result, Ok())
   ok(
@@ -399,23 +523,31 @@ test("a dry run says which install id it would reuse, and refuses where two are 
   ok(
     faked.said->Array.some(l => l->String.includes("wrangler d1 migrations apply driver-0a1b2c3d")),
   )
-  account.databases = ["driver-0a1b2c3d", "driver-4e5f6a7b"]
+  account->holding("driver-4e5f6a7b", ~mark="4e5f6a7b")
   let (faked, result) = dryOn(account, fixture())
   ok(result->Result.isError)
-  deepEqual(plain(faked), ["wrangler d1 list --json"])
+  deepEqual(
+    plain(faked),
+    [
+      "wrangler d1 list --json",
+      tablesRead("driver-0a1b2c3d"),
+      markerRead("driver-0a1b2c3d"),
+      tablesRead("driver-4e5f6a7b"),
+      markerRead("driver-4e5f6a7b"),
+    ],
+  )
 })
 
 test("a dry run that cannot read the account prints the rule and says why", () => {
-  let rule = "  it reuses the install id of the one driver-<8 hex> d1 list names, draws a new one"
+  let rule =
+    [
+      "  it reuses the install id of the one driver-<8 hex> holding the driver's marker, ",
+      "draws a",
+    ]->Array.join("")
   let (failed, result) = dryOn(~answer=_ => Error("the list failed"), empty(), fixture())
   deepEqual(result, Ok())
   ok(failed.said->Array.includes(rule), ~message=failed.said->Array.join("\n"))
-  ok(
-    failed.said->Array.some(l =>
-      l->String.startsWith("the install id is not known, as wrangler d1 list --json") &&
-        l->String.endsWith("failed, the list failed;")
-    ),
-  )
+  ok(failed.said->Array.some(l => l == "the install id is not known, as the list failed;"))
   let (unread, result) = dryOn(~answer=_ => Ok("not JSON"), empty(), fixture())
   deepEqual(result, Ok())
   ok(unread.said->Array.some(l => l->String.includes("d1 list printed no JSON array")))
@@ -487,6 +619,7 @@ test("a first install makes each part in order, and a second changes nothing", (
   let (made, result) = installed(account, root)
   deepEqual(result, Ok())
   deepEqual(plain(made), first)
+  deepEqual(account.marks->Dict.get(full("driver")), Some(id))
   let (kept, result) = installed(account, root)
   deepEqual(result, Ok())
   deepEqual(plain(kept), again)
@@ -500,7 +633,8 @@ test("a first install makes each part in order, and a second changes nothing", (
 test("each part the account holds already is passed over", () => {
   let root = fixture()
   let account = empty()
-  account.databases = ["other", "driver", "driver-0a1b2c3d", "database-0a1b2c3d"]
+  account.databases = ["other", "driver", "database-0a1b2c3d"]
+  account->holding("driver-0a1b2c3d", ~mark=id)
   account.buckets = ["objects", "objects-0a1b2c3d"]
   let (faked, result) = installed(account, root)
   deepEqual(result, Ok())
@@ -799,7 +933,7 @@ test("the install id is drawn where no driver-<8 hex> is listed, and reused wher
   deepEqual(result, Ok())
   ok(
     drawn.said->Array.includes(
-      "no driver-<8 hex> on the account, so the install id 0a1b2c3d is drawn",
+      "no driver's D1 holding its marker on the account, so the install id 0a1b2c3d is drawn",
     ),
   )
   ok(account.databases->Array.includes(full("driver")))
@@ -816,7 +950,9 @@ test("the install id is drawn where no driver-<8 hex> is listed, and reused wher
 
 test("more than one driver-<8 hex> is refused by name, and nothing is made", () => {
   let account = empty()
-  account.databases = ["driver-0a1b2c3d", "other", "driver-4e5f6a7b"]
+  account.databases = ["other"]
+  account->holding("driver-0a1b2c3d", ~mark=id)
+  account->holding("driver-4e5f6a7b", ~mark="4e5f6a7b")
   let (faked, result) = installed(account, fixture())
   deepEqual(
     result,
@@ -827,13 +963,22 @@ test("more than one driver-<8 hex> is refused by name, and nothing is made", () 
       ]->Array.join(""),
     ),
   )
-  deepEqual(plain(faked), ["wrangler d1 list --json"])
+  deepEqual(
+    plain(faked),
+    [
+      "wrangler d1 list --json",
+      tablesRead("driver-0a1b2c3d"),
+      markerRead("driver-0a1b2c3d"),
+      tablesRead("driver-4e5f6a7b"),
+      markerRead("driver-4e5f6a7b"),
+    ],
+  )
 })
 
 test("a drawn id not of the id form is refused before anything is made", () => {
   let (faked, result) = installed(~drawn="0A1B2C3D", empty(), fixture())
   deepEqual(result, Error("an install id drawn is not 8 lowercase hex digits, 0A1B2C3D"))
-  deepEqual(plain(faked), ["wrangler d1 list --json"])
+  deepEqual(plain(faked), ["wrangler d1 list --json", workersListed])
 })
 
 let only = (kinds: option<string>) =>
@@ -854,8 +999,12 @@ test(
       plain(faked),
       [
         "wrangler d1 list --json",
+        workersListed,
+        "wrangler versions list --json --name object-0a1b2c3d",
+        "wrangler versions list --json --name database-0a1b2c3d",
         "wrangler d1 list --json",
         "wrangler d1 create driver-0a1b2c3d",
+        markerWritten("driver-0a1b2c3d"),
         "wrangler d1 list --json",
         "wrangler d1 migrations apply driver-0a1b2c3d --remote --config <driver>",
         "rescript build in <driver>",
@@ -865,8 +1014,6 @@ test(
         "wrangler secret list --config <driver>",
         "wrangler secret put API_TOKEN --config <driver>",
         "wrangler secret put BINDING --config <driver>",
-        "wrangler versions list --json --name object-0a1b2c3d",
-        "wrangler versions list --json --name database-0a1b2c3d",
       ],
     )
     ok(faked.said->Array.includes("the kinds offered are function, DRIVER_KINDS"))
@@ -999,7 +1146,7 @@ test("a D1 list that is no JSON array is an error, never an empty account", () =
         answered(account, command)
       }
   let refused = Error("d1 list printed no JSON array, so the account's databases are not known")
-  // The first list is recovery's, the second the driver's D1's.
+  // The first list is recovery's, the second the driver's D1's, after the checks.
   [1, 2]->Array.forEach(at => {
     lists := 0
     let faked = make(~answer=unreadAt(at))
@@ -1008,7 +1155,25 @@ test("a D1 list that is no JSON array is an error, never an empty account", () =
   })
 })
 
-test("a dropped kind's Worker whose lookup fails otherwise than not found is named", () => {
+/** Whether a line run changes anything, on the account or in the checkout. */
+let writes = l =>
+  [
+    " create ",
+    "migrations apply",
+    "CREATE TABLE",
+    "deploy",
+    "secret put",
+    "rescript build",
+  ]->Array.some(w => l->String.includes(w))
+
+/** That nothing was changed, no line written and no scratch directory made. */
+let unchanged = faked => {
+  let lines = plain(faked)
+  ok(lines->Array.every(l => !writes(l)), ~message=lines->Array.join("\n"))
+  deepEqual(faked.scratched, [])
+}
+
+test("a dropped kind's lookup failing otherwise than not found stops install, nothing run", () => {
   let account = empty()
   let answer = command =>
     line(command) == "wrangler versions list --json --name object-0a1b2c3d"
@@ -1019,6 +1184,245 @@ test("a dropped kind's Worker whose lookup fails otherwise than not found is nam
     Install.install(faked.world, ~dry=false, ~root=fixture()),
     Error("whether object-0a1b2c3d is there is not known, Authentication error [code: 10000]"),
   )
+  unchanged(faked)
+  deepEqual((account.databases, account.buckets, account.marks), ([], [], dict{}))
+})
+
+test("a driver-<8 hex> holding no marker is foreign, passed over and never written", () => {
+  let root = fixture()
+  let account = empty()
+
+  // One holds a table of its own and no marker, another a marker naming another install.
+  account.databases = ["driver-20261024"]
+  account.own->Dict.set("driver-20261024", ["notes"])
+  account->holding("driver-4e5f6a7b", ~mark="0a1b2c3d")
+  let foreign = ["driver-20261024", "driver-4e5f6a7b"]
+  let (dry, result) = dryOn(account, root)
+  deepEqual(result, Ok())
+  foreign->Array.forEach(name =>
+    ok(
+      dry.said->Array.includes(
+        `${name} holds no driver's marker, so it is passed over and never written`,
+      ),
+      ~message=dry.said->Array.join("\n"),
+    )
+  )
+  ok(dry.said->Array.some(l => l->String.includes("so a new install id would be drawn")))
+  let (faked, result) = installed(~draws=["5c6d7e8f"], account, root)
+  deepEqual(result, Ok())
+  let lines = plain(faked)
+  deepEqual(
+    foreign->Array.map(name => lines->Array.filter(l => l->String.includes(name))),
+    [
+      [tablesRead("driver-20261024")],
+      [tablesRead("driver-4e5f6a7b"), markerRead("driver-4e5f6a7b")],
+    ],
+  )
+  ok(
+    faked.said->Array.includes(
+      "no driver's D1 holding its marker on the account, so the install id 5c6d7e8f is drawn",
+    ),
+  )
+  deepEqual(
+    (account.marks->Dict.get("driver-20261024"), account.marks->Dict.get("driver-4e5f6a7b")),
+    (None, Some("0a1b2c3d")),
+  )
+  deepEqual(account.marks->Dict.get("driver-5c6d7e8f"), Some("5c6d7e8f"))
+  // The next install reuses the one marked, the foreign ones still passed over.
+  let (again, result) = installed(~draws=["6e7f8a9b"], account, root)
+  deepEqual(result, Ok())
+  ok(
+    again.said->Array.includes(
+      "the install id 5c6d7e8f is reused, the account holding driver-5c6d7e8f",
+    ),
+  )
+})
+
+test("a driver-<8 hex> holding no table is said as possibly interrupted, and never touched", () => {
+  let root = fixture()
+  let account = empty()
+  account.databases = ["driver-4e5f6a7b"]
+  let said =
+    [
+      "driver-4e5f6a7b holds no tables, possibly an interrupted install of this driver;",
+      " delete it by hand if it is yours",
+    ]->Array.join("")
+  let (dry, result) = dryOn(account, root)
+  deepEqual(result, Ok())
+  ok(dry.said->Array.includes(said), ~message=dry.said->Array.join("\n"))
+  ok(dry.said->Array.some(l => l->String.includes("so a new install id would be drawn")))
+  let (faked, result) = installed(~draws=["4e5f6a7b", "5c6d7e8f"], account, root)
+  deepEqual(result, Ok())
+  ok(faked.said->Array.includes(said), ~message=faked.said->Array.join("\n"))
+  deepEqual(
+    plain(faked)->Array.filter(l => l->String.includes("driver-4e5f6a7b")),
+    [tablesRead("driver-4e5f6a7b")],
+  )
+  deepEqual(
+    (account.marks->Dict.get("driver-4e5f6a7b"), account.migrated),
+    (None, ["driver-5c6d7e8f"]),
+  )
+  deepEqual(account.marks->Dict.get("driver-5c6d7e8f"), Some("5c6d7e8f"))
+})
+
+test("the marker is written right after the D1 is made, before its first migration", () => {
+  let account = empty()
+  let (faked, result) = installed(account, fixture())
+  deepEqual(result, Ok())
+  let lines = plain(faked)
+  let at = line => lines->Array.indexOf(line)
+  let created = at("wrangler d1 create driver-0a1b2c3d")
+  deepEqual(
+    (at(markerWritten("driver-0a1b2c3d")) - created, created >= 0),
+    (1, true),
+    ~message=lines->Array.join("\n"),
+  )
+  ok(
+    at(markerWritten("driver-0a1b2c3d")) <
+    at("wrangler d1 migrations apply driver-0a1b2c3d --remote --config <driver>"),
+  )
+  deepEqual(account.marks->Dict.get(full("driver")), Some(id))
+  // A reused D1 is never marked again, and one listed though its id was drawn is refused.
+  let (again, _) = installed(account, fixture())
+  ok(plain(again)->Array.every(l => l != markerWritten("driver-0a1b2c3d")))
+  let raced = empty()
+  let lists = ref(0)
+  let faked = make(~answer=command =>
+    if line(command) == "wrangler d1 list --json" {
+      lists := lists.contents + 1
+
+      // The second list, the driver's D1's own, sees one made since the survey.
+      if lists.contents == 2 {
+        raced.databases->Array.push(full("driver"))
+      }
+      answered(raced, command)
+    } else {
+      answered(raced, command)
+    }
+  )
+  deepEqual(
+    Install.install(faked.world, ~dry=false, ~root=fixture()),
+    Error("driver-0a1b2c3d is listed already, though its install id was drawn as free"),
+  )
+  deepEqual(raced.marks, dict{})
+})
+
+test("a drawn id is drawn again while a D1's or a Worker's name ends in it", () => {
+  let account = empty()
+  account.databases = ["objects-0a1b2c3d"]
+  account->running("app-7-4e5f6a7b")
+  let (faked, result) = installed(~draws=["0a1b2c3d", "4e5f6a7b", "5c6d7e8f"], account, fixture())
+  deepEqual(result, Ok())
+  let taken = id => `the install id ${id} drawn ends a name the account holds, so another is drawn`
+  ok(faked.said->Array.includes(taken("0a1b2c3d")), ~message=faked.said->Array.join("\n"))
+  ok(faked.said->Array.includes(taken("4e5f6a7b")))
+  ok(account.databases->Array.includes("driver-5c6d7e8f"))
+  deepEqual(plain(faked)->Array.filter(l => l == workersListed)->Array.length, 1)
+  // An account where every draw is taken is refused, nothing made.
+  let account = empty()
+  account.databases = ["objects-0a1b2c3d"]
+  let (faked, result) = installed(account, fixture())
+  deepEqual(result, Error("no install id drawn was free in 8 draws"))
+  unchanged(faked)
+})
+
+test("a marker read failing otherwise than for want of a marker stops install, nothing run", () => {
+  let account = empty()
+  account->holding("driver-0a1b2c3d", ~mark=id)
+  let answer = command =>
+    line(command) == markerRead("driver-0a1b2c3d")
+      ? Error("Authentication error [code: 10000]")
+      : answered(account, command)
+  let faked = make(~answer)
+  deepEqual(
+    Install.install(faked.world, ~dry=false, ~root=fixture()),
+    Error("the marker of driver-0a1b2c3d is not known, Authentication error [code: 10000]"),
+  )
+  unchanged(faked)
+  let faked = make(~answer=command =>
+    line(command) == markerRead("driver-0a1b2c3d") ? Ok("not JSON") : answered(account, command)
+  )
+  deepEqual(
+    Install.install(faked.world, ~dry=false, ~root=fixture()),
+    Error("the marker of driver-0a1b2c3d is not known, d1 execute printed no JSON array"),
+  )
+  unchanged(faked)
+})
+
+test("a Workers list that cannot be read stops install before anything is made", () => {
+  let account = empty()
+  let faked = make(~answer=command =>
+    line(command) == workersListed ? Ok("not JSON") : answered(account, command)
+  )
+  deepEqual(
+    Install.install(faked.world, ~dry=false, ~root=fixture()),
+    Error("the Workers list printed no result array, so the account's Workers are not known"),
+  )
+  unchanged(faked)
+  let listing = faked.ran->Array.find(c => line(c) == workersListed)
+  deepEqual(listing->Option.flatMap(c => c.input), Some("Authorization: Bearer the-install-token"))
+})
+
+test("curl is given -q first, so it reads no .curlrc", () => {
+  let (faked, result) = installed(empty(), fixture())
+  deepEqual(result, Ok())
+  let listing = faked.ran->Array.find((c: Install.command) => Host.basename(c.program) == "curl")
+  deepEqual(listing->Option.flatMap(c => c.args->Array.get(0)), Some("-q"))
+})
+
+test("a Workers list answered in pages, or not a success, stops install with nothing made", () => {
+  let answer = (account, body) =>
+    (command: Install.command) =>
+      Host.basename(command.program) == "curl" ? Ok(body) : answered(account, command)
+  let answers = [
+    (
+      `{"success":true,"result":[{"id":"app-7-4e5f6a7b"}],
+        "result_info":{"page":1,"total_pages":2}}`,
+      "came in pages and was not read whole",
+    ),
+    (
+      `{"success":true,"result":[],"result_info":{"count":20,"total_count":21}}`,
+      "came in pages and was not read whole",
+    ),
+    (
+      `{"success":true,"result":[],"result_info":{"cursor":"6Ck1la0VxJ0djhidm1MdX2FyD"}}`,
+      "came in pages and was not read whole",
+    ),
+    (
+      `{"success":false,"errors":[{"code":10000,"message":"Authentication error"}],"result":null}`,
+      "did not succeed",
+    ),
+  ]
+  answers->Array.forEach(((body, why)) => {
+    let account = empty()
+    let faked = make(~answer=answer(account, body))
+    deepEqual(
+      Install.install(faked.world, ~dry=false, ~root=fixture()),
+      Error(`the Workers list ${why}, so the account's Workers are not known`),
+      ~message=body,
+    )
+    unchanged(faked)
+  })
+  // One page whole, as the documentation shows every answer, is read.
+  let account = empty()
+  let whole = `{"success":true,"result":[],"result_info":{"page":1,"total_pages":1}}`
+  let faked = make(~answer=answer(account, whole))
+  deepEqual(Install.install(faked.world, ~dry=false, ~root=fixture()), Ok())
+})
+
+test("a D1's tables read failing stops install, nothing run", () => {
+  let account = empty()
+  account.databases = ["driver-4e5f6a7b"]
+  let faked = make(~answer=command =>
+    line(command) == tablesRead("driver-4e5f6a7b")
+      ? Error("Authentication error [code: 10000]")
+      : answered(account, command)
+  )
+  deepEqual(
+    Install.install(faked.world, ~dry=false, ~root=fixture()),
+    Error("the marker of driver-4e5f6a7b is not known, Authentication error [code: 10000]"),
+  )
+  unchanged(faked)
 })
 
 after(() => fixtures->Array.forEach(root => Host.rmSync(root, {recursive: true, force: true})))
