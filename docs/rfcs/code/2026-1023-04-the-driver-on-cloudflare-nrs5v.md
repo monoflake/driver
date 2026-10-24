@@ -130,8 +130,8 @@ Decided by the author on 2026-10-23, from the research the Options below record.
   - **The management's state is read and written whole**, its sweep writing only where an item's
     grace has passed. It rests on the control calling the management one call at a time: D1's batch
     makes a write one transaction, but leaves a race between a read and the write after it.
-  - **An object or database item** is held `failed` as `beyond_host`, its message that it waits on
-    this RFC's next slice, until that slice is built.
+  - **A database item** is held `failed` as `beyond_host`, its message that it waits on this RFC's
+    third slice, until that slice is built.
   - **Implementers' defaults, let stand by the advisor**: an artifact past 64 MiB is refused as
     `too_large`; a list holding a `container` or `volume` item is refused whole as `beyond_host`, as
     driver(machine) refuses a list it cannot hold; a bundle's `.json` module is refused as
@@ -140,8 +140,25 @@ Decided by the author on 2026-10-23, from the research the Options below record.
     is cut.
   - **Its tests** are each block's own, Cloudflare's API answered by fixtures taken from its
     documents' examples, each naming its address; the function's samples run against those fakes,
-    and the program's are `lifecycle.json` alone until the object slice brings back the
-    management's three, each holding an object item.
+    and the program's are the management's three and `lifecycle.json`.
+
+  The second slice's, object on R2, each provisional, chosen by the advisor on 2026-10-24:
+  - **A binding holds one bucket**, as driver(machine)'s `bucketed` holds one, so a bucket per item
+    or a prefix in one is answered by neither: a list holding two `object` items or more is refused
+    whole as `beyond_host`, and one holding an item past 1 TiB too, the most this driver takes
+    while its cost is watched.
+  - **Names.** The adapter is the block `cloudflare/object` and the Worker `object`, its bucket
+    `objects` and its account in the driver's D1 the table `objects`, the bucket and the table one
+    word since they name one thing; it answers `POST /object/{operation}`, the binding's token
+    held as the driver holds it.
+  - **The Worker `object` and the bucket `objects` are made with the Worker `driver`**, by
+    wrangler, so `API_TOKEN` holds nothing of R2; with no `object` item a read answers
+    `not_found` and a list nothing, as on a machine. An `object` item is `made` at the Worker
+    `object`'s address.
+  - **What the bucket holds** is counted in `objects`, a write past the item's size refused as
+    `storage_full` and an object past 16 MiB as `too_large`. A second write to one key within a
+    second, which R2 refuses, is a `fault` whose message names R2's limit on a key and asks for a
+    retry, never `storage_full`, which would tell a caller to make room, RFC 49qyg.
 
 Out of date in this repository's neighbors, to be corrected when one is decided: a Worker's size is
 64 MiB uncompressed on every plan, where RFC vr5lw and `monoflake/platform`'s
