@@ -25,12 +25,8 @@ let driver: Made.driver = {
     uses: ["envelope*", "codec*", "keys*"],
     takes: [{language: #rescript, name: "wrangler", major: "4"}],
     serves: ["driver-cloudflare-function", "driver-cloudflare-management"],
-    samples: [
-      "../platform/tests/kinds/management/lists.json",
-      "../platform/tests/kinds/management/graces.json",
-      "../platform/tests/kinds/management/ends.json",
-      "../platform/tests/kinds/deployments/lifecycle.json",
-    ],
+    // The management's samples hold object items, so they come with nrs5v's next slice.
+    samples: ["../platform/tests/kinds/deployments/lifecycle.json"],
     released: false,
   },
 }
