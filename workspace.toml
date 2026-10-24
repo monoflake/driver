@@ -10,6 +10,15 @@ actions = true
 [rfcs]
 ids = "monoflake"
 
+# Suffixes this repository alone tracks, formatted by nothing, the workspace's docs/lint-format.md.
+[format]
+unformatted = [".capnp"]
+# The readings a test reads, kept byte for byte, which neither the suffixes part nor a hook touches.
+test_data = [
+	"machine/management/tests/first/sys/fs/cgroup",
+	"machine/management/tests/second/sys/fs/cgroup",
+]
+
 # What the workspace's scripts/release takes, the built.json the release workflow writes and the
 # notes' columns, RFC 8c0rg.
 [release]

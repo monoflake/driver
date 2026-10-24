@@ -105,7 +105,7 @@ fn memory_reads_bytes_from_kilobytes() {
 	assert_eq!(
 		memory,
 		Memory {
-			total: 3_496_348 * 1024,
+			total: 4_194_304 * 1024,
 			available: 2_951_356 * 1024,
 			free: 1_120_276 * 1024,
 			buffers: 236_932 * 1024,
@@ -134,7 +134,7 @@ fn disks_are_the_whole_ones_counted_in_bytes() {
 	assert_eq!(
 		disks,
 		Disks(vec![Disk {
-			device: "vda".to_owned(),
+			device: "sda".to_owned(),
 			reads: 53983,
 			read_bytes: 1_381_555 * 512,
 			writes: 17580,
@@ -178,19 +178,19 @@ fn disks_tell_a_partition_from_a_disk_by_its_name() {
 #[test]
 fn disks_refuse_a_line_cut_short_or_spoiled() {
 	let stats = text("first", "proc/diskstats");
-	malformed(Disks::parse(&with_line(&stats, 1, " 253 0 vda 53983 8879")), "proc/diskstats", 1);
+	malformed(Disks::parse(&with_line(&stats, 1, " 253 0 sda 53983 8879")), "proc/diskstats", 1);
 	malformed(
 		Disks::parse(&with_line(
 			&stats,
 			1,
-			" 253 0 vda 53983 8879 many 11285 17580 123440 7726347 115583",
+			" 253 0 sda 53983 8879 many 11285 17580 123440 7726347 115583",
 		)),
 		"proc/diskstats",
 		1,
 	);
 	malformed(Disks::parse(&with_line(&stats, 2, " 253 1")), "proc/diskstats", 2);
 	malformed(
-		Disks::parse(&with_line(&stats, 2, " 253 x vda1 22 0 176 2 0 0 0 0")),
+		Disks::parse(&with_line(&stats, 2, " 253 x sda1 22 0 176 2 0 0 0 0")),
 		"proc/diskstats",
 		2,
 	);
@@ -203,7 +203,7 @@ fn interfaces_leave_the_loopback_out() {
 		interfaces,
 		Interfaces(vec![
 			Interface {
-				name: "ens3".to_owned(),
+				name: "eth0".to_owned(),
 				received_bytes: 824_595_144,
 				received_packets: 144_128,
 				received_errors: 0,
@@ -214,7 +214,7 @@ fn interfaces_leave_the_loopback_out() {
 				sent_dropped: 0,
 			},
 			Interface {
-				name: "tailscale0".to_owned(),
+				name: "eth1".to_owned(),
 				received_bytes: 2_035_740,
 				received_packets: 2_626,
 				received_errors: 0,
@@ -245,7 +245,7 @@ fn interfaces_read_a_name_that_runs_into_its_counter() {
 fn interfaces_refuse_a_line_cut_short_or_spoiled() {
 	let dev = text("first", "proc/net/dev");
 	malformed(
-		Interfaces::parse(&with_line(&dev, 4, "  ens3: 824595144  144128    0    0")),
+		Interfaces::parse(&with_line(&dev, 4, "  eth0: 824595144  144128    0    0")),
 		"proc/net/dev",
 		4,
 	);
@@ -253,12 +253,12 @@ fn interfaces_refuse_a_line_cut_short_or_spoiled() {
 		Interfaces::parse(&with_line(
 			&dev,
 			5,
-			"tailscale0: 2035740 packets 0 0 0 0 0 0 1328614 1969 0 0 0 0 0 0",
+			"eth1: 2035740 packets 0 0 0 0 0 0 1328614 1969 0 0 0 0 0 0",
 		)),
 		"proc/net/dev",
 		5,
 	);
-	malformed(Interfaces::parse(&with_line(&dev, 5, "tailscale0 2035740 2626")), "proc/net/dev", 5);
+	malformed(Interfaces::parse(&with_line(&dev, 5, "eth1 2035740 2626")), "proc/net/dev", 5);
 }
 
 #[test]

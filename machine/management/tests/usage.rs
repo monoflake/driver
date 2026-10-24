@@ -22,7 +22,7 @@ fn a_machine_is_read_whole_from_a_root() {
 	assert_eq!(usage.at, at("first"));
 	assert_eq!(usage.processor.cores.len(), 2);
 	assert_eq!(usage.load.one, 0.13);
-	assert_eq!(usage.memory.total, 3_496_348 * 1024);
+	assert_eq!(usage.memory.total, 4_194_304 * 1024);
 	assert_eq!(usage.disks, Disks::parse(&text("first", "proc/diskstats")).unwrap());
 	assert_eq!(usage.interfaces, Interfaces::parse(&text("first", "proc/net/dev")).unwrap());
 	assert!(usage.spaces.is_empty());
@@ -89,15 +89,15 @@ fn rates_between_the_two_readings_of_the_machine() {
 	}
 
 	assert_eq!(rates.disks.len(), 1);
-	assert_eq!(rates.disks[0].0, "vda");
+	assert_eq!(rates.disks[0].0, "sda");
 	assert!(near(rates.disks[0].1, 0.0));
 	assert!(near(rates.disks[0].2, (8_217_867.0 - 7_726_347.0) * 512.0 / seconds));
 
 	assert_eq!(rates.interfaces.len(), 2);
-	assert_eq!(rates.interfaces[0].0, "ens3");
+	assert_eq!(rates.interfaces[0].0, "eth0");
 	assert!(near(rates.interfaces[0].1, (824_595_895.0 - 824_595_144.0) / seconds));
 	assert!(near(rates.interfaces[0].2, (7_697_627.0 - 7_696_424.0) / seconds));
-	assert_eq!(rates.interfaces[1].0, "tailscale0");
+	assert_eq!(rates.interfaces[1].0, "eth1");
 }
 
 #[test]
@@ -137,7 +137,7 @@ fn a_device_in_one_reading_alone_is_left_out() {
 	});
 	let rates = later.since(&earlier).unwrap();
 	assert_eq!(rates.interfaces.len(), 1);
-	assert_eq!(rates.interfaces[0].0, "tailscale0");
+	assert_eq!(rates.interfaces[0].0, "eth1");
 	assert!(rates.disks.is_empty());
 }
 

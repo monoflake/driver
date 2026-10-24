@@ -1,13 +1,13 @@
-//! The readings of `tests/buf1/` and `tests/buf2/`, two roots as the machine laid them out.
+//! The readings of `tests/first/` and `tests/second/`, two roots as the machine laid them out.
 
 #![allow(dead_code)]
 
 use std::fs;
 use std::path::PathBuf;
 
-/// The root of the reading named `first` (`buf1`) or `second` (`buf2`).
+/// The root of the reading named `first` or `second`.
 pub fn root(reading: &str) -> PathBuf {
-	let directory = if reading == "first" { "buf1" } else { "buf2" };
+	let directory = if reading == "first" { "first" } else { "second" };
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join(directory)
 }
 
