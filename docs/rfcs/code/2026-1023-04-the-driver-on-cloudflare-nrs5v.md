@@ -121,16 +121,27 @@ Decided by the author on 2026-10-23, from the research the Options below record.
     version it replaced in D1, which resuming deploys again in whole.
   - **The footing** is a plain text binding, `MONOFLAKE_FOOTING`, as driver(machine) names it to a
     worker, and a deployment's secrets are secret text bindings.
-  - **A deployment's `network`** asking less than every way out is refused as `beyond_host`, an
-    ordinary account holding no Worker back from the network; the paid namespace waits.
+  - **A deployment's `network`** asking `udp` or `icmp` is refused as `beyond_host`, a Worker having
+    neither; one asking `http`, `tcp` or both is taken, and since an ordinary account holds no
+    Worker back from `fetch` or `connect()`, the driver logs a warning at deploy naming each way out
+    given beyond those asked; the paid namespace's outbound Worker would hold it to them. This
+    replaces the advisor's first choice, refusing whatever asked less than every way out, which
+    refused hello and every sample's deploy.
   - **The management's state is read and written whole**, its sweep writing only where an item's
     grace has passed. It rests on the control calling the management one call at a time: D1's batch
     makes a write one transaction, but leaves a race between a read and the write after it.
   - **An object or database item** is held `failed` as `beyond_host`, its message that it waits on
     this RFC's next slice, until that slice is built.
+  - **Implementers' defaults, let stand by the advisor**: an artifact past 64 MiB is refused as
+    `too_large`; a list holding a `container` or `volume` item is refused whole as `beyond_host`, as
+    driver(machine) refuses a list it cannot hold; a bundle's `.json` module is refused as
+    `beyond_host`, since turning JSON into an ES module goes past mapping the metadata field for
+    field, until an app needs one; a version's tag is 72 bytes, within the 100 a tag holds, so none
+    is cut.
   - **Its tests** are each block's own, Cloudflare's API answered by fixtures taken from its
-    documents' examples, each naming its address; the kinds' samples run once a live account is
-    bound.
+    documents' examples, each naming its address; the function's samples run against those fakes,
+    and the program's are `lifecycle.json` alone until the object slice brings back the
+    management's three, each holding an object item.
 
 Out of date in this repository's neighbors, to be corrected when one is decided: a Worker's size is
 64 MiB uncompressed on every plan, where RFC vr5lw and `monoflake/platform`'s
