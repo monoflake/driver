@@ -104,9 +104,15 @@ Decided by the author on 2026-10-23, from the research the Options below record.
   form only makes a shared account safe to bind.
 - **An exception list, decided in principle by the author on 2026-10-24**: an organization's admin
   may register named resources the driver also manages, each mapped to an item id, so what is
-  managed is the id-form resources and that list, and everything else is ignored. **Pending**, on
-  the author: exact names only or patterns too, and whether a listed resource is only ever updated
-  and never deleted. It is not built.
+  managed is the id-form resources and that list, and everything else is ignored. Its two details,
+  decided by the author on 2026-10-24:
+  - **Exact names only**, never patterns, since a pattern would silently take over a resource the
+    organization makes later.
+  - **A listed resource is only ever updated, never deleted.** When its item is unasked, swept, or
+    would be removed, the driver lets it go untouched and tells the admin to delete it by hand in
+    the vendor's own dashboard, naming the resource. Only id-form resources are managed fully
+    automatically, deletion included: a listed resource was the organization's before the platform
+    came, so the worst a bug can do to it is overwrite it, never make it vanish.
 - **The order of testing**, decided by the author on 2026-10-24: first an empty test account made
   for the test; an organization's own free account is bound only after conform passes and clearing
   is proven on the empty one. What a test makes is still removed when it ends.
@@ -313,3 +319,19 @@ Choices made provisionally while the thread runs, read by the author at its end.
   - It hands wrangler `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` only in the environment of
     its own child processes, set from those, so an ambient value never reaches wrangler.
   - It refuses to run when `DRIVER_ACCOUNT_ID` is unset, rather than falling back.
+- **The exception list reaches the driver through management**, provisional, chosen by the advisor
+  on 2026-10-24: `apply` carries it, the driver keeps it in its state, and management describe
+  reports every listed name and its item.
+- **The "delete it by hand" message is a warning on describe**, provisional, chosen by the advisor on
+  2026-10-24, naming each released resource, kept until that resource no longer exists.
+- **A field carrying the list in a kind's management contract is monoflake/platform's**,
+  provisional, chosen by the advisor on 2026-10-24: it is reported as a fact before building, and
+  recorded in platform's RFCs, citing nrs5v.
+- **The user database's D1 is `database-<install id>`**, beside the Worker `database-<install id>`,
+  provisional, chosen by the advisor on 2026-10-24, since the two namespaces are apart; it joins the
+  names above.
+- **A listed Worker stands for a deployment**, provisional, chosen by the advisor on 2026-10-24: an
+  app's id or a component's name, as the deployments interface identifies it. The driver then
+  deploys that deployment to the listed name instead of `app-<id>-<install id>`. It is that
+  deployment's Worker, never a management item. A listed bucket or D1 stands for a management
+  item's id.
