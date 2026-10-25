@@ -74,3 +74,20 @@ Choices made provisionally while the thread runs, read by the author at its end.
 - **One switch, one trial**, a small matter, provisional, chosen by the advisor on 2026-10-24: the
   NixOS firewall opening the entry's port on the containers' bridge is applied in the same switch
   as the fence, so it comes under the same trial and reverts with it.
+- **The fence and a driver holding no `CAP_NET_RAW` go in one step**, a small matter, provisional,
+  chosen by the advisor on 2026-10-24: an element matches by source address, and only a raw socket
+  forges one, by ARP or by source, so no set binding a bridge port to its address is built. A
+  container the driver cannot rebuild, which still holds `CAP_NET_RAW`, is deployed again through
+  the normal path or removed before that step counts as done, the author choosing which for each.
+- **A container on the local test machine is given a public nameserver**, a small matter,
+  provisional, chosen by the advisor on 2026-10-24, as on a real machine, and the fence makes no
+  exception for the local machine's own resolver.
+- **A connection the fence allowed outlives its element**, a small matter, provisional, chosen by
+  the advisor on 2026-10-24, and is not handled: an element goes only with its container, and the
+  container's connections go with it.
+- **The fence's unit is ordered as NixOS's own firewall is**, a small matter, provisional, chosen
+  by the advisor on 2026-10-24, with no default dependencies, before the network.
+- **The fence drops new forwarded connections leaving by the containers' bridge**, a small matter,
+  provisional, chosen by the advisor on 2026-10-24, so a neighbor routing through the host never
+  reaches a container's port; a container publishing a host port is named, never excepted on its
+  own.
