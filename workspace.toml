@@ -44,8 +44,12 @@ file = "machine/function/src/lib.rs"
 spelled = ["MONOFLAKE_FOOTING"]
 
 [[names.data]]
-file = "machine/container/tests/containers.rs"
-spelled = ["MONOFLAKE_FOOTING", "MONOFLAKE_ROOT", "MONOFLAKE_CERTIFICATE", "MONOFLAKE_KEY", "MONOFLAKE_SIGNING_KEY", "MONOFLAKE_REACHING"]
+file = "machine/container/tests/deploying.rs"
+spelled = ["MONOFLAKE_FOOTING", "MONOFLAKE_ROOT", "MONOFLAKE_CERTIFICATE", "MONOFLAKE_KEY", "MONOFLAKE_SIGNING_KEY"]
+
+[[names.data]]
+file = "machine/container/tests/reaching.rs"
+spelled = ["MONOFLAKE_REACHING"]
 
 [[names.data]]
 file = "machine/function/tests/workerd/echo.capnp"
@@ -64,7 +68,7 @@ file = "cloudflare/function/tests/function_test.res"
 spelled = ["MONOFLAKE_FOOTING", "MONOFLAKE_ROOT", "MONOFLAKE_KEY", "MONOFLAKE_CERTIFICATE", "MONOFLAKE_SIGNING_KEY", "MONOFLAKE_", "MONOFLAKEX", "monoflake_key"]
 
 [[names.data]]
-file = "cloudflare/tests/driver_test.res"
+file = "cloudflare/tests/deployments_test.res"
 spelled = ["MONOFLAKE_FOOTING"]
 
 [[names.data]]

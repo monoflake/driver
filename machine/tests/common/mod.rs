@@ -197,9 +197,8 @@ pub fn absent(expected: &Value) -> bool {
 	expected.as_object().is_some_and(|o| o.contains_key("$absent"))
 }
 
-/// Whether a value is as a sample expects it, `{"$any": null}` standing for any value, `{"$absent":
-/// null}` a key left out, and an object holding at least the keys it writes, as monoflake/platform's
-/// runner reads one, RFC p8e8k.
+/// Whether a value is as a sample expects it, `{"$any": null}` any value, `{"$absent": null}` a
+/// key left out, an object at least the keys it writes, as platform's runner reads one, RFC p8e8k.
 pub fn matches(expected: &Value, actual: &Value) -> bool {
 	match (expected, actual) {
 		(Value::Object(e), _) if e.contains_key("$any") => true,
