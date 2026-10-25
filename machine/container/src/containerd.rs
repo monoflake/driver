@@ -98,6 +98,48 @@ fn runc_options(binary: &Path) -> Vec<u8> {
 	bytes
 }
 
+/// A varint read, and what follows it, none where it runs past ten bytes or the end.
+fn unvarint(bytes: &[u8]) -> Option<(u64, &[u8])> {
+	let mut number = 0u64;
+	for (at, byte) in bytes.iter().enumerate().take(10) {
+		number |= u64::from(byte & 0x7f) << (7 * at);
+		if byte & 0x80 == 0 {
+			return Some((number, bytes.get(at + 1..)?));
+		}
+	}
+	None
+}
+
+/// The binary `containerd.runc.v1.Options` names, its field 6 read past every other field, none
+/// where it names none or is not protobuf.
+fn binary_name(mut bytes: &[u8]) -> Option<PathBuf> {
+	let mut named = None;
+	while !bytes.is_empty() {
+		let (key, rest) = unvarint(bytes)?;
+		bytes = match key & 7 {
+			0 => unvarint(rest)?.1,
+			1 => rest.get(8..)?,
+			2 => {
+				let (length, rest) = unvarint(rest)?;
+				let length = usize::try_from(length).ok()?;
+				if key == u64::from(BINARY_NAME) {
+					named = Some(PathBuf::from(std::str::from_utf8(rest.get(..length)?).ok()?));
+				}
+				rest.get(length..)?
+			}
+			5 => rest.get(4..)?,
+			_ => return None,
+		};
+	}
+	named.filter(|n| !n.as_os_str().is_empty())
+}
+
+/// The binary a container's runtime names, as [`runc_options`] wrote it.
+fn binary_of(container: &Container) -> Option<PathBuf> {
+	let options = container.runtime.as_ref()?.options.as_ref()?;
+	options.type_url.ends_with(RUNC_OPTIONS).then(|| binary_name(&options.value)).flatten()
+}
+
 fn to_ours(mounts: Vec<containerd_client::types::Mount>) -> Vec<Mount> {
 	mounts
 		.into_iter()
@@ -458,6 +500,7 @@ impl Containerd for Socket {
 				.into_iter()
 				.map(|c| Listed {
 					task: tasks.get(&c.id).copied(),
+					binary: binary_of(&c),
 					labels: c.labels.into_iter().collect(),
 					id: c.id,
 				})
@@ -479,6 +522,42 @@ mod tests {
 		let mut long = Vec::new();
 		varint(300, &mut long);
 		assert_eq!(long, [0xac, 0x02]);
+	}
+
+	#[test]
+	fn the_binary_is_read_back_from_the_options_written() {
+		for binary in ["/nix/store/0000-runc/bin/runc", &format!("/{}", "a".repeat(300))] {
+			assert_eq!(binary_name(&runc_options(Path::new(binary))), Some(PathBuf::from(binary)));
+		}
+		// Past fields before and after it, as another writer of the options may set them.
+		let mut bytes = vec![1 << 3, 0x96, 0x01, (2 << 3) | 2, 2, b'x', b'y'];
+		bytes.extend(runc_options(Path::new("/usr/bin/crun")));
+		bytes.extend([(9 << 3) | 5, 0, 0, 0, 0, (10 << 3) | 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+		assert_eq!(binary_name(&bytes), Some(PathBuf::from("/usr/bin/crun")));
+		// None where none is named, and none from bytes that are not protobuf.
+		assert_eq!(binary_name(&[]), None);
+		assert_eq!(binary_name(&[1 << 3, 1]), None);
+		assert_eq!(binary_name(&[BINARY_NAME, 9, b'/']), None);
+		assert_eq!(binary_name(&[(3 << 3) | 3]), None);
+	}
+
+	#[test]
+	fn a_container_names_its_binary_by_its_runc_options_alone() {
+		let options = |type_url: &str| Container {
+			runtime: Some(Runtime {
+				name: SHIM.to_owned(),
+				options: Some(Any {
+					type_url: type_url.to_owned(),
+					value: runc_options(Path::new("/nix/store/0000-runc/bin/runc")),
+				}),
+			}),
+			..Default::default()
+		};
+		let named = Some(PathBuf::from("/nix/store/0000-runc/bin/runc"));
+		assert_eq!(binary_of(&options(RUNC_OPTIONS)), named);
+		assert_eq!(binary_of(&options("type.googleapis.com/containerd.runc.v1.Options")), named);
+		assert_eq!(binary_of(&options("containerd.runhcs.v1.Options")), None);
+		assert_eq!(binary_of(&Container::default()), None);
 	}
 
 	#[test]

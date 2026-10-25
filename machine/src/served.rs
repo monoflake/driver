@@ -7,7 +7,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::{Arc, PoisonError, RwLock, Weak};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::Router;
 use axum::body::Body;
@@ -15,8 +15,8 @@ use axum::extract::State;
 use axum::http::{HeaderMap, Method, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use driver_machine_container::{
-	Bridge, Btrfs, Containers, Deployments, Https, Refused, Restart as _, Runtimes, Socket,
-	Unmake as _,
+	Bridge, Btrfs, Containers, Deployments, Https, Refused, Restart as _, Roots, Runtimes, STORE,
+	Socket, Unmake as _,
 };
 use driver_machine_function::Functions;
 use driver_machine_management::{Binding, Hold, Memory, Parse, Processor, Tokens, Unread};
@@ -42,6 +42,13 @@ const LARGEST_OBJECT: usize = MOST.div_ceil(3) * 4 + LARGEST;
 
 /// The interfaces it serves, as a call names them.
 const SERVED: &str = "management, deployments, object";
+
+/// How long a call of nix-store making a root is waited on, a deploy's or a start's, before it is
+/// killed.
+const ROOTED: Duration = Duration::from_secs(30);
+
+/// How long a start reconciles the roots before it listens, what is left reconciled at the next.
+const ROOTING: Duration = Duration::from_secs(60);
 
 /// What a call was answered, its status, its bytes in their form, and how it ended for the log.
 struct Served {
@@ -510,6 +517,12 @@ fn started(arguments: Arguments) -> Driver {
 				quota: volumes,
 				fetch: Https { local: arguments.local, plain: arguments.plain },
 				runtimes: Runtimes { runc: arguments.runc, crun: arguments.crun, youki: arguments.youki },
+				roots: Roots {
+					directory: arguments.roots,
+					store: PathBuf::from(STORE),
+					nix: arguments.nix_store,
+					waited: ROOTED,
+				},
 				state: state.join("containers"),
 				secrets: arguments.secrets,
 				largest: arguments.largest,
@@ -530,6 +543,18 @@ fn reloaded(driver: Arc<Driver>) -> std::io::Result<()> {
 		}
 	});
 	Ok(())
+}
+
+/// Every container's runtime binary held by a root and every stale root removed, awaited for at
+/// most [`ROOTING`] before the driver listens, so no deploy or removal of its own runs beside it.
+async fn rooted(driver: &Driver) {
+	let lists = driver.lists.lock().await;
+	let namespaces: Vec<String> =
+		lists.values().filter_map(|l| l.made.as_ref()).map(|b| b.namespace.clone()).collect();
+	drop(lists);
+	for line in driver.functions.containers.rooted(&namespaces, ROOTING).await {
+		eprintln!("{line}");
+	}
 }
 
 /// Every container a reboot ended started again, each found from containerd's labels rather than
@@ -564,6 +589,7 @@ pub(crate) async fn run(arguments: Arguments) -> ExitCode {
 		eprintln!("SIGHUP: {e}");
 		return ExitCode::FAILURE;
 	}
+	rooted(&driver).await;
 	tokio::spawn(restarted(Arc::clone(&driver)));
 	tokio::spawn(fence::kept(Arc::clone(&driver)));
 	let listener = match tokio::net::TcpListener::bind(listen).await {
@@ -610,6 +636,8 @@ mod tests {
 			runc: nowhere.clone(),
 			crun: nowhere.clone(),
 			youki: nowhere.clone(),
+			roots: nowhere.clone(),
+			nix_store: None,
 			plugins: nowhere.clone(),
 			bridge: "bridge".into(),
 			subnet: "10.88.0.0/16".into(),

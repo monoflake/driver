@@ -194,7 +194,7 @@ mod tests {
 		if !reaching.is_empty() {
 			labels.insert("driver.reaching".to_owned(), reaching.to_owned());
 		}
-		Listed { id: address.to_owned(), labels, task: Some(Task::Running) }
+		Listed { id: address.to_owned(), labels, task: Some(Task::Running), binary: None }
 	}
 
 	const ENTRY: Ipv4Addr = Ipv4Addr::new(192, 0, 2, 1);

@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use driver_machine_container::{
 	Attachment, Binding, Capacity, Containerd, Containers, Fault, Fetch, Image, ImageConfig, Listed,
-	Mount, Network, Quota, Refused, Runtimes, Spec, Task, Unfetched,
+	Mount, Network, Quota, Refused, Roots, Runtimes, Spec, Task, Unfetched,
 };
 use envelope::contracts::{
 	DeploymentArtifact, DeploymentDeploy, DeploymentForm, DeploymentIsolation, DeploymentNetwork,
@@ -36,6 +36,12 @@ pub struct Machine {
 	pub held: Mutex<BTreeMap<(String, String), Held>>,
 	/// The containers whose start fails, by their ids.
 	pub unstartable: Mutex<Vec<String>>,
+	/// The namespaces whose list fails.
+	pub unlistable: Mutex<Vec<String>>,
+	/// A container another driver makes once a list is answered, by its namespace and id.
+	pub arriving: Mutex<Option<((String, String), Held)>>,
+	/// Whether a list never answers, as a containerd wedged.
+	pub wedged: Mutex<bool>,
 }
 
 impl Machine {
@@ -115,14 +121,27 @@ impl Containerd for Machine {
 	}
 
 	async fn list(&self, namespace: &str) -> Result<Vec<Listed>, Fault> {
-		let held = self.held.lock().unwrap();
-		Ok(
-			held
-				.iter()
-				.filter(|((n, _), _)| n == namespace)
-				.map(|((_, id), h)| Listed { id: id.clone(), labels: h.labels.clone(), task: h.task })
-				.collect(),
-		)
+		if *self.wedged.lock().unwrap() {
+			std::future::pending::<()>().await;
+		}
+		if self.unlistable.lock().unwrap().iter().any(|n| n == namespace) {
+			return Err(Fault(format!("{namespace} is not listed")));
+		}
+		let mut held = self.held.lock().unwrap();
+		let listed = held
+			.iter()
+			.filter(|((n, _), _)| n == namespace)
+			.map(|((_, id), h)| Listed {
+				id: id.clone(),
+				labels: h.labels.clone(),
+				task: h.task,
+				binary: Some(h.spec.binary.clone()),
+			})
+			.collect();
+		if let Some((key, arrived)) = self.arriving.lock().unwrap().take() {
+			held.insert(key, arrived);
+		}
+		Ok(listed)
 	}
 }
 
@@ -247,6 +266,8 @@ impl Fetch for Artifacts {
 }
 
 pub const LARGEST: u64 = 1 << 30;
+/// How long a nix-store stand-in is waited on, short as a test is.
+pub const WAITED: std::time::Duration = std::time::Duration::from_millis(500);
 pub const ECHO: &[u8] = b"echo image";
 pub const ECHO_TWO: &[u8] = b"echo image, two";
 
@@ -285,6 +306,9 @@ pub fn driver(test: &str, config: ImageConfig, refuse: bool) -> (Driver, Log) {
 	)
 	.unwrap();
 	std::fs::write(rootfs.join("etc/group"), "root:x:0:\nnogroup:x:65533:\n").unwrap();
+	// A store of the test's own, resolved as the driver resolves a binary.
+	std::fs::create_dir_all(state.join("store")).unwrap();
+	let store = state.join("store").canonicalize().unwrap();
 	let served = BTreeMap::from([
 		("file:///echo.tar", Served::Bytes(ECHO)),
 		("file:///echo-two.tar", Served::Bytes(ECHO_TWO)),
@@ -297,6 +321,9 @@ pub fn driver(test: &str, config: ImageConfig, refuse: bool) -> (Driver, Log) {
 			rootfs,
 			held: Mutex::default(),
 			unstartable: Mutex::default(),
+			unlistable: Mutex::default(),
+			arriving: Mutex::default(),
+			wedged: Mutex::default(),
 		},
 		network: Net {
 			log: log.clone(),
@@ -315,6 +342,7 @@ pub fn driver(test: &str, config: ImageConfig, refuse: bool) -> (Driver, Log) {
 			crun: "/bin/crun".into(),
 			youki: "/bin/youki".into(),
 		},
+		roots: Roots { directory: state.join("roots"), store, nix: None, waited: WAITED },
 		secrets: state.join("tmpfs"),
 		state,
 		largest: LARGEST,

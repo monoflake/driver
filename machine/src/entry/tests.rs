@@ -54,7 +54,7 @@ fn container(runs: &str, address: &str, reaching: &str) -> Listed {
 	if !runs.starts_with("app/") {
 		labels.insert("driver.kind".to_owned(), "app".to_owned());
 	}
-	Listed { id: runs.replace('/', "-"), labels, task: Some(Task::Running) }
+	Listed { id: runs.replace('/', "-"), labels, task: Some(Task::Running), binary: None }
 }
 
 /// A container of a component, labeled as the container kind labels one.

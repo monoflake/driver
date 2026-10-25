@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use envelope::contracts::{
 	DeploymentArtifact, DeploymentDeleted, DeploymentDeploy, DeploymentDescribed,
@@ -19,6 +20,9 @@ mod quota;
 
 /// Where a container finds its secrets, each a file by its name.
 pub const SECRETS: &str = "/run/secrets";
+
+/// The Nix store, whose collector a container's runtime binary is held from by a root.
+pub const STORE: &str = "/nix/store";
 
 /// A failure an operation answers, by its reason as the `deployments` interface declares it, or one
 /// every operation may fail for; its message a person reads, none for the reason's own.
@@ -149,6 +153,13 @@ pub trait Restart {
 		&self,
 		binding: &Binding,
 	) -> impl Future<Output = Result<Vec<String>, Refused>> + Send;
+	/// Within the time given, each container of the namespaces named or found among the roots rooted
+	/// and each root of one gone removed; a line for each change, failure and namespace left.
+	fn rooted(
+		&self,
+		namespaces: &[String],
+		within: Duration,
+	) -> impl Future<Output = Vec<String>> + Send;
 }
 
 /// An image's configuration, as its OCI config gives it.
@@ -230,6 +241,8 @@ pub struct Listed {
 	pub labels: BTreeMap<String, String>,
 	/// Its task.
 	pub task: Option<Task>,
+	/// The runtime binary its runc options name, none where they name none.
+	pub binary: Option<PathBuf>,
 }
 
 /// Where a deployment runs as its containers' labels say, read from containerd alone, so the entry
@@ -411,6 +424,20 @@ pub struct Runtimes {
 	pub youki: PathBuf,
 }
 
+/// Where each container's runtime binary is held from the Nix store's collector, by a link of its
+/// own at `<namespace>/<id>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Roots {
+	/// The directory of the links, `/nix/var/nix/gcroots/driver-machine`.
+	pub directory: PathBuf,
+	/// The store, [`STORE`]; a binary resolving outside it is given no root.
+	pub store: PathBuf,
+	/// nix-store's binary, which makes each link a root by Nix's own protocol; none links by hand.
+	pub nix: Option<PathBuf>,
+	/// How long a call of nix-store is waited on before it is killed and its root failed.
+	pub waited: Duration,
+}
+
 /// The containers of a machine, what reaches containerd, the network, btrfs and an artifact, and
 /// where things are kept.
 #[derive(Debug, Clone)]
@@ -425,6 +452,8 @@ pub struct Containers<C, N, Q, F> {
 	pub fetch: F,
 	/// The runtimes.
 	pub runtimes: Runtimes,
+	/// Where their binaries are held from the collector.
+	pub roots: Roots,
 	/// Where artifacts are fetched to and each container's output is written, on ext4, root's
 	/// alone; each container's secrets kept sealed there too, so a reboot puts them back.
 	pub state: PathBuf,

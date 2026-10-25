@@ -35,6 +35,9 @@ const LISTEN: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), PO
 /// Where it keeps its own state unless told, and where `bind` writes what the control answered.
 const STATE: &str = "/var/lib/driver-machine/state";
 
+/// Where it holds each container's runtime binary from the collector unless told.
+const ROOTS: &str = "/nix/var/nix/gcroots/driver-machine";
+
 /// The palette its help is painted in, cargo's, the workspace's `docs/toolchain.md`.
 const STYLES: clap::builder::Styles = clap::builder::Styles::styled()
 	.header(clap::builder::styling::AnsiColor::Green.on_default().bold())
@@ -90,6 +93,14 @@ struct Arguments {
 	/// youki's binary.
 	#[arg(long, value_name = "binary")]
 	youki: PathBuf,
+	/// Where each container's runtime binary is held from the Nix store's collector, a link per
+	/// container at `<namespace>/<id>`.
+	#[arg(long, value_name = "directory", default_value = ROOTS)]
+	roots: PathBuf,
+	/// nix-store's binary, which makes each root as Nix's own are made; without it each is linked by
+	/// hand.
+	#[arg(long = "nix-store", value_name = "binary")]
+	nix_store: Option<PathBuf>,
 	/// The directory holding the CNI plugins `bridge`, `host-local` and `loopback`.
 	#[arg(long, value_name = "directory")]
 	plugins: PathBuf,

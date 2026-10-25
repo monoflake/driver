@@ -76,6 +76,7 @@ impl Started {
 			.args(["--runc".as_ref(), at("runc").as_os_str()])
 			.args(["--crun".as_ref(), at("crun").as_os_str()])
 			.args(["--youki".as_ref(), at("youki").as_os_str()])
+			.args(["--roots".as_ref(), at("roots").as_os_str()])
 			.args(["--plugins".as_ref(), at("plugins").as_os_str()])
 			.args(["--bridge", "tested", "--subnet", "unused", "--entry", "4321"])
 			.args(["--mount".as_ref(), at("data").as_os_str()])

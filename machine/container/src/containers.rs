@@ -5,10 +5,11 @@ mod handed;
 mod hosts;
 mod labels;
 mod marks;
+mod roots;
 mod secrets;
 mod spec;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,6 +26,7 @@ use crate::{
 	Network, Quota, Reached, Refused, Restart, Runtimes, Spec, Task, Unfetched, Unmake,
 };
 use labels::Kept;
+use roots::Rooted;
 use secrets::{KeyFile, Places};
 use sha2::{Digest as _, Sha256};
 
@@ -378,6 +380,71 @@ where
 		}
 	}
 
+	/// The roots reconciled as `rooted` says, its lines and the namespaces not yet done kept as it
+	/// goes, so a reconciling cut short still says both.
+	async fn reconciled(
+		&self,
+		namespaces: &[String],
+		told: &mut Vec<String>,
+		left: &mut Option<BTreeSet<String>>,
+	) {
+		// The roots are read before the containers, so a root made meanwhile is never taken as stale.
+		let (found, lines) = roots::found(&self.roots).await;
+		told.extend(lines);
+		let all: BTreeSet<&str> = namespaces.iter().chain(found.keys()).map(String::as_str).collect();
+		*left = Some(all.iter().map(|n| (*n).to_owned()).collect());
+		let why = |refused: Refused| refused.message.unwrap_or_else(|| refused.reason.to_owned());
+		for namespace in all {
+			let listed = match self.containerd.list(namespace).await {
+				Ok(listed) => listed,
+				Err(Fault(fault)) => {
+					told.push(format!("roots {namespace} kept, its containers not listed, {fault}"));
+					if let Some(left) = left.as_mut() {
+						left.remove(namespace);
+					}
+					continue;
+				}
+			};
+			for container in &listed {
+				let Some(binary) = &container.binary else { continue };
+				match roots::made(&self.roots, namespace, &container.id, binary).await {
+					Ok(Rooted::Made(at)) => {
+						told.push(format!("rooted {namespace} {} at {}", container.id, at.display()));
+					}
+					Ok(Rooted::Held | Rooted::Outside) => {}
+					Err(refused) => {
+						told.push(format!("root {namespace} {} not made, {}", container.id, why(refused)));
+					}
+				}
+			}
+			let absent = |listed: &[Listed], id: &String| !listed.iter().any(|c| &c.id == id);
+			let stale: Vec<&String> =
+				found.get(namespace).into_iter().flatten().filter(|id| absent(&listed, id)).collect();
+			if !stale.is_empty() {
+				// Listed again, so a container another driver made meanwhile keeps its root.
+				match self.containerd.list(namespace).await {
+					Ok(again) => {
+						for id in stale.into_iter().filter(|id| absent(&again, id)) {
+							match roots::remove(&self.roots, namespace, id).await {
+								Ok(()) => told.push(format!("unrooted {namespace} {id}")),
+								Err(refused) => {
+									told.push(format!("root {namespace} {id} not removed, {}", why(refused)));
+								}
+							}
+						}
+					}
+					Err(Fault(fault)) => {
+						told.push(format!("roots {namespace} kept, its containers not listed again, {fault}"));
+					}
+				}
+			}
+			roots::emptied(&self.roots, namespace).await;
+			if let Some(left) = left.as_mut() {
+				left.remove(namespace);
+			}
+		}
+	}
+
 	fn places(&self, namespace: &str, id: &str) -> Places {
 		Places::of(&self.secrets, &self.state, namespace, id)
 	}
@@ -561,6 +628,8 @@ where
 		};
 		let output = self.state.join("output").join(namespace).join(format!("{id}.log"));
 		self.containerd.create(namespace, &spec, &mounts, &output).await?;
+		// Once it is made, so the roots a start reads first never hold one of a container not listed.
+		roots::made(&self.roots, namespace, id, &spec.binary).await?;
 		self.containerd.start(namespace, id).await?;
 		// Once its task runs, so no element names a container that is not running.
 		if !wanted.reaching.is_empty() {
@@ -609,7 +678,12 @@ where
 				first.get_or_insert(refused);
 			}
 		};
-		kept(self.containerd.remove(namespace, id).await.map_err(Refused::from));
+		let unmade = self.containerd.remove(namespace, id).await.map_err(Refused::from);
+		// Its root goes only with it, so a container left by a failure still holds its binary.
+		if unmade.is_ok() {
+			kept(roots::remove(&self.roots, namespace, id).await);
+		}
+		kept(unmade);
 		// A reacher's element of the fence goes before its address is given back.
 		if reaches {
 			kept(self.network.fence(&network, &[]).await.map_err(Refused::from));
@@ -732,6 +806,23 @@ where
 				Err(Refused::new("fault", started.chain(failed).collect::<Vec<_>>().join("; ")))
 			}
 		}
+	}
+
+	async fn rooted(&self, namespaces: &[String], within: Duration) -> Vec<String> {
+		let mut told = Vec::new();
+		let mut left = None;
+		let reconciled = self.reconciled(namespaces, &mut told, &mut left);
+		if tokio::time::timeout(within, reconciled).await.is_err() {
+			let left = match left {
+				None => "the roots not read".to_owned(),
+				Some(left) => left.into_iter().collect::<Vec<_>>().join(" ") + " left",
+			};
+			told.push(format!(
+				"roots not reconciled within {} ms, {left} for the next start",
+				within.as_millis()
+			));
+		}
+		told
 	}
 }
 

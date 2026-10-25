@@ -8,7 +8,7 @@ use std::sync::Mutex;
 
 use driver_machine_container::{
 	Attachment, Binding, Capacity, Containerd, Containers, Deployments as _, Fault, Fetch, Image,
-	ImageConfig, Listed, Mount, Network, Quota, Runtimes, Spec, Task, Unfetched,
+	ImageConfig, Listed, Mount, Network, Quota, Roots, Runtimes, Spec, Task, Unfetched,
 };
 use envelope::contracts::{
 	DeploymentArtifact, DeploymentDeploy, DeploymentForm, DeploymentIsolation, DeploymentRuns,
@@ -52,7 +52,12 @@ impl Containerd for Made {
 		Ok(
 			made
 				.iter()
-				.map(|(id, s, t)| Listed { id: id.clone(), labels: s.labels.clone(), task: *t })
+				.map(|(id, s, t)| Listed {
+					id: id.clone(),
+					labels: s.labels.clone(),
+					task: *t,
+					binary: Some(s.binary.clone()),
+				})
 				.collect(),
 		)
 	}
@@ -140,6 +145,12 @@ async fn a_components_id_is_one_spelling_in_its_container_its_route_and_its_key(
 			runc: "/bin/runc".into(),
 			crun: "/bin/crun".into(),
 			youki: "/bin/youki".into(),
+		},
+		roots: Roots {
+			directory: state.join("roots"),
+			store: state.join("store"),
+			nix: None,
+			waited: std::time::Duration::from_secs(1),
 		},
 		state: state.clone(),
 		secrets: state.join("tmpfs"),

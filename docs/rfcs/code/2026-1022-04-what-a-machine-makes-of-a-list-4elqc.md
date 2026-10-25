@@ -74,9 +74,16 @@ The agent's proposal, for the author to take, change or refuse.
   read by `driver-machine-management`'s usage, and its other items' sizes sum to at most the free
   space of the workloads' btrfs, `--mount`; a holder's own bound, D8, lowers it later.
 - **Names**: a binding's namespace is `b<binding>`, its id in 8 hex digits as platform's RFC b8f35
-  writes it, a binding made before ids were drawn keeping `b<decimal>` until none such remains, and
-  its qgroup `1/<binding>` in decimal, made on the first item and limited to what its items' sizes
-  sum to; amended on 2026-10-25 when bindings drew their ids.
+  writes it, a binding made before ids were drawn keeping `b<decimal>` until none such remains, a
+  name no drawn id can take as the control draws none below 2^24, and its qgroup `1/<binding>` in
+  decimal, made on the first item and limited to what its items' sizes sum to; amended on 2026-10-25
+  when bindings drew their ids.
+- **Runtimes**: each container's runtime binary is held from Nix's collector by a root at
+  `<roots>/<namespace>/<id>` to its store path, made by `nix-store --add-root` after the container
+  is created and before it starts, removed with it, and reconciled at the driver's start before it
+  listens, within a bound after which it listens anyway, so a running container keeps a runtime its
+  system no longer names; a root that cannot be made refuses the deploy; decided by the author on
+  2026-10-25.
 - **Items**: a `container` item is recorded alone, `made` at once with the driver's own address,
   since the container kind applies its share as it creates each container; the other three wait
   for their kinds' blocks, answering `failed` with `beyond_host` until each is written.
