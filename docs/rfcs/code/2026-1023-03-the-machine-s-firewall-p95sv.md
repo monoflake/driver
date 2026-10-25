@@ -117,3 +117,8 @@ Choices made provisionally while the thread runs, read by the author at its end.
   fence keeps the driver's elements; a boot empties them and the driver writes them again. No
   restore is built. The driver and the entry, its socket included, require the fence and start
   after it.
+- **The entry's and the driver's ports are reserved from the ephemeral range**, a small matter,
+  provisional, chosen by the advisor on 2026-10-24: Linux's default ephemeral range holds both, so
+  the machine's module sets `net.ipv4.ip_local_reserved_ports` to them, read from the options that
+  set them, never new literals, and the local test machine reserves conform's two as well. It
+  touches no rule and needs no trial; the rehearsal checks it is in place.
