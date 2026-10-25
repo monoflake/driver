@@ -135,8 +135,12 @@ Choices made provisionally while the thread runs, read by the author at its end.
 - **The fence covers every driver bridge, `driver0` and conform's `conform0`**, provisional, chosen
   by the advisor on 2026-10-25: each takes the same `host` and `routed` chains and the same refusal
   of frames between containers, and the build-time scope check accepts rules scoped to either
-  alone, so conform's containers are held as live ones and conform proves the fence on a real
-  machine. `machine.conform` holds conform's bridge, entry and driver ports in one place, opens the
-  entry's port on its bridge alone and reserves both, replacing the hand-written reserved ports.
+  alone, so while the fence is loaded conform's containers take the live ones' rules and conform
+  proves the fence on a real machine. The two bridge names are constants, so a machine cannot widen
+  the check's list. `machine.conform`, off by default, holds conform's entry and driver ports in one
+  place, opens the entry's port on conform's bridge alone and reserves both, replacing the
+  hand-written reserved ports. As a fact, conform's own driver unit does not require the fence, so
+  with the fence absent its containers would run unfenced; conform refusing to start without the
+  fence's tables is monoflake/platform's to decide.
   Rejected: conform inserting rules into the live firewall itself. NixOS's firewall forced off on
   the local machine hid that conform's entry was closed on a real one.

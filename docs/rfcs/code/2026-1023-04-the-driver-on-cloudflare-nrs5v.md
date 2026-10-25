@@ -558,3 +558,10 @@ Choices made provisionally while the thread runs, read by the author at its end.
   deleted by hand. A run with no token never touches it. As a fact, a run with a wrong token
   replaces `BINDING` and the control's calls are refused until a run with the right one, which
   writes it again even where its bind then answers `denied`; the `denied` message says so.
+- **Install reads its stdin to the end, waiting while a read would block**, a fact and its fix,
+  provisional, chosen by the advisor on 2026-10-25. Asking whether stdin was a terminal through
+  `process.stdin` made node turn a piped stdin non-blocking, so a token written a moment later met
+  `EAGAIN`, read as no token, and the test account's install on 2026-10-25 refused with half a
+  bind's inputs. Install now asks the descriptor itself, reads until the pipe ends with no time
+  limit, and on any other read error refuses before a command runs, naming the error's code and
+  never what was read. A terminal is still no token.
