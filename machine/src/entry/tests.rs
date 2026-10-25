@@ -11,7 +11,8 @@ use axum::http::{HeaderMap, StatusCode};
 use std::time::{Duration, Instant};
 
 use super::{
-	Find, Found, Gate, KEPT, Kind, Labels, Last, Named, Subnet, allowed, host, named, serve, subnet,
+	Find, Found, Gate, KEPT, Kind, Labels, Last, Named, Subnet, Written, allowed, host, kind, named,
+	serve, subnet,
 };
 use driver_machine_container::Listed;
 use driver_machine_container::{Containerd, Fault, Task};
@@ -26,12 +27,18 @@ impl Find for Stub {
 	}
 }
 
-const fn of(binding: u32, app: u32) -> Named {
-	Named { binding, kind: Kind::App, id: app }
+/// A deployment named by its id in hex, whatever its kind.
+const fn of(binding: u32, id: u32) -> Named {
+	Named { binding, written: Written::Hex, id }
+}
+
+/// An app named by its id in decimal, as a host named one before.
+const fn decimal(binding: u32, id: u32) -> Named {
+	Named { binding, written: Written::App, id }
 }
 
 /// A container as the container kind labels it, what it runs, where and what it reaches, its
-/// task running.
+/// task running; one labeled by its id in hex an app's, one labeled `app/<id>` as before.
 fn container(runs: &str, address: &str, reaching: &str) -> Listed {
 	let mut labels = BTreeMap::from([
 		("driver.runs".to_owned(), runs.to_owned()),
@@ -44,7 +51,17 @@ fn container(runs: &str, address: &str, reaching: &str) -> Listed {
 	if !reaching.is_empty() {
 		labels.insert("driver.reaching".to_owned(), reaching.to_owned());
 	}
+	if !runs.starts_with("app/") {
+		labels.insert("driver.kind".to_owned(), "app".to_owned());
+	}
 	Listed { id: runs.replace('/', "-"), labels, task: Some(Task::Running) }
+}
+
+/// A container of a component, labeled as the container kind labels one.
+fn of_component(runs: &str, address: &str) -> Listed {
+	let mut listed = container(runs, address, "");
+	listed.labels.insert("driver.kind".to_owned(), "component".to_owned());
+	listed
 }
 
 fn app(id: u32) -> Named {
@@ -52,7 +69,7 @@ fn app(id: u32) -> Named {
 }
 
 fn component(id: u32) -> Named {
-	Named { binding: 1, kind: Kind::Component, id }
+	of(1, id)
 }
 
 fn peer(ip: &str) -> IpAddr {
@@ -66,17 +83,19 @@ fn containers() -> Subnet {
 
 #[test]
 fn a_container_reaches_through_the_entry_only_what_its_reaching_holds() {
-	let target = component(0x1a2b_3c4d).label();
-	let mut stopped = container("app/4", "192.0.2.8:8080", &target);
+	let target = "1a2b3c4d";
+	let mut stopped = container("00000004", "192.0.2.8:8080", target);
 	stopped.task = Some(Task::Stopped(0));
 	let listed = [
-		container("app/1", "192.0.2.5:8080", &format!("{target},app/3")),
-		container("app/2", "192.0.2.6:8080", ""),
-		container(&target, "192.0.2.9:8080", ""),
+		container("00000001", "192.0.2.5:8080", &format!("{target},00000003")),
+		container("00000002", "192.0.2.6:8080", ""),
+		of_component(target, "192.0.2.9:8080"),
 		stopped,
+		// One made before, labeled and reaching as an app was.
+		container("app/5", "192.0.2.10:8080", "app/2"),
 	];
 	let net = subnet("192.0.2.0/24").unwrap();
-	let gate = |named, ip| allowed(&listed, named, peer(ip), net);
+	let gate = |named: Named, ip| allowed(&listed, named, kind(&listed, named.id), peer(ip), net);
 	assert_eq!(gate(component(0x1a2b_3c4d), "192.0.2.5"), Gate::Pass);
 	assert_eq!(gate(app(3), "::ffff:192.0.2.5"), Gate::Pass);
 	assert_eq!(gate(app(2), "192.0.2.5"), Gate::Refused, "not in its reaching");
@@ -88,6 +107,23 @@ fn a_container_reaches_through_the_entry_only_what_its_reaching_holds() {
 	assert_eq!(gate(app(2), "127.0.0.1"), Gate::Pass);
 	assert_eq!(gate(app(2), "198.51.100.4"), Gate::Pass);
 	assert_eq!(gate(component(0x1a2b_3c4d), "127.0.0.1"), Gate::Hidden);
+	// What one made before reaches is read by its id, in either form of name.
+	assert_eq!(gate(app(2), "192.0.2.10"), Gate::Pass);
+	assert_eq!(gate(decimal(1, 2), "192.0.2.10"), Gate::Pass);
+	assert_eq!(gate(app(3), "192.0.2.10"), Gate::Refused);
+}
+
+#[test]
+fn a_deployments_kind_is_read_from_its_containers_labels() {
+	let listed = [
+		container("00000001", "192.0.2.5:8080", ""),
+		of_component("1a2b3c4d", "192.0.2.6:8080"),
+		container("app/2", "192.0.2.7:8080", ""),
+	];
+	assert_eq!(kind(&listed, 1), Some(Kind::App));
+	assert_eq!(kind(&listed, 0x1a2b_3c4d), Some(Kind::Component));
+	assert_eq!(kind(&listed, 2), Some(Kind::App), "labeled before its kind was");
+	assert_eq!(kind(&listed, 3), None);
 }
 
 /// containerd as the entry reads it, the containers given, or none to be had.
@@ -143,56 +179,87 @@ fn labels(held: Option<Vec<Listed>>) -> Labels<Held> {
 async fn the_entry_finds_a_target_for_a_reacher_alone_and_refuses_when_it_cannot_tell() {
 	let target = component(0x1a2b_3c4d);
 	let listed = vec![
-		container("app/1", "192.0.2.5:8080", &target.label()),
-		container("app/2", "192.0.2.6:8080", ""),
-		container(&target.label(), "192.0.2.9:8080", ""),
+		container("00000001", "192.0.2.5:8080", "1a2b3c4d"),
+		container("00000002", "192.0.2.6:8080", ""),
+		of_component("1a2b3c4d", "192.0.2.9:8080"),
 	];
 	let found = labels(Some(listed));
 	let at: std::net::SocketAddr = "192.0.2.9:8080".parse().unwrap();
 	assert_eq!(found.find(target, peer("192.0.2.5")).await, Found::Running(at));
 	assert_eq!(found.find(target, peer("192.0.2.6")).await, Found::Refused);
 	assert_eq!(found.find(target, peer("127.0.0.1")).await, Found::Absent);
-	// containerd unlisted, a container's request and a component's are refused.
+	// The decimal name is an app's alone, so it never names a component.
+	let as_app = decimal(1, 0x1a2b_3c4d);
+	assert_eq!(found.find(as_app, peer("192.0.2.5")).await, Found::Absent);
+	// containerd unlisted, a container's request is refused, and nothing is recalled to serve.
 	let blind = labels(None);
 	assert_eq!(blind.find(target, peer("192.0.2.5")).await, Found::Refused);
-	assert_eq!(blind.find(target, peer("127.0.0.1")).await, Found::Refused);
+	assert_eq!(blind.find(target, peer("127.0.0.1")).await, Found::Down);
 	assert_eq!(blind.find(app(2), peer("192.0.2.5")).await, Found::Refused);
+}
+
+#[tokio::test]
+async fn an_app_is_found_by_its_hex_and_its_decimal_name_whichever_driver_labeled_it() {
+	let listed = vec![
+		// Made before, labeled `app/1`, and made now, labeled by its id in hex.
+		container("app/1", "192.0.2.5:8080", ""),
+		container("0a1b2c3d", "192.0.2.6:8080", ""),
+	];
+	let found = labels(Some(listed));
+	let (old, new) = ("192.0.2.5:8080".parse().unwrap(), "192.0.2.6:8080".parse().unwrap());
+	for (named, at) in
+		[(app(1), old), (decimal(1, 1), old), (app(0x0a1b_2c3d), new), (decimal(1, 0x0a1b_2c3d), new)]
+	{
+		assert_eq!(found.find(named, peer("127.0.0.1")).await, Found::Running(at), "{named:?}");
+	}
+	assert_eq!(found.find(app(2), peer("127.0.0.1")).await, Found::Absent);
 }
 
 #[tokio::test]
 async fn a_request_refused_by_reaching_is_forbidden() {
 	let at = entry(BTreeMap::from([(of(1, 1), Found::Refused)])).await;
-	let (head, _) = sent(at, get("app-1.b1")).await;
+	let (head, _) = sent(at, get("00000001.b1")).await;
 	assert!(head.starts_with("HTTP/1.1 403 "), "{head}");
 }
 
 #[test]
 fn a_host_names_its_deployment_by_its_leftmost_two_labels() {
-	assert_eq!(named("app-1.b1.local"), Some(of(1, 1)));
-	assert_eq!(named("app-1.b1"), Some(of(1, 1)));
-	assert_eq!(named("APP-42.B7.example.com:8080"), Some(of(7, 42)));
-	assert_eq!(named("app-0.b0.x"), Some(of(0, 0)));
-	let component = Named { binding: 1, kind: Kind::Component, id: 0x1a2b_3c4d };
-	assert_eq!(named("component-1a2b3c4d.b1:36879"), Some(component));
-	assert_eq!(named(&component.name()), Some(component));
+	assert_eq!(named("0a1b2c3d.b1.local"), Some(of(1, 0x0a1b_2c3d)));
+	assert_eq!(named("00000001.b1"), Some(of(1, 1)));
+	assert_eq!(named("1a2b3c4d.B7.example.com:8080"), Some(of(7, 0x1a2b_3c4d)));
+	assert_eq!(named("00000000.b0.x"), Some(of(0, 0)));
+	assert_eq!(named(&of(3, 0x0a1b_2c3d).name()), Some(of(3, 0x0a1b_2c3d)));
+	assert_eq!(of(3, 0x0a1b_2c3d).name(), "0a1b2c3d.b3");
+	// An app named as before, by its id in decimal.
+	assert_eq!(named("app-1.b1.local"), Some(decimal(1, 1)));
+	assert_eq!(named("APP-42.B7.example.com:8080"), Some(decimal(7, 42)));
+	assert_eq!(named("app-0.b0.x"), Some(decimal(0, 0)));
+	assert_eq!(named(&decimal(1, 439_041_101).name()), Some(decimal(1, 439_041_101)));
 	for bad in [
 		"",
+		"0a1b2c3d",
+		"0a1b2c3.b1",
+		"0a1b2c3d0.b1",
+		"0A1B2C3D.b1",
+		"0a1b2c3g.b1",
+		"+a1b2c3d.b1",
+		"0a1b2c3d.b.x",
+		"0a1b2c3d.b01.x",
+		"0a1b2c3d.c1.x",
+		"www.0a1b2c3d.b1.x",
+		"0a1b2c3d.b99999999999.x",
 		"app-1",
 		"app-.b1.x",
-		"app-1.b.x",
 		"app-01.b1.x",
 		"app-1.b01.x",
 		"app-+1.b1.x",
 		"app-1.c1.x",
+		"app-0a1b2c3d.b1",
+		"app-99999999999.b1",
 		"ap-1.b1.x",
+		"component-1a2b3c4d.b1",
 		"component-.b1",
-		"component-01.b1",
-		"component-439041101.b1",
-		"component-1A2B3C4D.b1",
-		"component-1a2b3c4.b1",
-		"comp-1.b1",
 		"www.app-1.b1.x",
-		"app-1.b99999999999.x",
 		"127.0.0.1:36879",
 		"[::1]:36879",
 	] {
@@ -206,19 +273,19 @@ fn the_first_forwarded_name_naming_a_deployment_is_taken() {
 	let forwarded = Request::builder()
 		.uri("http://10.200.0.1:36879/")
 		.header("host", "10.200.0.1:36879")
-		.header("x-forwarded-host", "app-1.b1.example.com")
+		.header("x-forwarded-host", "00000001.b1.example.com")
 		.body(axum::body::Body::empty())
 		.unwrap();
 	assert_eq!(host(&forwarded).as_deref().and_then(named), Some(of(1, 1)));
 	let hosted = Request::builder()
 		.uri("/")
-		.header("host", "app-2.b3.local")
+		.header("host", "00000002.b3.local")
 		.body(axum::body::Body::empty())
 		.unwrap();
 	assert_eq!(host(&hosted).as_deref().and_then(named), Some(of(3, 2)));
 	let edged = Request::builder()
 		.uri("/")
-		.header("host", "app-4.b5")
+		.header("host", "00000004.b5")
 		.header("x-forwarded-host", "tunnel.example.com")
 		.body(axum::body::Body::empty())
 		.unwrap();
@@ -288,7 +355,7 @@ async fn a_request_is_carried_to_its_deployment_and_its_answer_back() {
 	let (listener, upstream) = listening().await;
 	tokio::spawn(async move { axum::serve(listener, Router::new().fallback(echoed)).await });
 	let at = entry(BTreeMap::from([(of(1, 1), Found::Running(upstream))])).await;
-	let request = "POST /a/b?c=d&e HTTP/1.1\r\nHost: app-1.b1.local:8080\r\n\
+	let request = "POST /a/b?c=d&e HTTP/1.1\r\nHost: 00000001.b1.local:8080\r\n\
 		Connection: close, x-hop\r\nX-Hop: gone\r\nX-Forwarded-For: 192.0.2.1\r\n\
 		X-Kept: kept\r\nContent-Length: 5\r\n\r\nhello";
 	let (head, body) = sent(at, request.to_owned()).await;
@@ -296,11 +363,11 @@ async fn a_request_is_carried_to_its_deployment_and_its_answer_back() {
 	assert!(head.to_lowercase().contains("x-upstream: hello"), "{head}");
 	assert!(body.starts_with("POST /a/b?c=d&e\n"), "{body}");
 	for line in [
-		"host: app-1.b1.local:8080",
+		"host: 00000001.b1.local:8080",
 		"x-kept: kept",
 		"x-forwarded-for: 192.0.2.1, 127.0.0.1",
 		"x-forwarded-proto: http",
-		"x-forwarded-host: app-1.b1.local:8080",
+		"x-forwarded-host: 00000001.b1.local:8080",
 		"content-length: 5",
 	] {
 		assert!(body.lines().any(|l| l == line), "{line} not in {body}");
@@ -316,9 +383,12 @@ async fn a_host_naming_nothing_is_not_found_and_one_down_is_unavailable() {
 	drop(closed);
 	let found = BTreeMap::from([(of(1, 2), Found::Down), (of(1, 3), Found::Running(gone))]);
 	let at = entry(found).await;
-	for (host, status) in
-		[("localhost", 404), ("app-1.b1.local", 404), ("app-2.b1.local", 503), ("app-3.b1.local", 503)]
-	{
+	for (host, status) in [
+		("localhost", 404),
+		("00000001.b1.local", 404),
+		("00000002.b1.local", 503),
+		("00000003.b1.local", 503),
+	] {
 		let (head, _) = sent(at, get(host)).await;
 		assert!(head.starts_with(&format!("HTTP/1.1 {status} ")), "{host} {head}");
 	}
@@ -331,15 +401,18 @@ fn an_address_is_recalled_while_kept_and_never_once_containerd_says_it_is_gone()
 	let last = Last::default();
 	let (at, address) = (Instant::now(), SocketAddr::from((Ipv4Addr::LOCALHOST, 8080)));
 	assert_eq!(last.recalled(of(1, 1), at), None);
-	last.found(of(1, 1), Found::Running(address), at);
+	last.found(of(1, 1), Some(Kind::App), Found::Running(address), at);
 	assert_eq!(last.recalled(of(1, 1), at + KEPT), Some(address));
 	assert_eq!(last.recalled(of(1, 1), at + KEPT + Duration::from_millis(1)), None);
 	assert_eq!(last.recalled(of(1, 2), at), None);
 	for gone in [Found::Down, Found::Absent] {
-		last.found(of(1, 1), Found::Running(address), at);
-		last.found(of(1, 1), gone, at);
+		last.found(of(1, 1), Some(Kind::App), Found::Running(address), at);
+		last.found(of(1, 1), Some(Kind::App), gone, at);
 		assert_eq!(last.recalled(of(1, 1), at), None, "{gone:?}");
 	}
+	// A component's address is never kept, as its path stays closed while containerd is down.
+	last.found(of(1, 5), Some(Kind::Component), Found::Running(address), at);
+	assert_eq!(last.recalled(of(1, 5), at), None);
 }
 
 #[tokio::test]
@@ -357,7 +430,7 @@ async fn a_request_begun_before_the_stop_is_answered_and_then_the_entry_ends() {
 	};
 	let found = Arc::new(Stub(BTreeMap::from([(of(1, 1), Found::Running(upstream))])));
 	let serving = tokio::spawn(serve(listener, found, containers(), stopped));
-	let asked = tokio::spawn(sent(at, get("app-1.b1")));
+	let asked = tokio::spawn(sent(at, get("00000001.b1")));
 	tokio::time::sleep(Duration::from_millis(100)).await;
 	stop.send(true).unwrap();
 	let (head, body) = asked.await.unwrap();
@@ -401,9 +474,9 @@ async fn reacher() -> SocketAddr {
 	let upstream = listener.local_addr().unwrap().to_string();
 	tokio::spawn(async move { axum::serve(listener, Router::new().fallback(echoed)).await });
 	contained(vec![
-		container("app/2", &upstream, ""),
-		container("app/3", "127.0.0.3:1", ""),
-		container("app/1", "127.0.0.1:1", "app/2"),
+		container("00000002", &upstream, ""),
+		container("00000003", "127.0.0.3:1", ""),
+		container("00000001", "127.0.0.1:1", "00000002"),
 	])
 	.await
 }
@@ -416,30 +489,30 @@ fn asked(target: &str, host: &str, forwarded: Option<&str>) -> String {
 
 #[tokio::test]
 async fn a_container_asking_by_host_for_what_it_does_not_reach_is_refused() {
-	let (head, body) = sent(reacher().await, asked("/", "app-3.b1", None)).await;
+	let (head, body) = sent(reacher().await, asked("/", "00000003.b1", None)).await;
 	assert!(head.starts_with("HTTP/1.1 403 "), "{head}");
 	assert_eq!(body, REFUSED);
 }
 
 #[tokio::test]
 async fn a_container_is_answered_for_its_host_and_its_forwarded_host_is_ignored() {
-	let (head, body) = sent(reacher().await, asked("/", "app-2.b1", Some("app-3.b1"))).await;
+	let (head, body) = sent(reacher().await, asked("/", "00000002.b1", Some("00000003.b1"))).await;
 	assert!(head.starts_with("HTTP/1.1 201 "), "{head}");
-	for line in ["host: app-2.b1", "x-forwarded-host: app-2.b1"] {
+	for line in ["host: 00000002.b1", "x-forwarded-host: 00000002.b1"] {
 		assert!(body.lines().any(|l| l == line), "{line} not in {body}");
 	}
 }
 
 #[tokio::test]
 async fn a_container_cannot_forward_its_way_past_its_reaching() {
-	let (head, body) = sent(reacher().await, asked("/", "app-3.b1", Some("app-2.b1"))).await;
+	let (head, body) = sent(reacher().await, asked("/", "00000003.b1", Some("00000002.b1"))).await;
 	assert!(head.starts_with("HTTP/1.1 403 "), "{head}");
 	assert_eq!(body, REFUSED);
 }
 
 #[tokio::test]
 async fn a_container_cannot_name_past_its_host_by_an_absolute_target() {
-	let (head, body) = sent(reacher().await, asked("http://app-2.b1/", "app-3.b1", None)).await;
+	let (head, body) = sent(reacher().await, asked("http://00000002.b1/", "00000003.b1", None)).await;
 	assert!(head.starts_with("HTTP/1.1 403 "), "{head}");
 	assert_eq!(body, REFUSED);
 }
@@ -449,16 +522,16 @@ async fn a_proxy_on_loopback_is_still_named_by_its_forwarded_host() {
 	let (listener, upstream) = listening().await;
 	tokio::spawn(async move { axum::serve(listener, Router::new().fallback(echoed)).await });
 	let at = entry(BTreeMap::from([(of(1, 1), Found::Running(upstream))])).await;
-	let request = asked("/", "127.0.0.1:36879", Some("app-1.b1.example.com"));
+	let request = asked("/", "127.0.0.1:36879", Some("00000001.b1.example.com"));
 	let (head, body) = sent(at, request).await;
 	assert!(head.starts_with("HTTP/1.1 201 "), "{head}");
-	let line = "x-forwarded-host: app-1.b1.example.com";
+	let line = "x-forwarded-host: 00000001.b1.example.com";
 	assert!(body.lines().any(|l| l == line), "{line} not in {body}");
 }
 
 #[tokio::test]
 async fn a_containers_own_forwarding_headers_never_reach_its_target() {
-	let request = "GET / HTTP/1.1\r\nHost: app-2.b1\r\nX-Forwarded-For: 203.0.113.9\r\n\
+	let request = "GET / HTTP/1.1\r\nHost: 00000002.b1\r\nX-Forwarded-For: 203.0.113.9\r\n\
 		Forwarded: for=203.0.113.9\r\nX-Real-IP: 203.0.113.9\r\nX-Forwarded-Proto: https\r\n\
 		X-Forwarded-Port: 443\r\nVia: 1.1 planted\r\nConnection: close\r\n\r\n";
 	let (head, body) = sent(reacher().await, request.to_owned()).await;
@@ -474,7 +547,7 @@ async fn a_containers_own_forwarding_headers_never_reach_its_target() {
 
 #[tokio::test]
 async fn a_containers_edge_and_client_headers_never_reach_its_target() {
-	let request = "GET / HTTP/1.1\r\nHost: app-2.b1\r\nCF-Connecting-IPv6: 2001:db8::9\r\n\
+	let request = "GET / HTTP/1.1\r\nHost: 00000002.b1\r\nCF-Connecting-IPv6: 2001:db8::9\r\n\
 		CF-Visitor: planted\r\nCF-Ray: planted\r\nCDN-Loop: planted\r\nTrue-Client-IP: planted\r\n\
 		X-Forwarded: planted\r\nX-Original-Forwarded-For: planted\r\n\
 		X-Cluster-Client-IP: planted\r\nClient-IP: planted\r\nFastly-Client-IP: planted\r\n\
@@ -512,7 +585,8 @@ fn a_header_describing_forwarding_or_the_client_is_known_by_family_name_and_unde
 
 #[tokio::test]
 async fn a_container_sending_two_hosts_is_answered_bad_request() {
-	let request = "GET / HTTP/1.1\r\nHost: app-2.b1\r\nHost: app-3.b1\r\nConnection: close\r\n\r\n";
+	let request =
+		"GET / HTTP/1.1\r\nHost: 00000002.b1\r\nHost: 00000003.b1\r\nConnection: close\r\n\r\n";
 	let (head, body) = sent(reacher().await, request.to_owned()).await;
 	assert!(head.starts_with("HTTP/1.1 400 "), "{head}");
 	assert_eq!(body, "a request has one host\n");
@@ -523,7 +597,7 @@ async fn a_proxys_chain_is_kept_and_extended() {
 	let (listener, upstream) = listening().await;
 	tokio::spawn(async move { axum::serve(listener, Router::new().fallback(echoed)).await });
 	let at = entry(BTreeMap::from([(of(1, 1), Found::Running(upstream))])).await;
-	let request = "GET / HTTP/1.1\r\nHost: app-1.b1\r\nX-Forwarded-For: 203.0.113.9\r\n\
+	let request = "GET / HTTP/1.1\r\nHost: 00000001.b1\r\nX-Forwarded-For: 203.0.113.9\r\n\
 		Forwarded: for=203.0.113.9\r\nX-Real-IP: 203.0.113.9\r\nConnection: close\r\n\r\n";
 	let (head, body) = sent(at, request.to_owned()).await;
 	assert!(head.starts_with("HTTP/1.1 201 "), "{head}");
@@ -533,5 +607,20 @@ async fn a_proxys_chain_is_kept_and_extended() {
 		"x-real-ip: 203.0.113.9",
 	] {
 		assert!(body.lines().any(|l| l == line), "{line} not in {body}");
+	}
+}
+
+#[tokio::test]
+async fn a_container_made_before_answers_by_both_names_and_its_reacher_reaches_it() {
+	let listener = tokio::net::TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, 0)).await.unwrap();
+	let upstream = listener.local_addr().unwrap().to_string();
+	tokio::spawn(async move { axum::serve(listener, Router::new().fallback(echoed)).await });
+	// Both labeled as before, app 1 reaching app 2 by the name it was handed then.
+	let at =
+		contained(vec![container("app/2", &upstream, ""), container("app/1", "127.0.0.1:1", "app/2")])
+			.await;
+	for host in ["app-2.b1", "00000002.b1"] {
+		let (head, _) = sent(at, get(host)).await;
+		assert!(head.starts_with("HTTP/1.1 201 "), "{host} {head}");
 	}
 }

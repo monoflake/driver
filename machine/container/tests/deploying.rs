@@ -10,8 +10,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use common::{
-	ECHO, ECHO_TWO, LARGEST, app, binding, cleared, deploy, driver, echo, hash, lines, of, reason,
-	running, shell, spec_of,
+	ECHO, ECHO_TWO, LARGEST, app, binding, cleared, deploy, driver, echo, hash, id_of, lines, of,
+	reason, running, shell, spec_of,
 };
 use driver_machine_container::{Binding, Capacity, Chosen, Deployments, ImageConfig, Runtimes};
 use envelope::contracts::{
@@ -34,8 +34,8 @@ async fn an_image_deployed_runs_and_is_described_at_its_port() {
 async fn its_layer_joins_the_qgroup_before_its_task_starts() {
 	let (driver, log) = driver("ordered", shell(), false);
 	driver.deploy(&binding(), echo()).await.unwrap();
-	let id =
-		"app-1-".to_owned() + &hash(ECHO).iter().map(|b| format!("{b:02x}")).collect::<String>()[..12];
+	let id = "00000001-".to_owned()
+		+ &hash(ECHO).iter().map(|b| format!("{b:02x}")).collect::<String>()[..12];
 	let rootfs = driver.containerd.rootfs.display().to_string();
 	let output = driver.state.join("output/b1").join(format!("{id}.log"));
 	assert_eq!(
@@ -208,8 +208,8 @@ async fn a_new_version_replaces_the_one_before() {
 	assert_eq!(two.state, running("10.88.0.3:8080"), "the new serves beside the old");
 	let held = driver.containerd.held.lock().unwrap();
 	assert_eq!(held.len(), 1);
-	let old =
-		"app-1-".to_owned() + &hash(ECHO).iter().map(|b| format!("{b:02x}")).collect::<String>()[..12];
+	let old = "00000001-".to_owned()
+		+ &hash(ECHO).iter().map(|b| format!("{b:02x}")).collect::<String>()[..12];
 	let log = lines(&log);
 	let start_two = log.iter().position(|l| l.starts_with("start ") && !l.ends_with(&old)).unwrap();
 	let stop_one = log.iter().position(|l| *l == format!("stop {old} within 10000")).unwrap();
@@ -347,7 +347,23 @@ async fn a_component_is_known_by_its_id_and_not_its_name() {
 	let ids: Vec<String> =
 		driver.containerd.held.lock().unwrap().keys().map(|k| k.1.clone()).collect();
 	let short = &hash(ECHO).iter().map(|b| format!("{b:02x}")).collect::<String>()[..12];
-	assert_eq!(ids, [format!("component-00000007-{short}"), format!("component-1a2b3c4d-{short}")]);
+	assert_eq!(ids, [format!("00000007-{short}"), format!("1a2b3c4d-{short}")]);
+	// Its kind is a label of its own, which the entry hides a component by.
+	let kinds: Vec<String> = driver
+		.containerd
+		.held
+		.lock()
+		.unwrap()
+		.values()
+		.map(|h| h.labels["driver.kind"].clone())
+		.collect();
+	assert_eq!(kinds, ["component", "component"]);
+	driver.deploy(&binding(), echo()).await.unwrap();
+	let app = id_of(&driver, "00000001");
+	assert_eq!(
+		driver.containerd.held.lock().unwrap()[&("b1".into(), app)].labels["driver.kind"],
+		"app"
+	);
 	// The same id under another name is the one deployment, described as it is asked.
 	let renamed = DeploymentOf { runs: DeploymentRuns::Component { component: "x".into(), id: 7 } };
 	assert_eq!(driver.describe(&binding(), renamed.clone()).await.unwrap().runs, renamed.runs);

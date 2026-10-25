@@ -53,12 +53,13 @@ pub(super) fn bound(handed: &[DeploymentHanded]) -> Result<Bound, Refused> {
 /// The name what it reaches is bound under.
 const REACHING: &str = "MONOFLAKE_REACHING";
 
-/// A deployment's name as the entry routes by it, `app-<id>` or `component-<id in 8 hex digits>`
-/// and its binding's namespace, `b<binding>`.
+/// A deployment's name as the entry routes by it, its id in 8 hex digits whatever its kind and its
+/// binding's namespace, `b<binding>`.
 pub(super) fn name(namespace: &str, runs: &DeploymentRuns) -> (u32, String) {
 	match runs {
-		DeploymentRuns::App { id } => (*id, format!("app-{id}.{namespace}")),
-		DeploymentRuns::Component { id, .. } => (*id, format!("component-{id:08x}.{namespace}")),
+		DeploymentRuns::App { id } | DeploymentRuns::Component { id, .. } => {
+			(*id, format!("{id:08x}.{namespace}"))
+		}
 	}
 }
 
@@ -108,8 +109,8 @@ mod tests {
 		assert_eq!(
 			reaching("b1", &targets, 4321).unwrap(),
 			concat!(
-				r#"MONOFLAKE_REACHING={"00000009":"http://app-9.b1:4321","#,
-				r#""1a2b3c4d":"http://component-1a2b3c4d.b1:4321"}"#
+				r#"MONOFLAKE_REACHING={"00000009":"http://00000009.b1:4321","#,
+				r#""1a2b3c4d":"http://1a2b3c4d.b1:4321"}"#
 			)
 		);
 	}

@@ -238,13 +238,13 @@ impl Turns {
 	}
 }
 
-/// The deployment a binding's call names.
+/// The deployment a binding's call names, by its id in 8 hex digits whatever its kind, RFC b8f35.
 fn deployment(binding: Binding, runs: &DeploymentRuns) -> Deployment {
-	let runs = match runs {
-		DeploymentRuns::App { id } => format!("app/{id}"),
-		DeploymentRuns::Component { id, .. } => format!("component/{id:08x}"),
-	};
-	(binding, runs)
+	match runs {
+		DeploymentRuns::App { id } | DeploymentRuns::Component { id, .. } => {
+			(binding, format!("{id:08x}"))
+		}
+	}
 }
 
 /// A deployments call within what the machine made of its binding, modules for workerd deployed by

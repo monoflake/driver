@@ -14,7 +14,7 @@ use envelope::contracts::{
 	DeploymentArtifact, DeploymentDeploy, DeploymentForm, DeploymentIsolation, DeploymentRuns,
 };
 
-use super::{Kind, Named, named};
+use super::{Named, Written, named};
 
 /// What a container was made as, in order.
 #[derive(Default)]
@@ -165,14 +165,14 @@ async fn a_components_id_is_one_spelling_in_its_container_its_route_and_its_key(
 		.find(|(n, _)| *n == "MONOFLAKE_REACHING");
 	let origins: serde_json::Value = serde_json::from_str(reaching.unwrap().1).unwrap();
 	let (key, origin) = origins.as_object().unwrap().iter().next().unwrap();
-	let route = Named { binding: 1, kind: Kind::Component, id }.name();
+	let route = Named { binding: 1, written: Written::Hex, id }.name();
 	// The origin's host is the route the entry takes back to the same component.
 	let host = origin.as_str().unwrap().trim_start_matches("http://");
-	assert_eq!(named(host), Some(Named { binding: 1, kind: Kind::Component, id }));
+	assert_eq!(named(host), Some(Named { binding: 1, written: Written::Hex, id }));
 	// At the port the attachment answered.
 	assert_eq!(host.rsplit_once(':').map(|(_, port)| port), Some("4321"));
-	let of_container = container.strip_prefix("component-").unwrap().split('-').next().unwrap();
-	let of_route = route.strip_prefix("component-").unwrap().split('.').next().unwrap();
+	let of_container = container.split('-').next().unwrap();
+	let of_route = route.split('.').next().unwrap();
 	assert_eq!((of_container, of_route), (key.as_str(), key.as_str()));
 	assert!(key.len() == 8 && key.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')), "{key}");
 	assert_ne!(key.as_str(), id.to_string(), "written in hex, not decimal");

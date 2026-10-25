@@ -51,8 +51,8 @@ async fn a_reacher_is_told_each_target_by_its_name_at_the_entry() {
 	let target = DeploymentRuns::Component { component: "stand-in".into(), id: 0x1a2b_3c4d };
 	driver.deploy(&binding(), DeploymentDeploy { runs: target.clone(), ..echo() }).await.unwrap();
 	driver.deploy(&binding(), reaching(target)).await.unwrap();
-	let origins = r#"MONOFLAKE_REACHING={"1a2b3c4d":"http://component-1a2b3c4d.b1:4321"}"#;
-	assert!(env_of(&driver, "app/1").contains(&origins.into()));
+	let origins = r#"MONOFLAKE_REACHING={"1a2b3c4d":"http://1a2b3c4d.b1:4321"}"#;
+	assert!(env_of(&driver, "00000001").contains(&origins.into()));
 }
 
 /// The spec of the container running a deployment of the label given.
@@ -82,11 +82,11 @@ async fn a_reacher_resolves_the_names_it_reaches_alone_to_the_host() {
 	driver.deploy(&binding(), DeploymentDeploy { runs: target.clone(), ..echo() }).await.unwrap();
 	driver.deploy(&binding(), DeploymentDeploy { runs: other, ..echo() }).await.unwrap();
 	driver.deploy(&binding(), reaching(target)).await.unwrap();
-	let hosts = hosts_of(&spec_running(&driver, "app/1")).unwrap();
-	assert_eq!(hosts, "127.0.0.1\tlocalhost\n::1\tlocalhost\n10.88.0.1\tcomponent-1a2b3c4d.b1\n");
+	let hosts = hosts_of(&spec_running(&driver, "00000001")).unwrap();
+	assert_eq!(hosts, "127.0.0.1\tlocalhost\n::1\tlocalhost\n10.88.0.1\t1a2b3c4d.b1\n");
 	// Reaching nothing, it is given nothing, and keeps the image's own.
-	assert_eq!(hosts_of(&spec_running(&driver, "app/2")), None);
-	assert_eq!(hosts_of(&spec_running(&driver, "component/1a2b3c4d")), None);
+	assert_eq!(hosts_of(&spec_running(&driver, "00000002")), None);
+	assert_eq!(hosts_of(&spec_running(&driver, "1a2b3c4d")), None);
 }
 
 #[tokio::test]
@@ -96,7 +96,7 @@ async fn a_reacher_alone_is_let_reach_the_entry_and_its_element_goes_with_it() {
 	driver.deploy(&binding(), DeploymentDeploy { runs: target.clone(), ..echo() }).await.unwrap();
 	assert!(fenced(&driver).is_empty(), "nothing for a deployment reaching nothing");
 	driver.deploy(&binding(), reaching(target)).await.unwrap();
-	let reacher = format!("b1-{}", id_of(&driver, "app/1"));
+	let reacher = format!("b1-{}", id_of(&driver, "00000001"));
 	assert_eq!(fenced(&driver), std::slice::from_ref(&reacher));
 	// The entry the attachment answered.
 	let entry: SocketAddr = "10.88.0.1:4321".parse().unwrap();
@@ -120,7 +120,7 @@ async fn a_reacher_resumed_is_let_reach_the_entry_again() {
 	// As a boot empties the set.
 	driver.network.fences.lock().unwrap().clear();
 	driver.resume(&binding(), of()).await.unwrap();
-	assert_eq!(fenced(&driver), [format!("b1-{}", id_of(&driver, "app/1"))]);
+	assert_eq!(fenced(&driver), [format!("b1-{}", id_of(&driver, "00000001"))]);
 }
 
 #[tokio::test]
@@ -142,11 +142,11 @@ async fn a_reacher_is_replaced_with_no_gap_and_each_container_has_its_element() 
 	let target = DeploymentRuns::App { id: 9 };
 	driver.deploy(&binding(), DeploymentDeploy { runs: target.clone(), ..echo() }).await.unwrap();
 	driver.deploy(&binding(), reaching(target.clone())).await.unwrap();
-	let old = id_of(&driver, "app/1");
+	let old = id_of(&driver, "00000001");
 	let two =
 		DeploymentDeploy { reaching: Some(vec![target]), ..deploy("file:///echo-two.tar", ECHO_TWO) };
 	driver.deploy(&binding(), two).await.unwrap();
-	let new = id_of(&driver, "app/1");
+	let new = id_of(&driver, "00000001");
 	let log = lines(&log);
 	let start_two = log.iter().position(|l| *l == format!("start {new}")).unwrap();
 	let stop_one = log.iter().position(|l| l.starts_with(&format!("stop {old} "))).unwrap();
@@ -161,7 +161,7 @@ async fn reaching_nothing_again_takes_effect_at_the_same_version() {
 	driver.deploy(&binding(), DeploymentDeploy { runs: target.clone(), ..echo() }).await.unwrap();
 	driver.deploy(&binding(), reaching(target)).await.unwrap();
 	driver.deploy(&binding(), echo()).await.unwrap();
-	let env = env_of(&driver, "app/1");
+	let env = env_of(&driver, "00000001");
 	assert!(!env.iter().any(|e| e.as_str().unwrap().starts_with("MONOFLAKE_REACHING=")), "{env:?}");
 	assert!(fenced(&driver).is_empty());
 }
@@ -172,7 +172,7 @@ async fn a_reacher_removed_while_nft_fails_still_gives_everything_back() {
 	let target = DeploymentRuns::App { id: 9 };
 	driver.deploy(&binding(), DeploymentDeploy { runs: target.clone(), ..echo() }).await.unwrap();
 	driver.deploy(&binding(), reaching(target)).await.unwrap();
-	let reacher = id_of(&driver, "app/1");
+	let reacher = id_of(&driver, "00000001");
 	driver.stop(&binding(), of()).await.unwrap();
 	*driver.network.unfenceable.lock().unwrap() = true;
 	let refused = driver.delete(&binding(), of()).await.unwrap_err();
@@ -195,7 +195,7 @@ async fn a_reacher_resumed_is_let_reach_the_entry_it_was_made_with() {
 	// The driver started again with another entry.
 	*driver.network.entry.lock().unwrap() = 4999;
 	driver.resume(&binding(), of()).await.unwrap();
-	let reacher = format!("b1-{}", id_of(&driver, "app/1"));
+	let reacher = format!("b1-{}", id_of(&driver, "00000001"));
 	let made: SocketAddr = "10.88.0.1:4321".parse().unwrap();
 	assert_eq!(driver.network.fences.lock().unwrap()[&reacher], [made]);
 }

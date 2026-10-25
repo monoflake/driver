@@ -88,6 +88,7 @@ fn own() -> Option<Architecture> {
 /// What a deploy asks, checked against what the host gives.
 struct Wanted<'a> {
 	runs: String,
+	kind: &'static str,
 	version: String,
 	runtime: DeploymentRuntime,
 	isolation: Vec<DeploymentIsolation>,
@@ -191,6 +192,7 @@ impl<'a> Wanted<'a> {
 		secrets.extend(handed.secrets);
 		Ok(Self {
 			runs: labels::runs(&input.runs),
+			kind: labels::kind(&input.runs),
 			version: hex(&input.version),
 			runtime,
 			isolation,
@@ -217,14 +219,11 @@ fn hex(hash: &[u8; 32]) -> String {
 	hash.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// The containerd id within the namespace of what runs as one container, by the id of what it runs,
-/// the version's first digits, and a hash of what it reaches where it reaches anything.
+/// The containerd id within the namespace of what runs as one container, by the id of what it runs
+/// in 8 hex digits, the version's first digits, and a hash of what it reaches where it reaches any.
 fn container_id(runs: &DeploymentRuns, version: &str, reaching: &[String]) -> String {
 	let short: String = version.chars().take(12).collect();
-	let of = match runs {
-		DeploymentRuns::App { id } => format!("app-{id}"),
-		DeploymentRuns::Component { id, .. } => format!("component-{id:08x}"),
-	};
+	let of = labels::runs(runs);
 	match reaching.is_empty() {
 		true => format!("{of}-{short}"),
 		false => {
@@ -241,9 +240,14 @@ fn network_id(namespace: &str, id: &str) -> String {
 	format!("{namespace}-{id}")
 }
 
+/// Whether a container's labels name what it runs, as it is labeled now or was before.
+fn runs_it(listed: &Listed, runs: &str) -> bool {
+	listed.labels.get(labels::RUNS).is_some_and(|r| labels::named(r) == runs)
+}
+
 /// The containers of one deployment, those in a namespace whose labels name what it runs.
 fn of_runs(listed: Vec<Listed>, runs: &str) -> Vec<Listed> {
-	listed.into_iter().filter(|l| l.labels.get(labels::RUNS).is_some_and(|r| r == runs)).collect()
+	listed.into_iter().filter(|l| runs_it(l, runs)).collect()
 }
 
 /// The one container a deployment is answered by, a running one before any other.
@@ -254,8 +258,7 @@ fn chosen(mine: &[Listed]) -> Option<&Listed> {
 /// Where a deployment runs, its chosen container read as `state` reads a running one.
 pub(crate) fn reached(listed: &[Listed], runs: &DeploymentRuns) -> Reached {
 	let runs = labels::runs(runs);
-	let mine: Vec<Listed> =
-		listed.iter().filter(|l| l.labels.get(labels::RUNS) == Some(&runs)).cloned().collect();
+	let mine: Vec<Listed> = listed.iter().filter(|l| runs_it(l, &runs)).cloned().collect();
 	match chosen(&mine) {
 		None => Reached::Absent,
 		Some(l) if l.task == Some(Task::Running) => {
@@ -537,6 +540,7 @@ where
 		})?;
 		let kept = Kept {
 			runs: wanted.runs.clone(),
+			kind: Some(wanted.kind.to_owned()),
 			version: wanted.version.clone(),
 			runtime: wanted.runtime,
 			address: attachment.address.to_string(),

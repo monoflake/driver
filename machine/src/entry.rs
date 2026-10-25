@@ -120,45 +120,39 @@ fn proxied(name: &str) -> bool {
 	PROXIED_FAMILIES.iter().any(|f| name.starts_with(f)) || PROXIED.contains(&name.as_str())
 }
 
-/// What kind of deployment a name names.
+/// What kind of deployment runs in a container, as its labels say.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Kind {
-	/// `app-<id>`.
+	/// An app.
 	App,
-	/// `component-<id>`, its id in 8 lowercase hex digits, RFC y2xd3.
+	/// A component, RFC y2xd3.
 	Component,
 }
 
-/// A deployment as a host names it, an app or a component of a binding.
+/// How a host writes a deployment's id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Written {
+	/// In 8 lowercase hex digits, whatever its kind, RFC b8f35.
+	Hex,
+	/// As `app-<id>` in decimal, an app's alone.
+	/// A scaffold kept for the apps deployed before, retired with platform RFC 8yl4b.
+	App,
+}
+
+/// A deployment as a host names it, by its id within a binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Named {
 	pub(crate) binding: Binding,
-	pub(crate) kind: Kind,
+	pub(crate) written: Written,
 	pub(crate) id: u32,
 }
 
 impl Named {
-	/// What it runs, as the deployments interface names it.
-	fn runs(self) -> DeploymentRuns {
-		match self.kind {
-			Kind::App => DeploymentRuns::App { id: self.id },
-			Kind::Component => DeploymentRuns::Component { component: String::new(), id: self.id },
-		}
-	}
-
-	/// What it runs as the container kind's label holds it.
-	fn label(self) -> String {
-		match self.kind {
-			Kind::App => format!("app/{}", self.id),
-			Kind::Component => format!("component/{:08x}", self.id),
-		}
-	}
-
 	/// Its name, as a host gives it.
 	fn name(self) -> String {
-		match self.kind {
-			Kind::App => format!("app-{}.b{}", self.id, self.binding),
-			Kind::Component => format!("component-{:08x}.b{}", self.id, self.binding),
+		match self.written {
+			Written::Hex => format!("{:08x}.b{}", self.id, self.binding),
+			Written::App => format!("app-{}.b{}", self.id, self.binding),
 		}
 	}
 }
@@ -172,52 +166,74 @@ fn number<T: std::str::FromStr>(text: &str) -> Option<T> {
 	canonical.then(|| text.parse().ok()).flatten()
 }
 
-/// An id written as a component's is, 8 lowercase hex digits, so one component has one name.
+/// An id written as a name writes it, 8 lowercase hex digits, so one deployment has one name.
 fn hex(text: &str) -> Option<u32> {
 	let written = text.len() == 8 && text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
 	written.then(|| u32::from_str_radix(text, 16).ok()).flatten()
 }
 
-/// The deployment a host names by its leftmost two labels, `app-<id>.b<binding>` or
-/// `component-<id>.b<binding>`, the rest passed over, none where those two are not so.
+/// The deployment a host names by its leftmost two labels, `<id in 8 hex digits>.b<binding>`,
+/// the rest passed over, none where those two are not so.
 pub(crate) fn named(host: &str) -> Option<Named> {
 	// A name is its deployment's address with no table, provisional for RFC n0o4l.
 	let host = host.split(':').next().unwrap_or_default();
 	let mut labels = host.split('.');
 	let deployment = labels.next()?;
 	let binding = labels.next()?;
-	let (kind, id) = [("app-", Kind::App), ("component-", Kind::Component)].into_iter().find_map(
-		|(prefix, kind)| {
-			let head = deployment.get(..prefix.len())?;
-			head.eq_ignore_ascii_case(prefix).then(|| (kind, deployment.get(prefix.len()..)))
-		},
-	)?;
+	let (written, id) = match hex(deployment) {
+		Some(id) => (Written::Hex, id),
+		None => {
+			// A scaffold kept for the apps deployed before, retired with platform RFC 8yl4b.
+			let head = deployment.get(..4)?;
+			head.eq_ignore_ascii_case("app-").then_some(())?;
+			(Written::App, number(deployment.get(4..)?)?)
+		}
+	};
 	let (letter, binding) = (binding.get(..1)?, binding.get(1..)?);
 	if !letter.eq_ignore_ascii_case("b") {
 		return None;
 	}
-	let id = id?;
-	let id = match kind {
-		Kind::App => number(id)?,
-		Kind::Component => hex(id)?,
-	};
-	Some(Named { binding: number(binding)?, kind, id })
+	Some(Named { binding: number(binding)?, written, id })
 }
 
 /// The labels the container kind writes on each container, read here as it writes them.
 pub(crate) const RUNS: &str = "driver.runs";
 pub(crate) const ADDRESS: &str = "driver.address";
 pub(crate) const REACHING: &str = "driver.reaching";
+const KIND: &str = "driver.kind";
 
-/// Whether a request from `peer` may reach a deployment, a container held to its own `reaching`
-/// and a component reached by a container alone, RFC y2xd3.
-pub(crate) fn allowed(listed: &[Listed], named: Named, peer: IpAddr, subnet: Subnet) -> Gate {
+/// The id a label of what a container runs or reaches names, written in 8 hex digits, or as an
+/// app's was before, `app/<id>` in decimal, a scaffold retired with platform RFC 8yl4b.
+fn labeled(label: &str) -> Option<u32> {
+	hex(label).or_else(|| number(label.strip_prefix("app/")?))
+}
+
+/// The kind of the deployment of an id, as its containers' labels say, none where none runs it; a
+/// container labeled before its kind was is an app's.
+pub(crate) fn kind(listed: &[Listed], id: u32) -> Option<Kind> {
+	let mine = listed.iter().find(|l| l.labels.get(RUNS).and_then(|r| labeled(r)) == Some(id))?;
+	match mine.labels.get(KIND).map(String::as_str) {
+		Some("component") => Some(Kind::Component),
+		// No kind label is an app's, a scaffold retired with platform RFC 8yl4b.
+		Some(_) | None => Some(Kind::App),
+	}
+}
+
+/// Whether a request from `peer` may reach the deployment of an id and a kind, a container held to
+/// its own `reaching` and a component reached by a container alone, RFC y2xd3.
+pub(crate) fn allowed(
+	listed: &[Listed],
+	named: Named,
+	kind: Option<Kind>,
+	peer: IpAddr,
+	subnet: Subnet,
+) -> Gate {
 	let peer = peer.to_canonical();
 	if !subnet.holds(peer) {
 		// From loopback, the tunnel or the tailnet, an app as before and a component as nothing.
-		return match named.kind {
-			Kind::App => Gate::Pass,
-			Kind::Component => Gate::Hidden,
+		return match kind {
+			Some(Kind::App) | None => Gate::Pass,
+			Some(Kind::Component) => Gate::Hidden,
 		};
 	}
 	let ip = |l: &Listed| {
@@ -227,10 +243,9 @@ pub(crate) fn allowed(listed: &[Listed], named: Named, peer: IpAddr, subnet: Sub
 	// A source is known only by a running container, never a label alone.
 	let running = |l: &&Listed| l.task == Some(Task::Running) && l.labels.contains_key(RUNS);
 	let source = listed.iter().filter(running).find(|l| ip(l) == Some(peer));
-	let target = named.label();
 	let reaches = source
 		.and_then(|s| s.labels.get(REACHING))
-		.is_some_and(|reaching| reaching.split(',').any(|r| r == target));
+		.is_some_and(|reaching| reaching.split(',').any(|r| labeled(r) == Some(named.id)));
 	match reaches {
 		true => Gate::Pass,
 		false => Gate::Refused,
@@ -268,17 +283,19 @@ pub(crate) trait Find: Send + Sync + 'static {
 	fn find(&self, named: Named, peer: IpAddr) -> impl Future<Output = Found> + Send;
 }
 
-/// The address each deployment was last found running at, and when.
+/// The address each app was last found running at, and when.
 #[derive(Debug, Default)]
 struct Last(Mutex<BTreeMap<Named, (SocketAddr, Instant)>>);
 
 impl Last {
-	/// What containerd answered of a deployment kept, its address while it runs, nothing else.
-	fn found(&self, named: Named, found: Found, at: Instant) {
+	/// What containerd answered of a deployment kept, an app's address while it runs, nothing else,
+	/// as a component's path stays closed while containerd cannot say who asks.
+	fn found(&self, named: Named, kind: Option<Kind>, found: Found, at: Instant) {
 		let mut last = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-		match found {
-			Found::Running(address) => last.insert(named, (address, at)),
-			Found::Down | Found::Absent | Found::Refused => last.remove(&named),
+		match (found, kind) {
+			(Found::Running(address), Some(Kind::App)) => last.insert(named, (address, at)),
+			(Found::Running(_), Some(Kind::Component) | None)
+			| (Found::Down | Found::Absent | Found::Refused, _) => last.remove(&named),
 		};
 	}
 
@@ -303,24 +320,33 @@ impl<C: Containerd + 'static> Find for Labels<C> {
 	/// be reached, the address last found, never once containerd has said it is gone.
 	async fn find(&self, named: Named, peer: IpAddr) -> Found {
 		let namespace = crate::listed::namespace(named.binding);
-		let runs = named.runs();
 		match self.containerd.list(&namespace).await {
 			Ok(listed) => {
-				match allowed(&listed, named, peer, self.subnet) {
+				let kind = kind(&listed, named.id);
+				// The decimal name is an app's alone, retired with platform RFC 8yl4b.
+				if named.written == Written::App && kind == Some(Kind::Component) {
+					return Found::Absent;
+				}
+				match allowed(&listed, named, kind, peer, self.subnet) {
 					Gate::Pass => {}
 					Gate::Refused => return Found::Refused,
 					Gate::Hidden => return Found::Absent,
 				}
+				let id = named.id;
+				let runs = match kind {
+					Some(Kind::Component) => DeploymentRuns::Component { component: String::new(), id },
+					Some(Kind::App) | None => DeploymentRuns::App { id },
+				};
 				let found = match driver_machine_container::reached(&listed, &runs) {
 					Reached::Running(address) => address.parse().map_or(Found::Down, Found::Running),
 					Reached::Down => Found::Down,
 					Reached::Absent => Found::Absent,
 				};
-				self.last.found(named, found, Instant::now());
+				self.last.found(named, kind, found, Instant::now());
 				found
 			}
 			// Who asks cannot be told now, so nothing a check would hold is let through.
-			Err(Fault(why)) if self.subnet.holds(peer) || named.kind == Kind::Component => {
+			Err(Fault(why)) if self.subnet.holds(peer) => {
 				eprintln!("entry {namespace}: {why}, the request refused");
 				Found::Refused
 			}

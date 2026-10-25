@@ -59,10 +59,10 @@ mod tests {
 	#[test]
 	fn the_loopback_lines_and_each_name_reached_alone() {
 		let host = "192.0.2.1".parse().unwrap();
-		let names = ["app-9.b1".to_owned(), "component-1a2b3c4d.b1".to_owned()];
+		let names = ["00000009.b1".to_owned(), "1a2b3c4d.b1".to_owned()];
 		assert_eq!(
 			lines(host, &names),
-			"127.0.0.1\tlocalhost\n::1\tlocalhost\n192.0.2.1\tapp-9.b1\n192.0.2.1\tcomponent-1a2b3c4d.b1\n"
+			"127.0.0.1\tlocalhost\n::1\tlocalhost\n192.0.2.1\t00000009.b1\n192.0.2.1\t1a2b3c4d.b1\n"
 		);
 	}
 }

@@ -332,12 +332,12 @@ mod tests {
 			state,
 			entry: 4321,
 		};
-		bridge.keep("b1-app-1", &json!({ "ips": [] })).await.unwrap();
+		bridge.keep("b1-0a1b2c3d", &json!({ "ips": [] })).await.unwrap();
 		let names: Vec<String> = std::fs::read_dir(&bridge.state)
 			.unwrap()
 			.map(|e| e.unwrap().file_name().into_string().unwrap())
 			.collect();
-		assert_eq!(names, ["b1-app-1.json"]);
+		assert_eq!(names, ["b1-0a1b2c3d.json"]);
 	}
 
 	#[test]

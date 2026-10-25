@@ -6,6 +6,8 @@ use envelope::contracts::{DeploymentIsolation, DeploymentRuns, DeploymentRuntime
 
 /// What the container runs, as [`runs`] writes it.
 pub(super) const RUNS: &str = "driver.runs";
+/// Its deployment's kind, `app` or `component`, which the entry shows or hides by.
+const KIND: &str = "driver.kind";
 /// The version, its hash in hex.
 pub(super) const VERSION: &str = "driver.version";
 const RUNTIME: &str = "driver.runtime";
@@ -19,12 +21,29 @@ pub(super) const REACHING: &str = "driver.reaching";
 /// The entry a reacher reaches, the host's own address on the bridge and the entry's port.
 const ENTRY: &str = "driver.entry";
 
-/// A deployment's runs as a label holds it, `app/<id>` or `component/<id in 8 hex digits>`, as
-/// every resource of a scope is known by its id alone, RFC y2xd3.
+/// A deployment's runs as a label holds it, its id in 8 lowercase hex digits whatever its kind,
+/// as an id names one resource of a scope and carries its type, RFC b8f35.
 pub(super) fn runs(runs: &DeploymentRuns) -> String {
 	match runs {
-		DeploymentRuns::App { id } => format!("app/{id}"),
-		DeploymentRuns::Component { id, .. } => format!("component/{id:08x}"),
+		DeploymentRuns::App { id } | DeploymentRuns::Component { id, .. } => format!("{id:08x}"),
+	}
+}
+
+/// A deployment's kind as its label holds it.
+pub(super) fn kind(runs: &DeploymentRuns) -> &'static str {
+	match runs {
+		DeploymentRuns::App { .. } => "app",
+		DeploymentRuns::Component { .. } => "component",
+	}
+}
+
+/// A label read as [`runs`] writes it, an app's labeled `app/<id>` in decimal read as its id.
+/// A scaffold kept for the apps deployed before, retired with platform RFC 8yl4b.
+pub(super) fn named(label: &str) -> String {
+	let decimal = label.strip_prefix("app/").filter(|d| *d == "0" || !d.starts_with('0'));
+	match decimal.filter(|d| d.bytes().all(|b| b.is_ascii_digit())).and_then(|d| d.parse().ok()) {
+		Some(id) => runs(&DeploymentRuns::App { id }),
+		None => label.to_owned(),
 	}
 }
 
@@ -85,6 +104,8 @@ fn isolation_named(name: &str) -> Option<DeploymentIsolation> {
 /// Everything a container's labels hold.
 pub(super) struct Kept {
 	pub(super) runs: String,
+	/// Its deployment's kind, none on one labeled before it was.
+	pub(super) kind: Option<String>,
 	pub(super) version: String,
 	pub(super) runtime: DeploymentRuntime,
 	pub(super) address: String,
@@ -101,11 +122,11 @@ pub(super) struct Kept {
 	pub(super) entry: Option<String>,
 }
 
-/// The deployments a container's labels say it reaches.
+/// The deployments a container's labels say it reaches, each read by [`named`].
 pub(super) fn reaching(labels: &BTreeMap<String, String>) -> Vec<String> {
 	labels
 		.get(REACHING)
-		.map(|r| r.split(',').filter(|r| !r.is_empty()).map(str::to_owned).collect())
+		.map(|r| r.split(',').filter(|r| !r.is_empty()).map(named).collect())
 		.unwrap_or_default()
 }
 
@@ -123,6 +144,9 @@ impl Kept {
 				self.isolation.iter().map(|i| isolation_name(*i)).collect::<Vec<_>>().join(","),
 			),
 		]);
+		if let Some(kind) = &self.kind {
+			labels.insert(KIND.to_owned(), kind.clone());
+		}
 		if let Some(into) = self.into {
 			labels.insert(INTO.to_owned(), into.to_string());
 		}
@@ -141,6 +165,7 @@ impl Kept {
 		let get = |key: &str| labels.get(key).ok_or_else(|| format!("no label {key}"));
 		Ok(Self {
 			runs: get(RUNS)?.clone(),
+			kind: labels.get(KIND).cloned(),
 			version: get(VERSION)?.clone(),
 			runtime: runtime_named(get(RUNTIME)?)
 				.ok_or_else(|| format!("the label {RUNTIME} names no runtime"))?,
@@ -165,5 +190,30 @@ impl Kept {
 			reaching: reaching(labels),
 			entry: labels.get(ENTRY).cloned(),
 		})
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn an_app_and_a_component_are_labeled_by_their_id_in_hex_alone() {
+		let component = DeploymentRuns::Component { component: "stand-in".into(), id: 0x0a1b_2c3d };
+		assert_eq!(runs(&component), "0a1b2c3d");
+		assert_eq!(runs(&DeploymentRuns::App { id: 0x0a1b_2c3e }), "0a1b2c3e");
+		assert_eq!((kind(&component), kind(&DeploymentRuns::App { id: 1 })), ("component", "app"));
+	}
+
+	#[test]
+	fn an_apps_label_from_before_is_read_as_its_id_and_nothing_else_is_changed() {
+		assert_eq!(named("app/1"), "00000001");
+		assert_eq!(named("app/439041101"), "1a2b3c4d");
+		assert_eq!(named("0a1b2c3d"), "0a1b2c3d");
+		for kept in ["app/01", "app/", "app/+1", "app/x", "app/99999999999", "component/0a1b2c3d"] {
+			assert_eq!(named(kept), kept);
+		}
+		let labels = BTreeMap::from([(REACHING.to_owned(), "app/2,0a1b2c3d".to_owned())]);
+		assert_eq!(reaching(&labels), ["00000002", "0a1b2c3d"]);
 	}
 }

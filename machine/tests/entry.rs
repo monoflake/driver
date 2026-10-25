@@ -30,6 +30,7 @@ fn the_entry_runs_alone_and_a_deployment_containerd_cannot_say_is_unavailable() 
 	let first = lines.next().unwrap().unwrap();
 	let at: SocketAddr = first.trim_start_matches("entry on ").parse().unwrap();
 	assert_eq!(status(at, "localhost"), 404);
+	assert_eq!(status(at, "0a1b2c3d.b1.local"), 503);
 	assert_eq!(status(at, "app-1.b1.local"), 503);
 	let _ = child.kill();
 	let _ = child.wait();

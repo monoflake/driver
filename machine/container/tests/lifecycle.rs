@@ -121,14 +121,14 @@ async fn a_container_item_emptied_takes_what_runs_in_it_and_nothing_else() {
 	assert_eq!(into, ["3", "4"], "each container is labelled with the capacity it runs in");
 	assert_eq!(driver.emptied(&two, 5).await.unwrap(), Vec::<String>::new());
 	let removed = driver.emptied(&two, 3).await.unwrap();
-	assert!(matches!(&removed[..], [id] if id.starts_with("app-1-")), "{removed:?}");
+	assert!(matches!(&removed[..], [id] if id.starts_with("00000001-")), "{removed:?}");
 	assert_eq!(reason(driver.describe(&two, of()).await.unwrap_err()), "not_found");
 	let still = DeploymentOf { runs: DeploymentRuns::App { id: 2 } };
 	assert_eq!(driver.describe(&two, still).await.unwrap().state, running("10.88.0.3:8080"));
 	let log = lines(&log);
-	assert!(log.iter().any(|l| l.starts_with("stop app-1-")), "{log:#?}");
-	assert!(log.iter().any(|l| l.starts_with("detach b1-app-1-")), "{log:#?}");
-	assert!(!log.iter().any(|l| l.starts_with("detach b1-app-2-")), "{log:#?}");
+	assert!(log.iter().any(|l| l.starts_with("stop 00000001-")), "{log:#?}");
+	assert!(log.iter().any(|l| l.starts_with("detach b1-00000001-")), "{log:#?}");
+	assert!(!log.iter().any(|l| l.starts_with("detach b1-00000002-")), "{log:#?}");
 }
 
 #[tokio::test]
@@ -139,7 +139,7 @@ async fn a_deployment_is_deleted_only_once_stopped_and_is_then_not_found() {
 	driver.stop(&binding(), of()).await.unwrap();
 	driver.delete(&binding(), of()).await.unwrap();
 	assert_eq!(reason(driver.describe(&binding(), of()).await.unwrap_err()), "not_found");
-	assert!(lines(&log).iter().any(|l| l.starts_with("detach b1-app-1-")));
+	assert!(lines(&log).iter().any(|l| l.starts_with("detach b1-00000001-")));
 	// Its secrets, both copies, and its stop's mark go with it.
 	assert_eq!(std::fs::read_dir(driver.secrets.join("b1")).unwrap().count(), 0);
 	assert_eq!(std::fs::read_dir(driver.state.join("secrets/b1")).unwrap().count(), 0);
@@ -171,7 +171,7 @@ async fn a_restart_goes_on_past_a_failure_and_names_each() {
 	driver.deploy(&binding(), echo()).await.unwrap();
 	let other = DeploymentDeploy { runs: DeploymentRuns::App { id: 2 }, ..echo() };
 	driver.deploy(&binding(), other).await.unwrap();
-	let (one, two) = (id_of(&driver, "app/1"), id_of(&driver, "app/2"));
+	let (one, two) = (id_of(&driver, "00000001"), id_of(&driver, "00000002"));
 	// As a reboot ends every task.
 	for held in driver.containerd.held.lock().unwrap().values_mut() {
 		held.task = None;
