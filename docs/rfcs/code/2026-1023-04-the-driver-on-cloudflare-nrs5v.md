@@ -102,6 +102,20 @@ Decided by the author on 2026-10-23, from the research the Options below record.
   organization's own Workers, D1 databases and buckets, and a Cloudflare token cannot be scoped to
   names, so the driver's own discipline is the guard. A binding stays an account of its own; the id
   form only makes a shared account safe to bind.
+- **Bare ids, ownership by record**, decided by the author on 2026-10-24, RFC b8f35's rule and no
+  new one, replacing the install id's names. A resource the driver holds for the platform is named
+  by that resource's id, the scope's 8 hex digits, bare, with no prefix: a deployment's Worker by
+  its deployment's resource id, and an item by its id where it is held. What the driver holds for
+  itself, its own Worker, its state D1, its adapter Workers, and the bucket and user D1 it makes at
+  install, gets 8 hex digits it draws and checks against the account's existing names, likewise
+  bare. Before every call to Cloudflare the target name must be in the driver's own records, its
+  state D1, with its role; a name the records do not hold is never touched, whatever it looks like.
+  The one exception is the state D1 itself, found on reinstall by its marker table, since the
+  records cannot be read before it is found; the install id becomes that database's own drawn id,
+  and the marker rule stands. The exception list is unchanged, its exact names adopted by record
+  too. Recognising "ours" by a name's shape needed the marker patch after a foreign `driver-<8 hex>`
+  database could be taken; recognising it by record removes that class of mistake, and a public
+  app's address carries no role and number.
 - **An exception list, decided in principle by the author on 2026-10-24**: an organization's admin
   may register named resources the driver also manages, each mapped to an item id, so what is
   managed is the id-form resources and that list, and everything else is ignored. Its two details,
@@ -144,16 +158,16 @@ Decided by the author on 2026-10-23, from the research the Options below record.
   answered where it cannot be enforced; whether the binding's token or its hash is the Worker's
   secret; the account's Workers subdomain or a Custom Domain for a deployment's name; a bucket per object item or a
   prefix in one; how D1's size is held to an item's capacity. The first slice's, each provisional,
-  chosen by the advisor on 2026-10-24, each name of a resource since followed by the install id as
-  the Ledger has it:
+  chosen by the advisor on 2026-10-24, each name of a resource since a bare id, as the Decision has
+  it:
   - **Names.** The driver's Worker is `driver` and its D1 database `driver`, its tables `held`, one
     row of the generation, the policy and the grace, `items`, `tokens` and `deployments`. Its
     account's token is the secret `API_TOKEN`, an account-owned token holding Workers Scripts Edit
     alone, and the account's id the variable `ACCOUNT_ID`.
   - **The binding's token** is kept as its BLAKE3 in hex, the secret `BINDING`, as RFC 3d3nt keeps
     only a hash; once an `apply` carries `tokens`, the list in D1 stands in its place.
-  - **A deployment's Worker** is `app-<id>`, or `component-<name>` for a component, each followed
-    by the install id. Its version is the tag `version-<hash in hex>`, cut
+  - **A deployment's Worker** is named by its deployment's resource id, bare, an app's or a
+    component's. Its version is the tag `version-<hash in hex>`, cut
     short where a tag holds less, the rule written here when it is. Its address is
     `<Worker>.<the account's subdomain>.workers.dev`, a Custom Domain waiting on a domain, RFC
     vr5lw.
@@ -270,12 +284,12 @@ Decided by the author on 2026-10-23, from the research the Options below record.
     of the driver's table `database_held`, its item, `since` and the `size` last read.
 
   What makes it on an account, provisional, chosen by the advisor on 2026-10-24:
-  - **`mise run install`**, `scripts/install/install.res` beside `archive` and `dev`, makes what is absent
-    and passes over what is there, as monoflake/cloud's `install` does: the D1 database `driver`
-    and its migrations, the bucket `objects`, the Workers `driver` and `object` with the database's
-    id and the account's in a configuration of the moment, a deploy passed over where nothing
-    changed, and each secret put only where its name is missing; `--dry-run` prints each wrangler
-    command, a secret by its name alone.
+  - **`mise run install`**, `scripts/install/install.res` beside `archive` and `dev`, makes what is
+    absent and passes over what is there, as monoflake/cloud's `install` does: the D1 database
+    `driver` and its migrations, the bucket `objects`, the Workers `driver` and `object` with the
+    database's id and the account's in a configuration of the moment, a deploy passed over where
+    nothing changed, and each secret put only where its name is missing; `--dry-run` prints each
+    wrangler command, a secret by its name alone.
   - **What it is given comes from the environment**, this repository being public: since
     2026-10-24 `DRIVER_ACCOUNT_ID` and `DRIVER_INSTALL_TOKEN` for itself, never the ambient
     `CLOUDFLARE_*` names, as the Ledger has it, and the Worker `driver`'s `API_TOKEN` as
@@ -297,14 +311,9 @@ alone bills.
 
 Choices made provisionally while the thread runs, read by the author at its end.
 
-- **The id is an install id**, provisional, chosen by the advisor on 2026-10-24: 8 lowercase hex
-  digits drawn at random by `install`, kept in the driver's state.
-- **Every resource's name is `<name>-<install id>`**, provisional, chosen by the advisor on
-  2026-10-24: the Workers `driver-…`, `object-…` and `database-…`, the D1 `driver-…`, the bucket
-  `objects-…`, and a deployment's Worker `app-<id>-…` or `component-<name>-…`. The id goes last so
-  no name starts with a digit.
-- **An owned resource is one whose name ends in `-<its own install id>`**, provisional, chosen by
-  the advisor on 2026-10-24.
+- **The install id's names, `<role>-<install id>`, and ownership by a name's ending** were the
+  advisor's provisional choices of 2026-10-24, replaced the same day by the author's bare ids,
+  ownership by record, in the Decision.
 - **Which kinds the driver offers is chosen at install by the input `DRIVER_KINDS`**, defaulting to
   `function`, provisional, chosen by the advisor on 2026-10-24. Management describe reports the
   kinds offered.
@@ -321,8 +330,8 @@ Choices made provisionally while the thread runs, read by the author at its end.
   advisor on 2026-10-24, as `container` and `volume` are refused today.
 - **How install recovers its install id**, provisional, chosen by the advisor on 2026-10-24, the
   first rule replaced since it took any name of the form for an install:
-  - A D1 is the driver's only when its name is `driver-<8 hex>` and it holds the driver's marker:
-    its `held` table with the install id equal to its name's suffix, read by a read-only query.
+  - A D1 is the driver's only when its name is 8 hex digits and it holds the driver's marker, its
+    `install` table naming that same id, read by a read-only query.
   - A name of that form without the marker is foreign. It is never migrated or written, and the
     dry run names it as passed over.
   - Recovery counts marked databases alone: none, draw; one, reuse; more, refuse and list them.
@@ -351,19 +360,11 @@ Choices made provisionally while the thread runs, read by the author at its end.
 - **A field carrying the list in a kind's management contract is monoflake/platform's**,
   provisional, chosen by the advisor on 2026-10-24: it is reported as a fact before building, and
   recorded in platform's RFCs, citing nrs5v.
-- **The user database's D1 is `database-<install id>`**, beside the Worker `database-<install id>`,
-  provisional, chosen by the advisor on 2026-10-24, since the two namespaces are apart; it joins the
-  names above.
 - **A listed Worker stands for a deployment**, provisional, chosen by the advisor on 2026-10-24: an
   app's id or a component's name, as the deployments interface identifies it. The driver then
-  deploys that deployment to the listed name instead of `app-<id>-<install id>`. It is that
+  deploys that deployment to the listed name instead of its own id. It is that
   deployment's Worker, never a management item. A listed bucket or D1 stands for a management
   item's id.
-- **The install id is recorded in driver's model**, provisional, chosen by the advisor on
-  2026-10-24: `INSTALL_ID` and `KINDS` in the env type, the kinds in `Management.apply`, and the
-  install id in `workerOf`, with no cast left. The name check in `cloudflare/src/installed.res`
-  stays the guard: every call to Cloudflare holds the name to `<name>-<own install id>`, the
-  author's "everything else is ignored" enforced in code.
 - **With `KINDS` lacking `function`, every deployments call is refused as `beyond_host`**,
   provisional, chosen by the advisor on 2026-10-24, as a list naming a kind not offered is refused.
 - **The dry run says which, by a read-only `d1 list`**, provisional, chosen by the advisor on
@@ -378,8 +379,6 @@ Choices made provisionally while the thread runs, read by the author at its end.
   `KINDS` unset at run time is a broken install, not a default.
 - **To try on the empty test account**, provisional, chosen by the advisor on 2026-10-24: install
   finding what a dropped kind left by `wrangler versions list --json --name <Worker>`.
-- **Each item's D1 is named `database-<item id>-<install id>`**, provisional, chosen by the advisor
-  on 2026-10-24.
 - **Reasons the deployments contract already declares**, provisional, chosen by the advisor on
   2026-10-24, monoflake/platform's contract unchanged. With `KINDS` lacking `function`, `deploy`
   answers `beyond_host`, since the host cannot hold it, and `stop`, `resume` and `describe` answer
@@ -405,8 +404,8 @@ Choices made provisionally while the thread runs, read by the author at its end.
     account.
   - That shrinks the orphan window to the gap between making the database and its first statement,
     a gap two API calls cannot close.
-  - For what is left: a `driver-<8 hex>` database with no tables at all is reported by the dry run
-    and the run as "possibly an interrupted install of this driver; delete it by hand if it is
+  - For what is left: a database named by 8 hex digits with no tables at all is reported by the dry
+    run and the run as "possibly an interrupted install of this driver; delete it by hand if it is
     yours". It is still never touched, and a non-conflicting id is drawn.
 - **curl for List Workers, the token on stdin as a header**, provisional, chosen by the advisor on
   2026-10-24, wrangler listing no Workers. If paging exists, install reads every page before
@@ -432,3 +431,46 @@ Choices made provisionally while the thread runs, read by the author at its end.
   the account's Workers subdomain enabled first by hand. Still to try: List Workers paging, the
   not-found code, a query of `sqlite_master` on an account holding a foreign database, and the free
   plan's 10 ms of CPU under a deploy.
+- **A component deployed into a scope is that scope's resource**, provisional, chosen by the advisor
+  on 2026-10-24, so it gets a b8f35 resource id, 8 hex digits. The deployer draws it, the control
+  above the binding, as it draws every id in the scope; the driver never does. So
+  `deployment-runs`' `component` case gains an `id` beside its name, and the component's Worker is
+  named by that id like an app's. Every resource in an organization carries the organization-unique
+  id, whatever its kind; a driver is beneath the scope and mints only ids for its own parts, never
+  the scope's. Until the control draws ids per b8f35, numbering apps 1, 2, `00000001`-style names
+  are the scaffold's form.
+- **The matcher passes over fields a sample does not write, with `$absent` for a field that must be
+  missing**, provisional, chosen by the advisor on 2026-10-24: RFC p8e8k's landed rule, "what a
+  sample names is checked, and nothing else", so the old whole-set match was the deviation.
+- **describe never writes**, provisional, chosen by the advisor on 2026-10-24. It leaves a warning
+  out of its answer once the resource is gone, and the row is removed by the next apply or by the
+  sweep, which already writes only when something changed. A read that writes is how the overwrite
+  risk between the sweep and the control's update arose, so describe stays a read.
+- **"Gone" is not taken from `running`**, provisional, chosen by the advisor on 2026-10-24, but from
+  whether the script exists at all, a read of that script by name or List Workers, so "exists but
+  never deployed" is never read as gone.
+- **Three edges of the exception list**, provisional, chosen by the advisor on 2026-10-24, the name
+  check being "in the driver's records, or on the exception list":
+  - A listed name the driver's own records already hold, a resource it made itself, refuses the
+    apply with a reason apply already declares: adopting what is already owned is a contradiction,
+    not an update.
+  - Pointing a listed name at another deployment in one apply is refused. Moving a name takes two
+    applies, one dropping it, released with the `delete_by_hand` warning, and one adding it for the
+    new deployment, so no running deployment loses its Worker silently.
+  - A name dropped from the list releases its deployment's row in the same apply: the resource is
+    left untouched, the `delete_by_hand` warning is raised, and the row stays only as long as that
+    warning does.
+- **Tried on the empty test account, 2026-10-24**: Workers, D1 and R2 accept names of 8 hex digits
+  that begin with a digit; a missing script reads as code 10007; `wrangler delete` removed the
+  script but answered `Authentication error [code: 10000]` on its next call, a list of the account's
+  KV namespaces, which the install token may not read and the driver never needs; the test account
+  has R2 enabled and the install token holds R2 rights, so `object` can be tried there by installing
+  with `DRIVER_KINDS=function,object` once the bare names land.
+- **A listed name that does not exist on the account is not created**, provisional, chosen by the
+  advisor on 2026-10-24. Adoption takes only what is there. The entry is refused when listed, or
+  reported as missing on describe if it vanishes later, never uploaded into being.
+- **The bucket and the user D1 are the driver's own containers**, provisional, chosen by the advisor
+  on 2026-10-24, correcting the advisor's own relay, not the author's rule. In today's structure,
+  one bucket and one user D1 per binding made at install before any item exists, they are named by
+  ids the driver draws and checks, like its own Workers and state D1; the organization's resource is
+  the item, an object item named by its id where it is held, its prefix `<item id>/`, as today.
