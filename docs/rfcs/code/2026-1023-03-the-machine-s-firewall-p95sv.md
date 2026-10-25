@@ -64,3 +64,14 @@ Choices made provisionally while the thread runs, read by the author at its end.
   IPv6 link-local address. Both tables stand beside NixOS's firewall until this RFC's table is
   built; the machine's change is applied before the driver change it serves, and reverts by itself
   unless confirmed.
+- **A container holds no `CAP_NET_RAW`**, a small matter, provisional, chosen by the advisor on
+  2026-10-24. It closes both spoofing a neighbor's source and sending a raw frame past the fence
+  at once, and an image that truly needs raw sockets is a request to be made, not a default. A
+  second set binding addresses to the bridge's ports stays unbuilt unless that request comes.
+- **The fence keeps RFC 6598's shared space and anything leaving by `tailscale0` dropped**, a small
+  matter, provisional, chosen by the advisor on 2026-10-24: a container must never reach another
+  machine's trusted interface on the tailnet, and the driver's API port is the case in point.
+- **One switch, one trial**, a small matter, provisional, chosen by the advisor on 2026-10-24: the
+  NixOS firewall opening the entry's port on the containers' bridge is applied in the same switch
+  as the fence, so it comes under the same trial and reverts with it, or under a trial of its own
+  that the run sheet names.
