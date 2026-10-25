@@ -49,7 +49,7 @@ pub(crate) struct Arguments {
 pub(crate) struct Subnet(u32, u32);
 
 impl Subnet {
-	fn holds(self, ip: IpAddr) -> bool {
+	pub(crate) fn holds(self, ip: IpAddr) -> bool {
 		match ip.to_canonical() {
 			IpAddr::V4(v4) => u32::from(v4) & self.1 == self.0,
 			IpAddr::V6(_) => false,
@@ -58,7 +58,7 @@ impl Subnet {
 }
 
 /// A subnet as `--subnet` takes it.
-fn subnet(text: &str) -> Result<Subnet, String> {
+pub(crate) fn subnet(text: &str) -> Result<Subnet, String> {
 	let malformed = || "expected an IPv4 subnet in CIDR notation".to_owned();
 	let (address, length) = text.split_once('/').ok_or_else(malformed)?;
 	let address: Ipv4Addr = address.parse().map_err(|_| malformed())?;
@@ -96,6 +96,29 @@ const HOP: [HeaderName; 6] = [
 const FORWARDED_FOR: HeaderName = HeaderName::from_static("x-forwarded-for");
 const FORWARDED_PROTO: HeaderName = HeaderName::from_static("x-forwarded-proto");
 const FORWARDED_HOST: HeaderName = HeaderName::from_static("x-forwarded-host");
+
+/// The header families a proxy or an edge writes of a request or its client, by prefix, as the
+/// control's `reach.res` takes every `cf-` header for the edge's.
+const PROXIED_FAMILIES: [&str; 3] = ["cf-", "x-forwarded", "x-original-forwarded"];
+
+/// The rest of what a proxy or an edge says of a request or its client, by name.
+const PROXIED: [&str; 9] = [
+	"forwarded",
+	"via",
+	"cdn-loop",
+	"true-client-ip",
+	"x-real-ip",
+	"x-client-ip",
+	"x-cluster-client-ip",
+	"client-ip",
+	"fastly-client-ip",
+];
+
+/// Whether a header describes forwarding or the client, its `_` read as `-` as some stacks read it.
+fn proxied(name: &str) -> bool {
+	let name = name.to_ascii_lowercase().replace('_', "-");
+	PROXIED_FAMILIES.iter().any(|f| name.starts_with(f)) || PROXIED.contains(&name.as_str())
+}
 
 /// What kind of deployment a name names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -311,10 +334,12 @@ impl<C: Containerd + 'static> Find for Labels<C> {
 	}
 }
 
-/// What every request is served with, what finds a deployment and the client that reaches it.
+/// What every request is served with, what finds a deployment, the client that reaches it and the
+/// containers' subnet.
 struct Entry<F> {
 	find: Arc<F>,
 	client: Client<HttpConnector, Body>,
+	subnet: Subnet,
 }
 
 /// An answer of the entry's own, in plain text.
@@ -336,12 +361,22 @@ fn unhopped(headers: &mut HeaderMap) {
 	}
 }
 
-/// The host a request was sent to, the first of its `X-Forwarded-Host`, its target's authority and
-/// its `Host` that names a deployment, else the first it has, RFC rxmd9.
-fn host(request: &Request) -> Option<String> {
-	// Trusted, as only loopback, the private address, the tunnel and a reacher reach it; a reacher
-	// is held to its reaching by the host chosen here.
+/// Every header describing forwarding or the client removed, so a container's chain is its own.
+fn unproxied(headers: &mut HeaderMap) {
+	let named: Vec<HeaderName> = headers.keys().filter(|n| proxied(n.as_str())).cloned().collect();
+	for name in named {
+		headers.remove(name);
+	}
+}
+
+/// The host a request names, a container's by its `Host` alone, a proxy's by the first of its
+/// `X-Forwarded-Host`, target's authority and `Host` naming a deployment, RFCs rxmd9 and y2xd3.
+fn host(request: &Request, peer: IpAddr, subnet: Subnet) -> Option<String> {
 	let text = |name| request.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_owned);
+	// A container is nobody's proxy, so it is held to its reaching by the name it sent itself.
+	if subnet.holds(peer) {
+		return text(header::HOST);
+	}
 	// workerd writes the gateway's host into the first alone, and an edge writes its own name there.
 	let given = [
 		text(FORWARDED_HOST),
@@ -354,7 +389,7 @@ fn host(request: &Request) -> Option<String> {
 }
 
 /// The request carried to the deployment at its address, as it came but for the headers of its
-/// connection and the forwarding headers added, and the answer carried back the same.
+/// connection, a container's forwarding headers and those added, and the answer carried back.
 async fn forwarded<F>(
 	entry: &Entry<F>,
 	address: SocketAddr,
@@ -362,6 +397,7 @@ async fn forwarded<F>(
 	host: &str,
 	request: Request,
 ) -> Response {
+	let contained = entry.subnet.holds(peer.ip());
 	let (mut parts, body) = request.into_parts();
 	let mut target = parts.uri.into_parts();
 	target.scheme = Some(Scheme::HTTP);
@@ -373,6 +409,9 @@ async fn forwarded<F>(
 	parts.version = Version::HTTP_11;
 	let headers = &mut parts.headers;
 	unhopped(headers);
+	if contained {
+		unproxied(headers);
+	}
 	let before = headers.get(&FORWARDED_FOR).and_then(|v| v.to_str().ok());
 	let peer = peer.ip().to_string();
 	let chain = before.map_or_else(|| peer.clone(), |b| format!("{b}, {peer}"));
@@ -404,9 +443,13 @@ async fn forwarded<F>(
 async fn entered<F: Find>(entry: &Entry<F>, peer: SocketAddr, request: Request) -> Response {
 	// The challenge path of RFC vr5lw is not answered here yet, RFC n0o4l.
 	let started = Instant::now();
-	let host = host(&request);
+	// A container's `Host` names its target, so more than one is answered 400, RFC 9112 section 3.2.
+	let twice = entry.subnet.holds(peer.ip())
+		&& request.headers().get_all(header::HOST).iter().nth(1).is_some();
+	let host = host(&request, peer.ip(), entry.subnet);
 	let named = host.as_deref().and_then(named);
 	let (answer, name) = match (named, host) {
+		_ if twice => (own(StatusCode::BAD_REQUEST, "a request has one host\n"), "-".to_owned()),
 		(Some(named), Some(host)) => {
 			let name = named.name();
 			let answer = match entry.find.find(named, peer.ip()).await {
@@ -475,13 +518,14 @@ async fn connected<F: Find>(
 pub(crate) async fn serve<F: Find>(
 	listener: tokio::net::TcpListener,
 	find: Arc<F>,
+	subnet: Subnet,
 	stopped: impl Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
 	let mut connector = HttpConnector::new();
 	connector.set_nodelay(true);
 	connector.set_connect_timeout(Some(CONNECTING));
 	let client = Client::builder(TokioExecutor::new()).build(connector);
-	let entry = Arc::new(Entry { find, client });
+	let entry = Arc::new(Entry { find, client, subnet });
 	let (stop, stopping) = tokio::sync::watch::channel(false);
 	// Each connection holds a receiver, so every one has closed once none is left.
 	let (closed, open) = tokio::sync::watch::channel(());
@@ -564,7 +608,7 @@ pub(crate) async fn run(arguments: Arguments) -> ExitCode {
 	let stopped = async move {
 		let _ = stopping.wait_for(|stopped| *stopped).await;
 	};
-	let mut serving = std::pin::pin!(serve(listener, find, stopped));
+	let mut serving = std::pin::pin!(serve(listener, find, arguments.subnet, stopped));
 	let served = tokio::select! {
 		served = &mut serving => Some(served),
 		() = terminated() => None,
@@ -607,7 +651,7 @@ mod tests {
 	use std::time::{Duration, Instant};
 
 	use super::{
-		Find, Found, Gate, KEPT, Kind, Labels, Last, Named, allowed, host, named, serve, subnet,
+		Find, Found, Gate, KEPT, Kind, Labels, Last, Named, Subnet, allowed, host, named, serve, subnet,
 	};
 	use driver_machine_container::Listed;
 	use driver_machine_container::{Containerd, Fault, Task};
@@ -653,6 +697,11 @@ mod tests {
 
 	fn peer(ip: &str) -> IpAddr {
 		ip.parse().unwrap()
+	}
+
+	/// The containers' subnet every test but a container's own runs the entry with.
+	fn containers() -> Subnet {
+		subnet("192.0.2.0/24").unwrap()
 	}
 
 	#[test]
@@ -727,11 +776,7 @@ mod tests {
 	}
 
 	fn labels(held: Option<Vec<Listed>>) -> Labels<Held> {
-		Labels {
-			containerd: Held(held),
-			last: Last::default(),
-			subnet: subnet("192.0.2.0/24").unwrap(),
-		}
+		Labels { containerd: Held(held), last: Last::default(), subnet: containers() }
 	}
 
 	#[tokio::test]
@@ -797,6 +842,7 @@ mod tests {
 
 	#[test]
 	fn the_first_forwarded_name_naming_a_deployment_is_taken() {
+		let host = |request| host(request, peer("127.0.0.1"), containers());
 		let forwarded = Request::builder()
 			.uri("http://10.200.0.1:36879/")
 			.header("host", "10.200.0.1:36879")
@@ -844,7 +890,17 @@ mod tests {
 	/// The entry started on loopback over the deployments given, and its address.
 	async fn entry(found: BTreeMap<Named, Found>) -> SocketAddr {
 		let (listener, address) = listening().await;
-		tokio::spawn(serve(listener, Arc::new(Stub(found)), std::future::pending()));
+		tokio::spawn(serve(listener, Arc::new(Stub(found)), containers(), std::future::pending()));
+		address
+	}
+
+	/// The entry started on loopback with loopback as the containers' subnet, so every request a
+	/// test sends is a container's, over the containers given.
+	async fn contained(listed: Vec<Listed>) -> SocketAddr {
+		let (listener, address) = listening().await;
+		let loopback = subnet("127.0.0.0/8").unwrap();
+		let found = Labels { containerd: Held(Some(listed)), last: Last::default(), subnet: loopback };
+		tokio::spawn(serve(listener, Arc::new(found), loopback, std::future::pending()));
 		address
 	}
 
@@ -943,7 +999,7 @@ mod tests {
 			let _ = stopping.wait_for(|s| *s).await;
 		};
 		let found = Arc::new(Stub(BTreeMap::from([(of(1, 1), Found::Running(upstream))])));
-		let serving = tokio::spawn(serve(listener, found, stopped));
+		let serving = tokio::spawn(serve(listener, found, containers(), stopped));
 		let asked = tokio::spawn(sent(at, get("app-1.b1")));
 		tokio::time::sleep(Duration::from_millis(100)).await;
 		stop.send(true).unwrap();
@@ -960,7 +1016,8 @@ mod tests {
 		let stopped = async move {
 			let _ = stopping.wait_for(|s| *s).await;
 		};
-		let serving = tokio::spawn(serve(listener, Arc::new(Stub(BTreeMap::new())), stopped));
+		let stub = Arc::new(Stub(BTreeMap::new()));
+		let serving = tokio::spawn(serve(listener, stub, containers(), stopped));
 		let mut stream = TcpStream::connect(at).unwrap();
 		tokio::time::sleep(Duration::from_millis(100)).await;
 		stop.send(true).unwrap();
@@ -975,5 +1032,150 @@ mod tests {
 		.unwrap();
 		assert!(read.starts_with("HTTP/1.1 404 "), "{read}");
 		tokio::time::timeout(Duration::from_secs(2), serving).await.unwrap().unwrap().unwrap();
+	}
+
+	/// The entry's answer to a container asking for what its reaching does not hold.
+	const REFUSED: &str = "the deployment asking does not reach this one\n";
+
+	/// The entry over app 1 at 127.0.0.1 reaching app 2 alone, app 2 an upstream echoing on `::1`
+	/// and app 3 never dialed, so every request a test sends is app 1's by its address alone.
+	async fn reacher() -> SocketAddr {
+		let listener = tokio::net::TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, 0)).await.unwrap();
+		let upstream = listener.local_addr().unwrap().to_string();
+		tokio::spawn(async move { axum::serve(listener, Router::new().fallback(echoed)).await });
+		contained(vec![
+			container("app/2", &upstream, ""),
+			container("app/3", "127.0.0.3:1", ""),
+			container("app/1", "127.0.0.1:1", "app/2"),
+		])
+		.await
+	}
+
+	/// A request for `target` with its `Host` and an `X-Forwarded-Host` where one is given.
+	fn asked(target: &str, host: &str, forwarded: Option<&str>) -> String {
+		let forwarded = forwarded.map(|f| format!("X-Forwarded-Host: {f}\r\n")).unwrap_or_default();
+		format!("GET {target} HTTP/1.1\r\nHost: {host}\r\n{forwarded}Connection: close\r\n\r\n")
+	}
+
+	#[tokio::test]
+	async fn a_container_asking_by_host_for_what_it_does_not_reach_is_refused() {
+		let (head, body) = sent(reacher().await, asked("/", "app-3.b1", None)).await;
+		assert!(head.starts_with("HTTP/1.1 403 "), "{head}");
+		assert_eq!(body, REFUSED);
+	}
+
+	#[tokio::test]
+	async fn a_container_is_answered_for_its_host_and_its_forwarded_host_is_ignored() {
+		let (head, body) = sent(reacher().await, asked("/", "app-2.b1", Some("app-3.b1"))).await;
+		assert!(head.starts_with("HTTP/1.1 201 "), "{head}");
+		for line in ["host: app-2.b1", "x-forwarded-host: app-2.b1"] {
+			assert!(body.lines().any(|l| l == line), "{line} not in {body}");
+		}
+	}
+
+	#[tokio::test]
+	async fn a_container_cannot_forward_its_way_past_its_reaching() {
+		let (head, body) = sent(reacher().await, asked("/", "app-3.b1", Some("app-2.b1"))).await;
+		assert!(head.starts_with("HTTP/1.1 403 "), "{head}");
+		assert_eq!(body, REFUSED);
+	}
+
+	#[tokio::test]
+	async fn a_container_cannot_name_past_its_host_by_an_absolute_target() {
+		let (head, body) = sent(reacher().await, asked("http://app-2.b1/", "app-3.b1", None)).await;
+		assert!(head.starts_with("HTTP/1.1 403 "), "{head}");
+		assert_eq!(body, REFUSED);
+	}
+
+	#[tokio::test]
+	async fn a_proxy_on_loopback_is_still_named_by_its_forwarded_host() {
+		let (listener, upstream) = listening().await;
+		tokio::spawn(async move { axum::serve(listener, Router::new().fallback(echoed)).await });
+		let at = entry(BTreeMap::from([(of(1, 1), Found::Running(upstream))])).await;
+		let request = asked("/", "127.0.0.1:36879", Some("app-1.b1.example.com"));
+		let (head, body) = sent(at, request).await;
+		assert!(head.starts_with("HTTP/1.1 201 "), "{head}");
+		let line = "x-forwarded-host: app-1.b1.example.com";
+		assert!(body.lines().any(|l| l == line), "{line} not in {body}");
+	}
+
+	#[tokio::test]
+	async fn a_containers_own_forwarding_headers_never_reach_its_target() {
+		let request = "GET / HTTP/1.1\r\nHost: app-2.b1\r\nX-Forwarded-For: 203.0.113.9\r\n\
+			Forwarded: for=203.0.113.9\r\nX-Real-IP: 203.0.113.9\r\nX-Forwarded-Proto: https\r\n\
+			X-Forwarded-Port: 443\r\nVia: 1.1 planted\r\nConnection: close\r\n\r\n";
+		let (head, body) = sent(reacher().await, request.to_owned()).await;
+		assert!(head.starts_with("HTTP/1.1 201 "), "{head}");
+		for line in ["x-forwarded-for: 127.0.0.1", "x-forwarded-proto: http"] {
+			assert!(body.lines().any(|l| l == line), "{line} not in {body}");
+		}
+		assert!(!body.contains("203.0.113.9"), "{body}");
+		for name in ["forwarded:", "x-real-ip:", "x-forwarded-port:", "via:"] {
+			assert!(!body.lines().any(|l| l.starts_with(name)), "{name} in {body}");
+		}
+	}
+
+	#[tokio::test]
+	async fn a_containers_edge_and_client_headers_never_reach_its_target() {
+		let request = "GET / HTTP/1.1\r\nHost: app-2.b1\r\nCF-Connecting-IPv6: 2001:db8::9\r\n\
+			CF-Visitor: planted\r\nCF-Ray: planted\r\nCDN-Loop: planted\r\nTrue-Client-IP: planted\r\n\
+			X-Forwarded: planted\r\nX-Original-Forwarded-For: planted\r\n\
+			X-Cluster-Client-IP: planted\r\nClient-IP: planted\r\nFastly-Client-IP: planted\r\n\
+			X_Forwarded_For: planted\r\nCf_Ray: planted\r\nX-Kept: kept\r\nConnection: close\r\n\r\n";
+		let (head, body) = sent(reacher().await, request.to_owned()).await;
+		assert!(head.starts_with("HTTP/1.1 201 "), "{head}");
+		assert!(!body.contains("planted") && !body.contains("2001:db8"), "{body}");
+		assert!(body.lines().any(|l| l == "x-kept: kept"), "{body}");
+		assert!(body.lines().any(|l| l == "x-forwarded-for: 127.0.0.1"), "{body}");
+	}
+
+	#[test]
+	fn a_header_describing_forwarding_or_the_client_is_known_by_family_name_and_underscore() {
+		for name in [
+			"cf-connecting-ipv6",
+			"cf-ipcountry",
+			"cdn-loop",
+			"true-client-ip",
+			"x-forwarded",
+			"x-forwarded-for",
+			"x-original-forwarded-host",
+			"x-cluster-client-ip",
+			"client-ip",
+			"fastly-client-ip",
+			"x_forwarded_for",
+			"CF_Visitor",
+			"Via",
+		] {
+			assert!(super::proxied(name), "{name}");
+		}
+		for name in ["host", "x-kept", "cfx", "client-hints", "user-agent", "x-real"] {
+			assert!(!super::proxied(name), "{name}");
+		}
+	}
+
+	#[tokio::test]
+	async fn a_container_sending_two_hosts_is_answered_bad_request() {
+		let request = "GET / HTTP/1.1\r\nHost: app-2.b1\r\nHost: app-3.b1\r\nConnection: close\r\n\r\n";
+		let (head, body) = sent(reacher().await, request.to_owned()).await;
+		assert!(head.starts_with("HTTP/1.1 400 "), "{head}");
+		assert_eq!(body, "a request has one host\n");
+	}
+
+	#[tokio::test]
+	async fn a_proxys_chain_is_kept_and_extended() {
+		let (listener, upstream) = listening().await;
+		tokio::spawn(async move { axum::serve(listener, Router::new().fallback(echoed)).await });
+		let at = entry(BTreeMap::from([(of(1, 1), Found::Running(upstream))])).await;
+		let request = "GET / HTTP/1.1\r\nHost: app-1.b1\r\nX-Forwarded-For: 203.0.113.9\r\n\
+			Forwarded: for=203.0.113.9\r\nX-Real-IP: 203.0.113.9\r\nConnection: close\r\n\r\n";
+		let (head, body) = sent(at, request.to_owned()).await;
+		assert!(head.starts_with("HTTP/1.1 201 "), "{head}");
+		for line in [
+			"x-forwarded-for: 203.0.113.9, 127.0.0.1",
+			"forwarded: for=203.0.113.9",
+			"x-real-ip: 203.0.113.9",
+		] {
+			assert!(body.lines().any(|l| l == line), "{line} not in {body}");
+		}
 	}
 }
