@@ -46,6 +46,21 @@ Decided by the author on 2026-10-23.
   plugin's or moves into the table; how a deployment's `network` is written as addresses and ports
   on a machine.
 
+**The fence is not tried and not rolled back**, decided by the author on 2026-10-24, narrowing the
+rule that a firewall changed on a machine reached remotely is tried before it is kept.
+`table bridge fence` and `table inet fence` are held instead by a check: every rule in
+both matches traffic in or out by the containers' bridge or its ports, and every base chain's policy
+is accept, so by construction the fence cannot touch the machine's remote access, which the trial
+is for. driver(machine) and its entry start only with the fence loaded, and fail closed. Applied to
+the fence the trial did harm: the daily upgrade has nobody to confirm it, so its rollback deleted
+both tables and left the entry's port open to every container; every upgrade counted as a change
+and dropped the driver's elements; and it kept nothing from becoming the boot default. **The trial
+stays for this RFC's own `table inet filter`**, which replaces NixOS's firewall and touches remote
+access, and that table's trial must meet four conditions: it is started by the rules' text
+changing, never by a store path changing; a failed apply never cancels the previous rollback's
+timer; nothing becomes the boot default before it is confirmed; and a failed rollback is reported as
+a failure.
+
 ### Ledger
 
 Choices made provisionally while the thread runs, read by the author at its end.
@@ -62,8 +77,7 @@ Choices made provisionally while the thread runs, read by the author at its end.
   `reaching`, never a rule: a reacher reaches its targets through the machine's local entry, by
   name. The host side also closes what a container could send past its own namespace's rules, an
   IPv6 link-local address. Both tables stand beside NixOS's firewall until this RFC's table is
-  built; the machine's change is applied before the driver change it serves, and reverts by itself
-  unless confirmed.
+  built; the machine's change is applied before the driver change it serves.
 - **A container holds no `CAP_NET_RAW`**, a small matter, provisional, chosen by the advisor on
   2026-10-24. It closes both spoofing a neighbor's source and sending a raw frame past the fence
   at once, and an image that truly needs raw sockets is a request to be made, not a default. A
@@ -71,9 +85,10 @@ Choices made provisionally while the thread runs, read by the author at its end.
 - **The fence keeps RFC 6598's shared space and anything leaving by `tailscale0` dropped**, a small
   matter, provisional, chosen by the advisor on 2026-10-24: a container must never reach another
   machine's trusted interface on the tailnet, and the driver's API port is the case in point.
-- **One switch, one trial**, a small matter, provisional, chosen by the advisor on 2026-10-24: the
-  NixOS firewall opening the entry's port on the containers' bridge is applied in the same switch
-  as the fence, so it comes under the same trial and reverts with it.
+- **The entry's port needs no trial**, a small matter, provisional, chosen by the advisor on
+  2026-10-24, the author having decided the fence has none: the NixOS firewall opening the entry's
+  port on the containers' bridge is applied in the same switch as the fence, and nothing listens
+  behind it unless the fence is up.
 - **The fence and a driver holding no `CAP_NET_RAW` go in one step**, a small matter, provisional,
   chosen by the advisor on 2026-10-24: an element matches by source address, and only a raw socket
   forges one, by ARP or by source, so no set binding a bridge port to its address is built. A
