@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 
 use driver_machine_container::{Binding, Deployments, Host, Hosted, Refused, SECRETS};
 use envelope::contracts::{
-	DeploymentDeleted, DeploymentDeploy, DeploymentDescribed, DeploymentForm, DeploymentOf,
-	DeploymentRuntime,
+	DeploymentDeleted, DeploymentDeploy, DeploymentDescribed, DeploymentForm, DeploymentHanded,
+	DeploymentOf, DeploymentRuns, DeploymentRuntime,
 };
 
 use crate::{
@@ -35,9 +35,30 @@ fn checked(input: &DeploymentDeploy) -> Result<(), Refused> {
 			| DeploymentRuntime::Youki,
 		) => return Err(beyond("modules run on workerd alone")),
 	}
-	match input.isolation.iter().all(|i| STANDS.contains(i)) {
-		true => Ok(()),
-		false => Err(beyond("workerd stands on an isolate and the kernel's isolation alone")),
+	if !input.isolation.iter().all(|i| STANDS.contains(i)) {
+		return Err(beyond("workerd stands on an isolate and the kernel's isolation alone"));
+	}
+	once(input.handed.as_deref().unwrap_or_default())
+}
+
+/// Each value handed once, as the container kind holds it, refused before anything is fetched.
+fn once(handed: &[DeploymentHanded]) -> Result<(), Refused> {
+	let mut seen = std::collections::HashSet::new();
+	let twice = !handed.iter().all(|h| seen.insert(std::mem::discriminant(h)));
+	match twice {
+		false => Ok(()),
+		true => Err(Refused {
+			reason: "invalid",
+			message: Some("a value is handed more than once".to_owned()),
+		}),
+	}
+}
+
+/// A deployment as a person reads it.
+fn named(runs: &DeploymentRuns) -> String {
+	match runs {
+		DeploymentRuns::App { id } => format!("the app {id}"),
+		DeploymentRuns::Component { component, id } => format!("the component {component} {id:08x}"),
 	}
 }
 
@@ -82,14 +103,20 @@ where
 	) -> Result<DeploymentDescribed, Refused> {
 		checked(&input)?;
 		input.into = Some(container(binding, input.into)?);
-		// Deployed again the same, it is the one deployment, and nothing is fetched for it.
-		let of = DeploymentOf { runs: input.runs.clone() };
-		match self.containers.describe(binding, of).await {
-			Ok(described) if described.version == input.version => return Ok(described),
-			Ok(_) => {}
-			Err(refused) if refused.reason == "not_found" => {}
-			Err(refused) => return Err(refused),
+		// What it reaches is deployed on its binding, stopped or not, RFC y2xd3.
+		for target in input.reaching.iter().flatten() {
+			let of = DeploymentOf { runs: target.clone() };
+			match self.containers.describe(binding, of).await {
+				Ok(_) => {}
+				Err(refused) if refused.reason == "not_found" => {
+					let message = format!("{} is not deployed on this binding", named(target));
+					return Err(Refused { reason: "invalid", message: Some(message) });
+				}
+				Err(refused) => return Err(refused),
+			}
 		}
+		// Whether it is the one deployment already is the container kind's to tell, which keeps what
+		// it reaches, so the bundle is fetched each time.
 		let bytes = self.containers.fetch(&binding.namespace, &input.artifact).await?;
 		let bundle = Bundle::unpack(&bytes)?;
 		let worker = Worker::of(&input, &bundle);

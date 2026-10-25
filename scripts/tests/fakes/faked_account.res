@@ -4,9 +4,16 @@
  */
 open Asserted
 
-/** A made-up install id, the one each faked draw answers. */
+/** A made-up install id, the first name each faked install draws, its state D1's. */
 let id = "0a1b2c3d"
-let full = name => `${name}-${id}`
+
+/** The names a first install draws in turn, made up, each part's by its role. */
+let drawnNames = ["0a1b2c3d", "1b2c3d4e", "2c3d4e5f", "3d4e5f6a", "4e5f6a7b", "5f6a7b8c"]
+let driverName = "1b2c3d4e"
+let objectName = "2c3d4e5f"
+let bucketName = "3d4e5f6a"
+let databaseName = "4e5f6a7b"
+let userDatabaseName = "5f6a7b8c"
 
 /** What a Worker on the faked account holds, its versions with their tags and its secrets. */
 type held = {
@@ -27,7 +34,33 @@ type account = {
   marks: Dict.t<string>,
   /** The tables a D1 not the driver's holds of its own. */
   own: Dict.t<array<string>>,
+  /** The names each D1's table `owned` records, by their roles. */
+  records: Dict.t<array<(string, string)>>,
+  /** What the faked control answers a bind, and each bind's address, bearer and body. */
+  mutable control: option<string>,
+  binds: array<(string, string, string)>,
 }
+
+/** The faked control's base, a reserved name, RFC 2606. */
+let base = "https://control.example.com/v1/app-2"
+
+/** What the control answers where it recorded the origin sent, binding 7 a made-up one. */
+let recorded = origin =>
+  JSON.stringify(
+    JSON.Object(
+      dict{
+        "status": JSON.String("success"),
+        "data": JSON.Object(
+          dict{
+            "binding": JSON.Number(7.),
+            "reached": JSON.Object(
+              dict{"name": JSON.String("origin"), "origin": JSON.String(origin)},
+            ),
+          },
+        ),
+      },
+    ),
+  )
 
 let empty = () => {
   databases: [],
@@ -35,10 +68,13 @@ let empty = () => {
   migrated: [],
   marks: dict{},
   own: dict{},
+  records: dict{},
+  control: None,
+  binds: [],
   workers: dict{
-    "driver-0a1b2c3d": {versions: [], secrets: dict{}, bundle: "the driver's bundle", deployed: []},
-    "object-0a1b2c3d": {versions: [], secrets: dict{}, bundle: "the object's bundle", deployed: []},
-    "database-0a1b2c3d": {
+    "1b2c3d4e": {versions: [], secrets: dict{}, bundle: "the driver's bundle", deployed: []},
+    "2c3d4e5f": {versions: [], secrets: dict{}, bundle: "the object's bundle", deployed: []},
+    "4e5f6a7b": {
       versions: [],
       secrets: dict{},
       bundle: "the database's bundle",
@@ -54,6 +90,9 @@ let holding = (account, name, ~mark) => {
   account.marks->Dict.set(name, mark)
 }
 
+/** The names a D1's table `owned` records, by their roles, as an install before wrote them. */
+let recording = (account, name, records) => account.records->Dict.set(name, records)
+
 /** A Worker the account holds, one version deployed. */
 let running = (account, name) =>
   account.workers->Dict.set(
@@ -67,7 +106,11 @@ let tablesRead = name =>
 let markerRead = name =>
   `wrangler d1 execute ${name} --remote --command ${Install_ledger.markerQuery} --json`
 let markerWritten = name =>
-  `wrangler d1 execute ${name} --remote --command ${Install_ledger.markerWrite(id)}`
+  `wrangler d1 execute ${name} --remote --command ${Install_ledger.markerWrite(name)}`
+let recordsRead = name =>
+  `wrangler d1 execute ${name} --remote --command ${Install_ledger.recordsQuery} --json`
+let recordsWritten = (name, records) =>
+  `wrangler d1 execute ${name} --remote --command ${Install_ledger.recordsWrite(records)}`
 
 /** The Workers list, by curl and the documented account id. */
 let workersListed = [
@@ -155,6 +198,27 @@ let answered = (account, command: Install_world.command) => {
       ),
     )
   | ("rescript", list{"build"}) => Ok("")
+  | ("curl", _) if command.args->Array.at(-1)->Option.getOr("")->String.endsWith("/subdomain") =>
+    Ok(`{"success": true, "errors": [], "messages": [], "result": {"subdomain": "my-subdomain"}}`)
+  | ("curl", _) if command.args->Array.at(-1)->Option.getOr("")->String.startsWith(base) =>
+    let at = command.args->Array.indexOf("--data")
+    account.binds->Array.push((
+      command.args->Array.at(-1)->Option.getOr(""),
+      command.input->Option.getOr(""),
+      command.args->Array.get(at + 1)->Option.getOr(""),
+    ))
+    let sent =
+      command.args
+      ->Array.get(at + 1)
+      ->Option.flatMap(Install_world.parsed)
+      ->Option.flatMap(json =>
+        json
+        ->Install_world.member("input")
+        ->Install_world.member("reach")
+        ->Install_world.text("origin")
+      )
+      ->Option.getOr("")
+    Ok(account.control->Option.getOr(recorded(sent)))
   | ("curl", _) =>
     Ok(
       JSON.stringify(
@@ -180,7 +244,7 @@ let answered = (account, command: Install_world.command) => {
     let tables = [
       "_cf_KV",
       ...account.marks->Dict.get(name)->Option.mapOr([], _ => ["install"]),
-      ...account.migrated->Array.includes(name) ? ["d1_migrations", "held", "items"] : [],
+      ...account.migrated->Array.includes(name) ? ["d1_migrations", "held", "items", "owned"] : [],
       ...account.own->Dict.get(name)->Option.getOr([]),
     ]
     Ok(results(tables->Array.map(table => dict{"name": JSON.String(table)})))
@@ -189,6 +253,38 @@ let answered = (account, command: Install_world.command) => {
     switch account.marks->Dict.get(name) {
     | Some(mark) => Ok(results([dict{"id": JSON.String(mark)}]))
     | None => Error("no such table: install: SQLITE_ERROR [code: 7500]")
+    }
+  | ("wrangler", list{"d1", "execute", name, "--remote", "--command", query, "--json"})
+    if query == Install_ledger.recordsQuery =>
+    Ok(
+      results(
+        account.records
+        ->Dict.get(name)
+        ->Option.getOr([])
+        ->Array.map(((held, role)) => dict{"name": JSON.String(held), "role": JSON.String(role)}),
+      ),
+    )
+  | ("wrangler", list{"d1", "execute", name, "--remote", "--command", query})
+    if query->String.startsWith("INSERT INTO owned ") =>
+    if !(account.migrated->Array.includes(name)) {
+      Error("no such table: owned: SQLITE_ERROR [code: 7500]")
+    } else {
+      let written =
+        query
+        ->String.split("), (")
+        ->Array.filterMap(pair =>
+          switch /'([0-9a-f]{8})', '([a-z_]+)'/->RegExp.exec(pair) {
+          | Some(found) =>
+            switch found->RegExp.Result.matches {
+            | [Some(held), Some(role)] => Some((held, role))
+            | _ => None
+            }
+          | None => None
+          }
+        )
+      let before = account.records->Dict.get(name)->Option.getOr([])
+      account.records->Dict.set(name, [...before, ...written])
+      Ok("")
     }
   | ("wrangler", list{"d1", "execute", name, "--remote", "--command", query})
     if query->String.startsWith("CREATE TABLE install (") =>

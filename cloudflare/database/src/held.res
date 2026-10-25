@@ -130,3 +130,16 @@ let sized = async (db, ~item, size) => {
   let sql = "UPDATE database_held SET size = ? WHERE one = 1 AND item = ? AND cleared = 1"
   ignore(await db->prepare(sql)->bind([Number(size), Number(item)])->run)
 }
+
+type owned = {name: string}
+
+/** The database kind's D1 by the name the driver's records hold, none where they hold none. */
+let recorded = async db => {
+  let row: option<owned> = (
+    await db
+    ->prepare("SELECT name FROM owned WHERE role = 'user_database'")
+    ->bind([])
+    ->first
+  )->Nullable.toOption
+  row->Option.map(row => row.name)
+}

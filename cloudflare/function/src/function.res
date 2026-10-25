@@ -55,7 +55,8 @@ type through = {
   api: api,
   store: store,
   fetch: string => promise<result<Uint8Array.t, refused>>,
-  installId: string,
+  listed: Contracts.DeploymentRuns.t => option<string>,
+  released: string => promise<unit>,
 }
 
 /** The most an artifact may be, a Worker's 64 MiB on every plan, RFC nrs5v. */
@@ -64,22 +65,46 @@ let largest = 67_108_864
 /** The most a version's tag holds, Cloudflare's `workers/tag` of 100 bytes. */
 let tagged = 100
 
+/** The prefix of every name the platform binds, never a deployment's own secret's. */
+let reserved = "MONOFLAKE_"
+
 /** What names the footing's address to a Worker, as driver(machine) names it to a worker. */
 let footing = "MONOFLAKE_FOOTING"
 
 /** The tag the stub is uploaded with, which no version's tag is. */
 let stopping = "stopped"
 
-let workerOf = (runs: Contracts.DeploymentRuns.t, ~installId) =>
-  switch runs {
-  | App({id}) => `app-${Float.toString(id)}-${installId}`
-  | Component({component}) => `component-${component}-${installId}`
+/** The most a resource id is, 8 hex digits, RFC b8f35. */
+let largestId = 4_294_967_295.
+
+/**
+ * A deployment's Worker, its resource id bare as 8 lowercase hex digits, an app's or a
+ * component's, RFC nrs5v; an id of no such form is written as it came, which no guard holds.
+ */
+let workerOf = (runs: Contracts.DeploymentRuns.t) => {
+  let id = switch runs {
+  | App({id}) | Component({id}) => id
+  }
+  Math.floor(id) == id && id >= 0. && id <= largestId
+    ? Float.toString(id, ~radix=16)->String.padStart(8, "0")
+    : Float.toString(id)
+}
+
+/** The Worker of a deployment, the one an organization listed for it or its own. */
+let nameOf = (through, runs) =>
+  switch through.listed(runs) {
+  | Some(name) => name
+  | None => workerOf(runs)
   }
 
-/** The Worker of a deployment on this install, by `through`'s install id. */
-let nameOf = (through, runs) => workerOf(runs, ~installId=through.installId)
-
 let tagOf = hash => `version-${Envelope.Hex.encode(hash)}`->String.slice(~start=0, ~end=tagged)
+
+/**
+ * A version's tag as the driver gives it, the deployment's own name first, so a Worker carries
+ * which deployment it was made for, `<own name>/<rest>`, RFC nrs5v's Ledger. It is never cut, the
+ * bound of a tag held on the whole tag where the install id is put before it.
+ */
+let taggedFor = (runs, rest) => `${workerOf(runs)}/${rest}`
 
 /** An error by its reason, its failure and message the operation's or every operation's. */
 let answer = (operation: Contracts.operation, refused: refused) => {
@@ -117,8 +142,8 @@ let outbound = (network: array<Contracts.DeploymentNetwork.t>) =>
   | None => Ok(ways->Array.filter(way => !(network->Array.includes(way))))
   }
 
-/** What a deploy asks that a Worker cannot give, refused before anything is fetched. */
-let checked = (input: Contracts.DeploymentDeploy.t) =>
+/** What a deploy's form, runtime, isolation, secrets and network ask that a Worker cannot give. */
+let checkedForm = (input: Contracts.DeploymentDeploy.t) =>
   switch (input.form, input.runtime) {
   | (Component | Image, _) => beyond("a function here runs modules alone, as a Worker")
   | (Modules, Some(Workerd | Wasmtime | Runc | Crun | Youki)) =>
@@ -134,6 +159,37 @@ let checked = (input: Contracts.DeploymentDeploy.t) =>
       | Some((name, _)) => beyond(`the secret ${name} is no UTF-8 text, as a Worker's secret is`)
       | None => outbound(input.network)
       }
+    }
+  }
+
+/** Each case the platform hands a deployment, its name the contract's, RFC y2xd3. */
+let handedName = (handed: Contracts.DeploymentHanded.t) =>
+  switch handed {
+  | Root(_) => "root"
+  | Key(_) => "key"
+  | Certificate(_) => "certificate"
+  | SigningKey(_) => "signing_key"
+  }
+
+/** A case handed twice, which a deploy never holds, RFC y2xd3's Ledger. */
+let handedTwice = (handed: array<Contracts.DeploymentHanded.t>) => {
+  let names = handed->Array.map(handedName)
+  names->Array.filterWithIndex((name, at) => names->Array.indexOf(name) != at)->Array.get(0)
+}
+
+/**
+ * What a deploy asks that a Worker cannot give, refused before anything is fetched; a deployment
+ * reached on the binding waits on this driver's data path, the workspace's `inline-data-path`.
+ */
+let checked = (input: Contracts.DeploymentDeploy.t) =>
+  switch (input.reaching->Option.getOr([]) != [], input.handed->Option.getOr([])->handedTwice) {
+  | (true, _) => beyond("a Worker reaches no other deployment on its binding yet")
+  | (false, Some(name)) => Error({reason: "invalid", message: `${name} is handed twice`})
+  | (false, None) =>
+    switch input.secrets->Dict.keysToArray->Array.find(name => name->String.startsWith(reserved)) {
+    | Some(name) =>
+      Error({reason: "malformed", message: `${name} is a name the platform keeps, ${reserved}`})
+    | None => checkedForm(input)
     }
   }
 
@@ -171,23 +227,40 @@ let fetched = async (through, artifact: Contracts.DeploymentArtifact.t) =>
       : Error({reason: "hash_mismatch", message: ""})
   }
 
-/** The footing's address and each secret, its bytes UTF-8 text as `checked` holds them. */
+/**
+ * What the platform hands a deployment bound under its reserved name, bytes as hex in plain text
+ * and a secret as secret text, its bytes in hex too, RFC y2xd3.
+ */
+let handedBound = (handed: Contracts.DeploymentHanded.t) =>
+  switch handed {
+  | Root({value}) => PlainText({name: "MONOFLAKE_ROOT", text: Envelope.Hex.encode(value)})
+  | Key({value}) => SecretText({name: "MONOFLAKE_KEY", text: Envelope.Hex.encode(value)})
+  | Certificate({value}) =>
+    PlainText({name: "MONOFLAKE_CERTIFICATE", text: Envelope.Hex.encode(value)})
+  | SigningKey({value}) =>
+    SecretText({name: "MONOFLAKE_SIGNING_KEY", text: Envelope.Hex.encode(value)})
+  }
+
+/** The footing's address, each case handed, and each secret, UTF-8 text as `checked` holds it. */
 let bindingsOf = (input: Contracts.DeploymentDeploy.t) =>
-  Array.concat(
+  Array.concatMany(
     [PlainText({name: footing, text: input.footing})],
-    input.secrets
-    ->Dict.toArray
-    ->Array.toSorted(((a, _), (b, _)) => String.compare(a, b))
-    ->Array.map(((name, bytes)) => SecretText({
-      name,
-      text: Web.fromUtf8(bytes)->Option.getOr(""),
-    })),
+    [
+      input.handed->Option.getOr([])->Array.map(handedBound),
+      input.secrets
+      ->Dict.toArray
+      ->Array.toSorted(((a, _), (b, _)) => String.compare(a, b))
+      ->Array.map(((name, bytes)) => SecretText({
+        name,
+        text: Web.fromUtf8(bytes)->Option.getOr(""),
+      })),
+    ],
   )
 
 let deploying = async (through, input: Contracts.DeploymentDeploy.t) => {
   let worker = nameOf(through, input.runs)
   let version = Envelope.Hex.encode(input.version)
-  let tag = tagOf(input.version)
+  let tag = taggedFor(input.runs, tagOf(input.version))
   let kept = await through.store.read(worker)
   switch kept {
   // Deployed again the same, it is the one deployment, and nothing is fetched for it.
@@ -264,7 +337,8 @@ let stopping_ = async (through, runs) => {
   | None => notFound(worker)
   | Some({state: #stopped | #failed} as kept) => await described(through, runs, kept)
   | Some({state: #running} as kept) =>
-    let keptTag = Envelope.Hex.decode(kept.version)->Option.map(tagOf)
+    let keptTag =
+      Envelope.Hex.decode(kept.version)->Option.map(hash => taggedFor(runs, tagOf(hash)))
     switch await through.api.running(worker) {
     | Error(_) as refused => refused
     | Ok(None) | Ok(Some({tag: None})) => notRunning(worker)
@@ -272,7 +346,7 @@ let stopping_ = async (through, runs) => {
     | Ok(Some(running)) =>
       let stubbed = switch await through.api.upload(
         worker,
-        {bundle: stub, bindings: [], tag: stopping},
+        {bundle: stub, bindings: [], tag: taggedFor(runs, stopping)},
       ) {
       | Ok(id) => await through.api.deploy(worker, id)
       | Error(_) as refused => refused
@@ -333,6 +407,13 @@ let deleting = async (through, runs) => {
   switch await through.store.read(worker) {
   | Some({state: #running}) =>
     Error({reason: "still_running", message: `${worker} is running; stop it first`})
+  // A listed Worker the driver took over is let go untouched, to be deleted by hand, RFC nrs5v.
+  | Some({state: #stopped | #failed}) if through.listed(runs) != None =>
+    await through.released(worker)
+    await through.store.forget(worker)
+    Ok(({}: Contracts.DeploymentDeleted.t))
+  // One it never took over is left as it is, and named to nobody.
+  | None if through.listed(runs) != None => Ok(({}: Contracts.DeploymentDeleted.t))
   | Some({state: #stopped | #failed}) | None =>
     switch await through.api.delete(worker) {
     | Error(_) as refused => refused

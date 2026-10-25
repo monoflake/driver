@@ -103,13 +103,19 @@ let served = (addresses: dict<Uint8Array.t>, fetched) =>
     }
   }
 
-/** The install id every fake Worker's name ends in, a made-up one. */
-let installId = "0a1b2c3d"
+/** No Worker listed for any deployment. */
+let unlisted = _ => None
 
-let setUp = (~addresses=dict{"hello": artifact}) => {
+let setUp = (~addresses=dict{"hello": artifact}, ~listed=unlisted, ~released=[]) => {
   let (account, api) = fake()
   let (kept, store) = memory()
   let fetched = []
-  let through: Function.through = {api, store, fetch: served(addresses, fetched), installId}
+  let through: Function.through = {
+    api,
+    store,
+    fetch: served(addresses, fetched),
+    listed,
+    released: async name => released->Array.push(name),
+  }
   (through, account, kept, fetched)
 }

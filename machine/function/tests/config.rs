@@ -12,7 +12,7 @@ use common::{bundle, from_root, hash, here, hex, json};
 use driver_machine_function::{Bound, Bundle, Configure, Kind, PORT, Unpack, Worker};
 use envelope::Called;
 use envelope::contracts::interface::deployments::Call;
-use envelope::contracts::{DeploymentDeploy, DeploymentNetwork};
+use envelope::contracts::{DeploymentDeploy, DeploymentHanded, DeploymentNetwork};
 
 /// The first deploy of `deploys.json`, of `echo-modules`, as the runner fills it.
 fn deployed() -> DeploymentDeploy {
@@ -57,4 +57,50 @@ fn a_secret_is_named_and_never_written_and_a_network_not_given_is_not_reached() 
 	// A tcp network reaches out as http does, since workerd connects through one service.
 	let tcp = DeploymentDeploy { network: vec![DeploymentNetwork::Tcp], ..input };
 	assert!(Worker::of(&tcp, &bundle).outbound);
+}
+
+#[test]
+fn what_is_handed_follows_the_footing_by_its_reserved_name() {
+	let bundle = Bundle::unpack(&bundle("echo-modules")).unwrap();
+	let handed = vec![
+		DeploymentHanded::Key { value: b"made-up key".to_vec() },
+		DeploymentHanded::Certificate { value: vec![0x0e, 0xa0] },
+	];
+	let input = DeploymentDeploy {
+		handed: Some(handed),
+		secrets: BTreeMap::from([("TOKEN".into(), b"hidden".to_vec())]),
+		..deployed()
+	};
+	let worker = Worker::of(&input, &bundle);
+	let names: Vec<&str> = worker
+		.bindings
+		.iter()
+		.map(|b| match b {
+			Bound::Text { name, .. } | Bound::Secret { name } => name.as_str(),
+		})
+		.collect();
+	assert_eq!(names, ["MONOFLAKE_FOOTING", "MONOFLAKE_KEY", "MONOFLAKE_CERTIFICATE", "TOKEN"]);
+	assert_eq!(worker.bindings[1], Bound::Secret { name: "MONOFLAKE_KEY".into() });
+	let certificate = Bound::Text { name: "MONOFLAKE_CERTIFICATE".into(), text: "0ea0".into() };
+	assert_eq!(worker.bindings[2], certificate);
+}
+
+#[test]
+fn a_worker_that_reaches_is_given_the_private_network_and_one_that_does_not_is_not() {
+	use envelope::contracts::DeploymentRuns;
+	let bundle = Bundle::unpack(&bundle("echo-modules")).unwrap();
+	let target = DeploymentRuns::App { id: 9 };
+	let reaching = DeploymentDeploy { reaching: Some(vec![target]), ..deployed() };
+	let worker = Worker::of(&reaching, &bundle);
+	assert!(worker.reaches);
+	let config = worker.capnp();
+	let opened = "(allow = [\"public\", \"private\"], tlsOptions = (trustBrowserCas = true))";
+	assert!(config.contains(opened), "{config}");
+	let from = "(name = \"MONOFLAKE_REACHING\", fromEnvironment = \"MONOFLAKE_REACHING\")";
+	assert!(config.contains(from), "{config}");
+	let closed = DeploymentDeploy { network: Vec::new(), ..reaching };
+	assert!(Worker::of(&closed, &bundle).capnp().contains("network = (allow = [\"private\"])"));
+	let none = DeploymentDeploy { reaching: Some(Vec::new()), ..deployed() };
+	assert!(!Worker::of(&none, &bundle).reaches);
+	assert!(!Worker::of(&none, &bundle).capnp().contains("private"));
 }

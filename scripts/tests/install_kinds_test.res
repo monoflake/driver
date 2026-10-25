@@ -25,13 +25,12 @@ test(
       [
         "wrangler d1 list --json",
         workersListed,
-        "wrangler versions list --json --name object-0a1b2c3d",
-        "wrangler versions list --json --name database-0a1b2c3d",
         "wrangler d1 list --json",
-        "wrangler d1 create driver-0a1b2c3d",
-        markerWritten("driver-0a1b2c3d"),
+        "wrangler d1 create 0a1b2c3d",
+        markerWritten("0a1b2c3d"),
         "wrangler d1 list --json",
-        "wrangler d1 migrations apply driver-0a1b2c3d --remote --config <driver>",
+        "wrangler d1 migrations apply 0a1b2c3d --remote --config <driver>",
+        recordsWritten("0a1b2c3d", [("0a1b2c3d", "state"), ("1b2c3d4e", "driver")]),
         "rescript build in <driver>",
         "wrangler deploy --dry-run --outdir <out> --config <driver>",
         "wrangler versions list --json --config <driver>",
@@ -39,11 +38,12 @@ test(
         "wrangler secret list --config <driver>",
         "wrangler secret put API_TOKEN --config <driver>",
         "wrangler secret put BINDING --config <driver>",
+        ...bound,
       ],
     )
     ok(faked.said->Array.includes("the kinds offered are function, DRIVER_KINDS"))
-    deepEqual((account.databases, account.buckets), ([full("driver")], []))
-    let driver = account.workers->Dict.getUnsafe(full("driver"))
+    deepEqual((account.databases, account.buckets), ([id], []))
+    let driver = account.workers->Dict.getUnsafe(driverName)
     let kinds =
       driver.deployed
       ->Array.get(0)
@@ -64,7 +64,7 @@ test("a kind listed on a rerun is added, and one dropped is named and left as it
       l->String.includes(" create ") || l->String.startsWith("wrangler deploy --config")
     ),
     [
-      "wrangler r2 bucket create objects-0a1b2c3d",
+      "wrangler r2 bucket create 3d4e5f6a",
       "wrangler deploy --config <driver> --tag <tag>",
       "wrangler deploy --config <object> --tag <tag>",
     ],
@@ -73,17 +73,15 @@ test("a kind listed on a rerun is added, and one dropped is named and left as it
   let (dropped, result) = installed(~env=only(Some("function")), account, root)
   deepEqual(result, Ok())
   ok(plain(dropped)->Array.every(l => !(l->String.includes("delete"))))
-  deepEqual(account.buckets, [full("objects")])
+  deepEqual(account.buckets, [bucketName])
   ok(
     dropped.said->Array.includes(
-      [
-        "object is not offered, and object-0a1b2c3d and the bucket objects-0a1b2c3d ",
-        "are left as they are;",
-      ]->Array.join(""),
+      "object is not offered, and 2c3d4e5f and the bucket 3d4e5f6a are left as they are;",
     ),
     ~message=dropped.said->Array.join("\n"),
   )
-  ok(dropped.said->Array.every(l => !(l->String.includes("database-0a1b2c3d and"))))
+  // A kind never offered left nothing recorded, so nothing of it is looked for.
+  ok(plain(dropped)->Array.every(l => !(l->String.includes("--name 4e5f6a7b"))))
 })
 
 test("DRIVER_KINDS naming anything but function, object and database is refused", () => {
@@ -182,17 +180,57 @@ test("a D1 list that is no JSON array is an error, never an empty account", () =
 
 test("a dropped kind's lookup failing otherwise than not found stops install, nothing run", () => {
   let account = empty()
+  let root = fixture()
+  let _ = installed(~env=only(Some("function,object")), account, root)
   let answer = command =>
-    line(command) == "wrangler versions list --json --name object-0a1b2c3d"
+    line(command) == "wrangler versions list --json --name 2c3d4e5f"
       ? Error("Authentication error [code: 10000]")
       : answered(account, command)
   let faked = make(~env=only(None), ~answer)
   deepEqual(
-    Install.install(faked.world, ~dry=false, ~root=fixture()),
-    Error("whether object-0a1b2c3d is there is not known, Authentication error [code: 10000]"),
+    Install.install(faked.world, ~dry=false, ~root),
+    Error("whether 2c3d4e5f is there is not known, Authentication error [code: 10000]"),
   )
   unchanged(faked)
-  deepEqual((account.databases, account.buckets, account.marks), ([], [], dict{}))
+})
+
+test("a command is given the allowed names alone from install's environment, nothing else", () => {
+  let planted = [
+    ("CONTROL_SECRET", "the-control-secret"),
+    ("CLOUDFLARE_API_TOKEN", "the-planted-token"),
+    ("AWS_SECRET_ACCESS_KEY", "the-aws-secret"),
+    ("PATH", "/usr/bin:/bin"),
+    ("HOME", "/home/someone"),
+  ]
+  let (faked, result) = installed(~env=[...planted, ...credentials], empty(), fixture())
+  deepEqual(result, Ok())
+  ok(faked.ran->Array.length > 0)
+  faked.ran->Array.forEach(command => {
+    let env = command.env
+    let wrangler =
+      Host.basename(command.program) == "wrangler" && !(command.args->Array.includes("--dry-run"))
+    deepEqual(env->Dict.get("CONTROL_SECRET"), None, ~message=line(command))
+    deepEqual(env->Dict.get("AWS_SECRET_ACCESS_KEY"), None, ~message=line(command))
+    deepEqual(
+      env->Dict.get("CLOUDFLARE_API_TOKEN"),
+      wrangler ? Some("the-install-token") : None,
+      ~message=line(command),
+    )
+    deepEqual(
+      (env->Dict.get("PATH"), env->Dict.get("HOME")),
+      (Some("/usr/bin:/bin"), Some("/home/someone")),
+    )
+    let names = env->Dict.keysToArray->Array.toSorted(String.compare)
+    let expected =
+      [
+        "CI",
+        "HOME",
+        "PATH",
+        "WRANGLER_SEND_METRICS",
+        ...wrangler ? ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"] : [],
+      ]->Array.toSorted(String.compare)
+    deepEqual(names, expected, ~message=line(command))
+  })
 })
 
 after(() => fixtures->Array.forEach(root => Host.rmSync(root, {recursive: true, force: true})))

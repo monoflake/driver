@@ -31,7 +31,7 @@ let stateOf = (answer: Contracts.Answer.t<Contracts.DeploymentDescribed.t>) =>
   }
 
 let running = Contracts.DeploymentState.Running({
-  address: "app-1-0a1b2c3d.example",
+  address: "00000001.example",
   runtime: Workers,
   isolation: [Isolate],
 })
@@ -41,9 +41,15 @@ let of_: Contracts.DeploymentOf.t = {runs: runs}
 test(
   "a deployment's Worker is named for what it runs, its version's tag for its hash",
   async () => {
-    deepEqual(Function.workerOf(App({id: 12.}), ~installId="0a1b2c3d"), "app-12-0a1b2c3d")
-    let pages = Function.workerOf(Component({component: "pages"}), ~installId="0a1b2c3d")
-    deepEqual(pages, "component-pages-0a1b2c3d")
+    let named = runs => Function.workerOf(runs)
+    deepEqual(named(App({id: 12.})), "0000000c")
+    deepEqual(named(Component({component: "pages", id: 3735928559.})), "deadbeef")
+    deepEqual(named(App({id: 4294967295.})), "ffffffff")
+    // An id of no resource's form is written as it came, which no guard holds.
+    deepEqual(
+      [-1., 1.5, 4294967296.]->Array.map(id => named(App({id: id}))),
+      ["-1", "1.5", "4294967296"],
+    )
     let tag = Function.tagOf(Uint8Array.fromLength(32))
     deepEqual(tag, "version-" ++ String.repeat("00", 32))
     deepEqual(String.length(tag), 72)
@@ -64,7 +70,7 @@ test("a deploy a Worker cannot give is beyond the host, and nothing is fetched",
   deepEqual(fetched, ["hello"])
   deepEqual(
     account.asked,
-    ["upload app-1-0a1b2c3d " ++ Function.tagOf(input.version), "deploy app-1-0a1b2c3d v1"],
+    ["upload 00000001 00000001/" ++ Function.tagOf(input.version), "deploy 00000001 v1"],
   )
 })
 
@@ -80,10 +86,7 @@ test("a network a Worker gives more than is taken, each way out beyond it warned
   restore()
   deepEqual(states, [Some(running), Some(running), Some(running)])
   let beyond = "beyond the network it asks, an ordinary account holding no Worker back, RFC nrs5v"
-  deepEqual(
-    said,
-    [`app-1-0a1b2c3d is given tcp ${beyond}`, `app-1-0a1b2c3d is given http and tcp ${beyond}`],
-  )
+  deepEqual(said, [`00000001 is given tcp ${beyond}`, `00000001 is given http and tcp ${beyond}`])
 })
 
 test("an artifact too large, not its hash, unfetchable or no bundle is refused", async () => {
@@ -129,7 +132,7 @@ test("a deployment made runs at its Worker's address, its footing and secrets bo
   )
   deepEqual(uploaded.bundle.modules->Array.map(m => m.name), ["main.js"])
   deepEqual(
-    kept->Map.get("app-1-0a1b2c3d"),
+    kept->Map.get("00000001"),
     Some({Function.version: Envelope.Hex.encode(input.version), state: #running}),
   )
   deepEqual(await Function.describe(through, of_), answer)
@@ -142,7 +145,7 @@ test("deploying the same again is the one deployment, and nothing is fetched", a
   kept->Map.clear
   deepEqual(stateOf(await Function.deploy(through, input)), Some(running))
   deepEqual((fetched, account.versions->Map.size), (["hello"], 1))
-  ok(kept->Map.has("app-1-0a1b2c3d"))
+  ok(kept->Map.has("00000001"))
 })
 
 test("a deployment stopped runs the stub, and resumed runs the version it replaced", async () => {
@@ -154,20 +157,20 @@ test("a deployment stopped runs the stub, and resumed runs the version it replac
     account.versions
     ->Map.get("v2")
     ->Option.map(u => (u.bundle.modules->Array.map(m => m.name), u.tag)),
-    Some((["stopped.js"], "stopped")),
+    Some((["stopped.js"], "00000001/stopped")),
   )
-  deepEqual(account.runs->Map.get("app-1-0a1b2c3d"), Some("v2"))
-  deepEqual(kept->Map.get("app-1-0a1b2c3d")->Option.flatMap(k => k.replaced), Some("v1"))
+  deepEqual(account.runs->Map.get("00000001"), Some("v2"))
+  deepEqual(kept->Map.get("00000001")->Option.flatMap(k => k.replaced), Some("v1"))
   // Stopped again, or deployed again the same while stopped, nothing changes.
   deepEqual(stateOf(await Function.stop(through, of_)), Some(Stopped))
   deepEqual(stateOf(await Function.deploy(through, input)), Some(Stopped))
   deepEqual(account.versions->Map.size, 2)
   deepEqual(stateOf(await Function.resume(through, of_)), Some(running))
-  deepEqual(account.runs->Map.get("app-1-0a1b2c3d"), Some("v1"))
+  deepEqual(account.runs->Map.get("00000001"), Some("v1"))
   deepEqual(stateOf(await Function.resume(through, of_)), Some(running))
   deepEqual(
     account.asked->Array.filter(a => a->String.startsWith("deploy")),
-    ["deploy app-1-0a1b2c3d v1", "deploy app-1-0a1b2c3d v2", "deploy app-1-0a1b2c3d v1"],
+    ["deploy 00000001 v1", "deploy 00000001 v2", "deploy 00000001 v1"],
   )
 })
 
@@ -177,7 +180,7 @@ test("a deployment is deleted only once stopped, and is then not found", async (
   deepEqual(reasonOf(await Function.delete(through, of_)), Some((Rejected, "still_running")))
   ignore(await Function.stop(through, of_))
   deepEqual(await Function.delete(through, of_), Success({}))
-  deepEqual((kept->Map.size, account.runs->Map.has("app-1-0a1b2c3d")), (0, false))
+  deepEqual((kept->Map.size, account.runs->Map.has("00000001")), (0, false))
   deepEqual(reasonOf(await Function.describe(through, of_)), Some((Rejected, "not_found")))
 })
 
@@ -242,11 +245,11 @@ test("a stop finding another version running, or none, keeps nothing and is a fa
   let (through, account, kept, _) = setUp()
   let input = await deployOf()
   ignore(await Function.deploy(through, input))
-  let before = kept->Map.get("app-1-0a1b2c3d")
+  let before = kept->Map.get("00000001")
   let notKept = Some((
     Contracts.Failure.Unknown,
     "fault",
-    "the version running on app-1-0a1b2c3d is not the one kept, so nothing is stopped",
+    "the version running on 00000001 is not the one kept, so nothing is stopped",
   ))
   let refusal = answer =>
     switch answer {
@@ -254,11 +257,11 @@ test("a stop finding another version running, or none, keeps nothing and is a fa
     | Success(_) => None
     }
   account.versions->Map.set("v9", {bundle: Function.stub, bindings: [], tag: "version-other"})
-  account.runs->Map.set("app-1-0a1b2c3d", "v9")
+  account.runs->Map.set("00000001", "v9")
   deepEqual(refusal(await Function.stop(through, of_)), notKept)
-  account.runs->Map.delete("app-1-0a1b2c3d")->ignore
+  account.runs->Map.delete("00000001")->ignore
   deepEqual(refusal(await Function.stop(through, of_)), notKept)
-  deepEqual(kept->Map.get("app-1-0a1b2c3d"), before)
+  deepEqual(kept->Map.get("00000001"), before)
   deepEqual(account.asked->Array.filter(a => a->String.includes("stopped")), [])
 })
 
@@ -267,7 +270,7 @@ test("the stub answers every request 503 stopped, in the form the call asks", as
   let source = Function.stub.modules->Array.getUnsafe(0)
   let worker = (await imported(Web.fromUtf8(source.bytes)->Option.getOrThrow)).default
   let asked = async headers => {
-    let answer = worker.fetch(request("https://app-1-0a1b2c3d.example/echo", {headers: headers}))
+    let answer = worker.fetch(request("https://00000001.example/echo", {headers: headers}))
     let bytes = Uint8Array.fromBuffer(await answer->answerBytes)
     (answer->answerStatus, answer->answerHeaders->header("content-type")->Nullable.toOption, bytes)
   }
@@ -293,3 +296,142 @@ test("the stub answers every request 503 stopped, in the form the call asks", as
     (503, Some("application/cbor")),
   )
 })
+
+/** The Worker an organization listed for app 1, a made-up name of its own. */
+let listedFor = (runs: Contracts.DeploymentRuns.t) =>
+  switch runs {
+  | App({id: 1.}) => Some("shop-front")
+  | App(_) | Component(_) => None
+  }
+
+test(
+  "a listed Worker stands for its deployment, deployed, stopped and resumed in place",
+  async () => {
+    let (through, account, kept, _) = setUp(~listed=listedFor)
+    let input = await deployOf()
+    let listedRunning = Contracts.DeploymentState.Running({
+      address: "shop-front.example",
+      runtime: Workers,
+      isolation: [Isolate],
+    })
+    deepEqual(stateOf(await Function.deploy(through, input)), Some(listedRunning))
+    deepEqual(stateOf(await Function.stop(through, of_)), Some(Stopped))
+    deepEqual(stateOf(await Function.resume(through, of_)), Some(listedRunning))
+    deepEqual(stateOf(await Function.describe(through, of_)), Some(listedRunning))
+    deepEqual(
+      account.asked->Array.filter(a => a->String.startsWith("deploy")),
+      ["deploy shop-front v1", "deploy shop-front v2", "deploy shop-front v1"],
+    )
+    deepEqual((kept->Map.has("shop-front"), kept->Map.has("00000001")), (true, false))
+  },
+)
+
+test(
+  "a listed Worker's deployment deleted lets the Worker go, released and never deleted",
+  async () => {
+    let released = []
+    let (through, account, kept, _) = setUp(~listed=listedFor, ~released)
+    ignore(await Function.deploy(through, await deployOf()))
+    ignore(await Function.stop(through, of_))
+    deepEqual(await Function.delete(through, of_), Success({}))
+    deepEqual(released, ["shop-front"])
+    deepEqual(account.asked->Array.filter(a => a->String.startsWith("delete")), [])
+    deepEqual((kept->Map.size, account.runs->Map.has("shop-front")), (0, true))
+  },
+)
+
+test(
+  "a listed Worker the driver never took over, deleted, is left as it is and not released",
+  async () => {
+    let released = []
+    let (through, account, kept, _) = setUp(~listed=listedFor, ~released)
+    deepEqual(await Function.delete(through, of_), Success({}))
+    deepEqual((released, account.asked, kept->Map.size), ([], [], 0))
+  },
+)
+
+test("each case handed is bound under its reserved name, bytes as hex text", async () => {
+  let (through, account, _, _) = setUp()
+  let bytes = n => Uint8Array.fromLength(2)->TypedArray.fillAll(n)
+  let input = {
+    ...await deployOf(),
+    handed: [
+      Root({value: bytes(1)}),
+      Key({value: bytes(2)}),
+      Certificate({value: bytes(3)}),
+      SigningKey({value: bytes(4)}),
+    ],
+  }
+  deepEqual(stateOf(await Function.deploy(through, input)), Some(running))
+  let bindings =
+    account.versions
+    ->Map.values
+    ->Iterator.toArray
+    ->Array.flatMap(upload => upload.bindings)
+    ->Array.filter(bound =>
+      switch bound {
+      | PlainText({name}) | SecretText({name}) => name != "MONOFLAKE_FOOTING" && name != "KEY"
+      }
+    )
+  deepEqual(
+    bindings,
+    [
+      PlainText({name: "MONOFLAKE_ROOT", text: "0101"}),
+      SecretText({name: "MONOFLAKE_KEY", text: "0202"}),
+      PlainText({name: "MONOFLAKE_CERTIFICATE", text: "0303"}),
+      SecretText({name: "MONOFLAKE_SIGNING_KEY", text: "0404"}),
+    ],
+  )
+})
+
+test("a case handed twice is invalid, and nothing is fetched or asked", async () => {
+  let (through, account, _, fetched) = setUp()
+  let root = Contracts.DeploymentHanded.Root({value: Uint8Array.fromLength(1)})
+  let input = {...await deployOf(), handed: [root, Key({value: Uint8Array.fromLength(1)}), root]}
+  let answer = await Function.deploy(through, input)
+  deepEqual(
+    switch answer {
+    | Error(e) => Some((e.reason, e.message))
+    | Success(_) => None
+    },
+    Some(("invalid", "root is handed twice")),
+  )
+  deepEqual((fetched, account.asked), ([], []))
+})
+
+test(
+  "a deployment reaching another is beyond the host, an empty list changing nothing",
+  async () => {
+    let (through, account, _, fetched) = setUp()
+    let input = await deployOf()
+    let reaching = {...input, reaching: [App({id: 2.})]}
+    deepEqual(
+      reasonOf(await Function.deploy(through, reaching)),
+      Some((Contracts.Failure.Rejected, "beyond_host")),
+    )
+    deepEqual((fetched, account.asked), ([], []))
+    deepEqual(stateOf(await Function.deploy(through, {...input, reaching: []})), Some(running))
+  },
+)
+
+test(
+  "a deployment's own secret under the platform's prefix is malformed, nothing fetched",
+  async () => {
+    let (through, account, _, fetched) = setUp()
+    let input = await deployOf()
+    let reasons = []
+    let names = ["MONOFLAKE_FOOTING", "MONOFLAKE_KEY", "MONOFLAKE_"]
+    for at in 0 to Array.length(names) - 1 {
+      let secrets = dict{}
+      secrets->Dict.set(names->Array.getUnsafe(at), Web.utf8("x"))
+      reasons->Array.push(reasonOf(await Function.deploy(through, {...input, secrets})))
+    }
+    deepEqual(
+      reasons->Array.map(r => r->Option.map(((_, reason)) => reason)),
+      [Some("malformed"), Some("malformed"), Some("malformed")],
+    )
+    deepEqual((fetched, account.asked), ([], []))
+    let secrets = dict{"MONOFLAKEX": Web.utf8("x"), "monoflake_key": Web.utf8("x")}
+    deepEqual(reasonOf(await Function.deploy(through, {...input, secrets})), None)
+  },
+)

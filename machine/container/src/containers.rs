@@ -1,6 +1,8 @@
 //! The `deployments` interface for images, over containerd, the network, btrfs and the fetch.
 
 mod files;
+mod handed;
+mod hosts;
 mod labels;
 mod marks;
 mod secrets;
@@ -17,7 +19,6 @@ use envelope::contracts::{
 	DeploymentForm, DeploymentIsolation, DeploymentOf, DeploymentRuns, DeploymentRuntime,
 	DeploymentState,
 };
-use sha2::{Digest as _, Sha256};
 
 use crate::{
 	Binding, Chosen, Containerd, Containers, Deployments, Fault, Fetch, Host, Hosted, Image, Listed,
@@ -25,6 +26,7 @@ use crate::{
 };
 use labels::Kept;
 use secrets::{KeyFile, Places};
+use sha2::{Digest as _, Sha256};
 
 /// How long a task is given to stop on its signal before it is killed, in milliseconds.
 const GRACE: u64 = 10_000;
@@ -35,9 +37,6 @@ const REACHED: u64 = 30_000;
 
 /// How often a deploy or a resume asks again whether its container is reached, in milliseconds.
 const ASKED: u64 = 100;
-
-/// The most letters containerd takes in an id.
-const ID_MOST: usize = 76;
 
 /// How many fetches this process began, so each is written to a file of its own.
 static FETCHES: AtomicU64 = AtomicU64::new(0);
@@ -97,9 +96,14 @@ struct Wanted<'a> {
 	into: u32,
 	capacity: &'a crate::Capacity,
 	env: Vec<String>,
-	secrets: &'a BTreeMap<String, Vec<u8>>,
+	/// Its own secrets and the secrets it is handed, by their names.
+	secrets: BTreeMap<String, Vec<u8>>,
 	/// What a hosted runtime is given, its files and where they are bound.
 	files: Option<(&'a BTreeMap<String, Vec<u8>>, &'a str)>,
+	/// The deployments it reaches, each as its label names it.
+	reaching: Vec<String>,
+	/// The deployments it reaches, each named in its hosts and its origins.
+	targets: Vec<DeploymentRuns>,
 }
 
 impl<'a> Wanted<'a> {
@@ -180,7 +184,11 @@ impl<'a> Wanted<'a> {
 		for name in input.secrets.keys() {
 			secrets::named(name)?;
 		}
-		let env = vec![format!("MONOFLAKE_FOOTING={}", input.footing)];
+		let handed = handed::bound(input.handed.as_deref().unwrap_or_default())?;
+		let env =
+			std::iter::once(format!("MONOFLAKE_FOOTING={}", input.footing)).chain(handed.env).collect();
+		let mut secrets = input.secrets.clone();
+		secrets.extend(handed.secrets);
 		Ok(Self {
 			runs: labels::runs(&input.runs),
 			version: hex(&input.version),
@@ -190,8 +198,10 @@ impl<'a> Wanted<'a> {
 			into,
 			capacity,
 			env,
-			secrets: &input.secrets,
+			secrets,
 			files,
+			reaching: input.reaching.iter().flatten().map(labels::runs).collect(),
+			targets: Vec::new(),
 		})
 	}
 }
@@ -207,42 +217,22 @@ fn hex(hash: &[u8; 32]) -> String {
 	hash.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// The containerd id within the namespace of what runs as one container, a component's name
-/// cleaned to what containerd takes and followed by a hash of it whole, so no two names share one.
-fn container_id(runs: &DeploymentRuns, version: &str) -> String {
+/// The containerd id within the namespace of what runs as one container, by the id of what it runs,
+/// the version's first digits, and a hash of what it reaches where it reaches anything.
+fn container_id(runs: &DeploymentRuns, version: &str, reaching: &[String]) -> String {
 	let short: String = version.chars().take(12).collect();
 	let of = match runs {
 		DeploymentRuns::App { id } => format!("app-{id}"),
-		DeploymentRuns::Component { component } => {
-			let whole = Sha256::digest(component.as_bytes());
-			let named: String = whole.iter().take(8).map(|b| format!("{b:02x}")).collect();
-			// What is left of the most once the rest of the id is written.
-			let room = ID_MOST.saturating_sub("component---".len() + named.len() + short.len());
-			let clean = cleaned(component, room);
-			match clean.is_empty() {
-				true => format!("component-{named}"),
-				false => format!("component-{clean}-{named}"),
-			}
-		}
+		DeploymentRuns::Component { id, .. } => format!("component-{id:08x}"),
 	};
-	format!("{of}-{short}")
-}
-
-/// A name's letters and digits at most `room` of them, each run of anything else one hyphen, and
-/// none at either end.
-fn cleaned(name: &str, room: usize) -> String {
-	let mut clean = String::new();
-	for c in name.chars() {
-		if clean.len() >= room {
-			break;
-		}
-		if c.is_ascii_alphanumeric() {
-			clean.push(c);
-		} else if !clean.is_empty() && !clean.ends_with('-') {
-			clean.push('-');
+	match reaching.is_empty() {
+		true => format!("{of}-{short}"),
+		false => {
+			let whole = Sha256::digest(reaching.join(",").as_bytes());
+			let reached: String = whole.iter().take(4).map(|b| format!("{b:02x}")).collect();
+			format!("{of}-{short}-{reached}")
 		}
 	}
-	clean.trim_end_matches('-').to_owned()
 }
 
 /// A container's network, by a name unique on the machine, since containers of two bindings may
@@ -439,31 +429,58 @@ where
 		Ok(imported?)
 	}
 
-	/// The version wanted running in place of every other, once; what a version already made answers.
+	/// Each deployment it reaches by its id, `invalid` where one is not deployed on its binding,
+	/// RFC y2xd3; a target stopped or being replaced is still there.
+	async fn targets(
+		&self,
+		binding: &Binding,
+		input: &DeploymentDeploy,
+	) -> Result<Vec<DeploymentRuns>, Refused> {
+		let reaching = input.reaching.as_deref().unwrap_or_default();
+		if reaching.is_empty() {
+			return Ok(Vec::new());
+		}
+		let listed = self.containerd.list(&binding.namespace).await?;
+		match reaching.iter().find(|r| reached(&listed, r) == Reached::Absent) {
+			None => Ok(reaching.to_vec()),
+			Some(absent) => Err(Refused::new(
+				"invalid",
+				format!("{} is not deployed on this binding", labels::runs(absent)),
+			)),
+		}
+	}
+
+	/// The version wanted running in place of every other, once; what a version already made
+	/// answers. The new one is reached before the old ones go, so a call finds one or the other.
 	async fn replaced(
 		&self,
 		binding: &Binding,
 		input: &DeploymentDeploy,
-		wanted: &Wanted<'_>,
+		mut wanted: Wanted<'_>,
 		hosted: Option<&Hosted>,
 	) -> Result<DeploymentDescribed, Refused> {
+		let namespace = binding.namespace.as_str();
+		let targets = self.targets(binding, input).await?;
+		wanted.targets = targets;
 		let mine = self.mine(binding, &input.runs).await?;
-		if let Some(same) = mine.iter().find(|l| l.labels.get(labels::VERSION) == Some(&wanted.version))
-		{
+		let same = mine.iter().find(|l| {
+			l.labels.get(labels::VERSION) == Some(&wanted.version)
+				&& labels::reaching(&l.labels) == wanted.reaching
+		});
+		if let Some(same) = same {
 			return self.told(binding, &input.runs, same).await;
 		}
-		let id = container_id(&input.runs, &wanted.version);
-		let image = self.imported(&binding.namespace, input, hosted).await?;
-		if let Err(refused) = self.made(binding, &image, wanted, &id).await {
+		let id = container_id(&input.runs, &wanted.version, &wanted.reaching);
+		let image = self.imported(namespace, input, hosted).await?;
+		if let Err(refused) = self.made(binding, &image, &wanted, &id).await {
 			// What was made of it before the failure goes with it; the failure is what is answered.
-			let _ = self.removed(&binding.namespace, &id).await;
+			let _ = self.removed(namespace, &id, !wanted.reaching.is_empty()).await;
 			return Err(refused);
 		}
-		// The new one is reached before the old ones go, so a call finds one or the other.
 		self.settled(binding, &input.runs, &id).await?;
 		for old in &mine {
-			self.containerd.stop(&binding.namespace, &old.id, GRACE).await?;
-			self.removed(&binding.namespace, &old.id).await?;
+			self.containerd.stop(namespace, &old.id, GRACE).await?;
+			self.gone(namespace, old).await?;
 		}
 		self.answer(binding, &input.runs).await
 	}
@@ -480,14 +497,15 @@ where
 		let mounts = self.containerd.prepare(namespace, id, image).await?;
 		let rootfs = self.containerd.snapshot_path(namespace, id).await?;
 		self.quota.assign(&rootfs, &binding.qgroup).await?;
-		let attachment = self.network.attach(&network_id(namespace, id), wanted.port).await?;
+		let network = network_id(namespace, id);
+		let attachment = self.network.attach(&network, wanted.port).await?;
 		let user = spec::User::resolve(image.config.user.as_deref(), &rootfs).await?;
 		let places = self.places(namespace, id);
 		let bound = match wanted.secrets.is_empty() {
 			true => None,
 			false => {
 				let seal = KeyFile::of(&self.state).await?;
-				secrets::write(&places, wanted.secrets, &seal, user.uid, user.gid).await?;
+				secrets::write(&places, &wanted.secrets, &seal, user.uid, user.gid).await?;
 				Some(places.open.as_path())
 			}
 		};
@@ -495,26 +513,39 @@ where
 			None => None,
 			Some((given, at)) => Some((files::write(&self.state, namespace, id, given).await?, at)),
 		};
+		// A reacher resolves the names it reaches, and no other, to the host's own address.
+		// Both read the entry the attachment answered, its address and its port.
+		let names: Vec<String> =
+			wanted.targets.iter().map(|runs| handed::name(namespace, runs).1).collect();
+		let mut env = wanted.env.clone();
+		env.extend(handed::reaching(namespace, &wanted.targets, attachment.entry.port()));
+		let hosts = match names.is_empty() {
+			true => None,
+			false => Some(hosts::write(&self.state, namespace, id, attachment.entry.ip(), &names).await?),
+		};
 		let runtime_spec = spec::build(&spec::Asked {
 			id,
 			namespace,
 			config: &image.config,
 			user,
-			env: &wanted.env,
+			env: &env,
 			capacity: wanted.capacity,
 			netns: &attachment.netns,
 			secrets: bound,
 			files: given.as_ref().map(|(directory, at)| (directory.as_path(), *at)),
+			hosts: hosts.as_deref(),
 		})?;
 		let kept = Kept {
 			runs: wanted.runs.clone(),
 			version: wanted.version.clone(),
 			runtime: wanted.runtime,
 			address: attachment.address.to_string(),
+			entry: Some(attachment.entry.to_string()),
 			port: wanted.port,
 			user: (user.uid, user.gid),
 			isolation: wanted.isolation.clone(),
 			into: Some(wanted.into),
+			reaching: wanted.reaching.clone(),
 		};
 		let spec = Spec {
 			id: id.to_owned(),
@@ -527,6 +558,10 @@ where
 		let output = self.state.join("output").join(namespace).join(format!("{id}.log"));
 		self.containerd.create(namespace, &spec, &mounts, &output).await?;
 		self.containerd.start(namespace, id).await?;
+		// Once its task runs, so no element names a container that is not running.
+		if !wanted.reaching.is_empty() {
+			self.network.fence(&network, &[attachment.entry]).await?;
+		}
 		marks::started(&self.state, namespace, id, now()).await
 	}
 
@@ -539,21 +574,49 @@ where
 			let seal = KeyFile::of(&self.state).await?;
 			secrets::restore(&places, &seal, kept.user.0, kept.user.1).await?;
 		}
-		// Its namespace is kept while stopped and made again at its address where a reboot lost it.
-		self.network.attach(&network_id(&binding.namespace, &listed.id), kept.port).await?;
+		// Its namespace is kept while stopped and made again at its address where a reboot lost it,
+		// and a reacher let reach the entry again.
+		let network = network_id(&binding.namespace, &listed.id);
+		let attachment = self.network.attach(&network, kept.port).await?;
 		self.containerd.start(&binding.namespace, &listed.id).await?;
+		// The entry it was made with, as its environment and hosts name it.
+		if !kept.reaching.is_empty() {
+			let made = kept.entry.as_deref().and_then(|e| e.parse().ok());
+			self.network.fence(&network, &[made.unwrap_or(attachment.entry)]).await?;
+		}
 		marks::started(&self.state, &binding.namespace, &listed.id, now()).await?;
 		marks::clear(&self.state, &binding.namespace, &listed.id).await
 	}
 
+	/// A container listed removed with everything it held, as its labels say what it joined.
+	async fn gone(&self, namespace: &str, listed: &Listed) -> Result<(), Refused> {
+		let reaches = !labels::reaching(&listed.labels).is_empty();
+		self.removed(namespace, &listed.id, reaches).await
+	}
+
 	/// Everything a container held removed, its network too.
-	async fn removed(&self, namespace: &str, id: &str) -> Result<(), Refused> {
-		self.containerd.remove(namespace, id).await?;
-		self.network.detach(&network_id(namespace, id)).await?;
-		secrets::remove(&self.places(namespace, id)).await?;
-		files::remove(&self.state, namespace, id).await?;
-		marks::unstarted(&self.state, namespace, id).await?;
-		marks::clear(&self.state, namespace, id).await
+	async fn removed(&self, namespace: &str, id: &str, reaches: bool) -> Result<(), Refused> {
+		let network = network_id(namespace, id);
+		// Every step is taken whatever one before failed, so no decrypted secret outlives its
+		// container, and the first failure is answered after.
+		let mut first: Option<Refused> = None;
+		let mut kept = |done: Result<(), Refused>| {
+			if let Err(refused) = done {
+				first.get_or_insert(refused);
+			}
+		};
+		kept(self.containerd.remove(namespace, id).await.map_err(Refused::from));
+		// A reacher's element of the fence goes before its address is given back.
+		if reaches {
+			kept(self.network.fence(&network, &[]).await.map_err(Refused::from));
+		}
+		kept(self.network.detach(&network).await.map_err(Refused::from));
+		kept(secrets::remove(&self.places(namespace, id)).await);
+		kept(files::remove(&self.state, namespace, id).await);
+		kept(hosts::remove(&self.state, namespace, id).await);
+		kept(marks::unstarted(&self.state, namespace, id).await);
+		kept(marks::clear(&self.state, namespace, id).await);
+		first.map_or(Ok(()), Err)
 	}
 }
 
@@ -576,7 +639,7 @@ where
 		input: DeploymentDeploy,
 	) -> Result<DeploymentDescribed, Refused> {
 		let wanted = Wanted::of(binding, &input)?;
-		self.replaced(binding, &input, &wanted, None).await
+		self.replaced(binding, &input, wanted, None).await
 	}
 
 	async fn stop(
@@ -628,7 +691,7 @@ where
 			return Err(Refused::bare("still_running"));
 		}
 		for listed in &mine {
-			self.removed(&binding.namespace, &listed.id).await?;
+			self.gone(&binding.namespace, listed).await?;
 		}
 		Ok(DeploymentDeleted {})
 	}
@@ -641,16 +704,30 @@ where
 	Q: Quota,
 	F: Fetch,
 {
+	/// Each container started past a failure of another; where any failed, a fault naming every
+	/// one started and every one failed, and why.
 	async fn restarted(&self, binding: &Binding) -> Result<Vec<String>, Refused> {
 		let mut started = Vec::new();
+		let mut failed = Vec::new();
 		for listed in self.containerd.list(&binding.namespace).await? {
 			let gone = listed.task.is_none() && listed.labels.contains_key(labels::RUNS);
 			if gone && !marks::is_set(&self.state, &binding.namespace, &listed.id).await {
-				self.started(binding, &listed).await?;
-				started.push(listed.id);
+				match self.started(binding, &listed).await {
+					Ok(()) => started.push(listed.id),
+					Err(refused) => {
+						let why = refused.message.unwrap_or_else(|| refused.reason.to_owned());
+						failed.push(format!("{} not started, {why}", listed.id));
+					}
+				}
 			}
 		}
-		Ok(started)
+		match failed.is_empty() {
+			true => Ok(started),
+			false => {
+				let started = started.iter().map(|id| format!("{id} started"));
+				Err(Refused::new("fault", started.chain(failed).collect::<Vec<_>>().join("; ")))
+			}
+		}
 	}
 }
 
@@ -666,7 +743,7 @@ where
 		for listed in self.containerd.list(&binding.namespace).await? {
 			if Kept::read(&listed.labels).is_ok_and(|kept| kept.into == Some(into)) {
 				self.containerd.stop(&binding.namespace, &listed.id, GRACE).await?;
-				self.removed(&binding.namespace, &listed.id).await?;
+				self.gone(&binding.namespace, &listed).await?;
 				removed.push(listed.id);
 			}
 		}
@@ -699,6 +776,6 @@ where
 		hosted: Hosted,
 	) -> Result<DeploymentDescribed, Refused> {
 		let wanted = Wanted::hosted(binding, &input, &hosted)?;
-		self.replaced(binding, &input, &wanted, Some(&hosted)).await
+		self.replaced(binding, &input, wanted, Some(&hosted)).await
 	}
 }

@@ -3,6 +3,8 @@
  * and `tokens.rs` hold them, read and written whole through the store, RFC nrs5v.
  */
 
+type warning = {reason: string, message: string, name: string}
+
 type refused = {reason: string, message: string}
 
 type capacity =
@@ -23,12 +25,18 @@ type state =
 
 type keptItem = {item: item, state: state}
 
+type adoptedFor = App(float) | Component({component: string, id: float}) | Item(float)
+
+type adopted = {kind: [#function | #object | #database], name: string, for_: adoptedFor}
+
 type kept = {
   generation: float,
   policy: float,
   grace: int,
   items: array<keptItem>,
   tokens: option<array<string>>,
+  adopted: array<adopted>,
+  warnings: array<warning>,
 }
 
 type store = {read: unit => promise<kept>, write: kept => promise<unit>}
@@ -56,6 +64,117 @@ let valid = (items: array<item>) => {
     }
   )
 }
+
+let kindName = (kind: kind) =>
+  switch kind {
+  | #function => "function"
+  | #object => "object"
+  | #database => "database"
+  }
+
+/** What makes a name a pattern rather than one exact name, or no name at all, RFC nrs5v. */
+let pattern = /[*?\[\]{}\s]/
+
+/** A Worker's name as Cloudflare takes one, which a listed Worker's name is held to. */
+let workerName = /^[a-z0-9][a-z0-9_-]{0,62}$/
+
+/** What an entry stands for as matching keys it, a component by its id alone, RFC y2xd3. */
+let forKey = (for_: adoptedFor) =>
+  switch for_ {
+  | App(id) => `app ${Float.toString(id)}`
+  | Component({id}) => `component ${Float.toString(id)}`
+  | Item(id) => `item ${Float.toString(id)}`
+  }
+
+let forName = (for_: adoptedFor) =>
+  switch for_ {
+  | App(id) => `app ${Float.toString(id)}`
+  | Component({component, id}) => `component ${component} ${Float.toString(id)}`
+  | Item(id) => `item ${Float.toString(id)}`
+  }
+
+/** Whether an entry stands for what its kind may, a deployment for a function, else an item. */
+let fits = (entry: adopted) =>
+  switch (entry.kind, entry.for_) {
+  | (#function, App(_) | Component(_)) | (#object | #database, Item(_)) => true
+  | (#function, Item(_)) | (#object | #database, App(_) | Component(_)) => false
+  }
+
+/**
+ * An exception list naming each resource once by its exact name, each standing for what its kind
+ * may, and no deployment or item twice.
+ */
+let validAdopted = (adopted: array<adopted>) => {
+  let names = Set.make()
+  let fors = Set.make()
+  adopted->Array.reduce(Ok(), (result, entry) =>
+    switch result {
+    | Error(_) => result
+    | Ok() if entry.name == "" => invalid("an adopted name is one exact name, never empty")
+    | Ok() if pattern->RegExp.test(entry.name) =>
+      invalid(`the adopted name "${entry.name}" is one exact name, never a pattern`)
+    | Ok() if entry.kind == #function && !(workerName->RegExp.test(entry.name)) =>
+      invalid(`the adopted name "${entry.name}" is no Worker's name, ^[a-z0-9][a-z0-9_-]{0,62}$`)
+    | Ok() if !fits(entry) =>
+      invalid(`${entry.name} is adopted as ${kindName(entry.kind)} for ${forName(entry.for_)}`)
+    | Ok() if names->Set.has(entry.name) => invalid(`the list adopts ${entry.name} twice`)
+    | Ok() if fors->Set.has(forKey(entry.for_)) =>
+      invalid(`the list adopts two resources for ${forKey(entry.for_)}`)
+    | Ok() =>
+      names->Set.add(entry.name)
+      fors->Set.add(forKey(entry.for_))
+      Ok()
+    }
+  )
+}
+
+/**
+ * An entry the host cannot hold, of a kind not offered, or an object or a database, whose wiring
+ * waits on the one D1 an item, RFC nrs5v's Ledger.
+ */
+let beyondAdopted = (adopted: array<adopted>, ~offered: array<kind>) =>
+  adopted->Array.findMap(entry =>
+    if !(offered->Array.includes(entry.kind)) {
+      let only = offered->Array.map(kindName)->Array.join(", ")
+      Some({
+        reason: "beyond_host",
+        message: `${entry.name}: ${kindName(entry.kind)} is not offered, only ${only}`,
+      })
+    } else {
+      switch entry.kind {
+      | #function => None
+      | #object | #database =>
+        Some({
+          reason: "beyond_host",
+          message: `${entry.name}: an adopted ${kindName(entry.kind)} cannot be held here yet`,
+        })
+      }
+    }
+  )
+
+/**
+ * The warnings standing once the list is `adopted`, each cleared only for a name it newly adds;
+ * a Worker let go is warned of by the driver, which alone knows whether it took it over.
+ */
+let warnedOf = (kept: kept, adopted: array<adopted>) => {
+  let added = name =>
+    adopted->Array.some(entry => entry.name == name) &&
+      !(kept.adopted->Array.some(entry => entry.name == name))
+  kept.warnings->Array.filter(warning => !added(warning.name))
+}
+
+/** An entry pointing a name kept at another deployment or item, which takes two applies, nrs5v. */
+let moved = (kept: kept, adopted: array<adopted>) =>
+  adopted->Array.findMap(entry =>
+    kept.adopted
+    ->Array.find(held => held.name == entry.name && held.for_ != entry.for_)
+    ->Option.map(held => {
+      reason: "invalid",
+      message: `${entry.name} stands for ${forName(held.for_)}; moving it to ${forName(
+          entry.for_,
+        )} takes two applies, one dropping it and one adding it`,
+    })
+  )
 
 /** The most an `object` item holds in bytes, 1 TiB, while this driver's cost is watched, nrs5v. */
 let most = 1_099_511_627_776.
@@ -181,13 +300,6 @@ let once = ask => {
 
 let byId = (a: keptItem, b: keptItem) => Float.compare(a.item.id, b.item.id)
 
-let kindName = (kind: kind) =>
-  switch kind {
-  | #function => "function"
-  | #object => "object"
-  | #database => "database"
-  }
-
 /** The first item of a kind install did not offer, refused whole as a container is, nrs5v. */
 let unoffered = (items: array<item>, ~offered: array<kind>) => {
   let kindOf = (item: item): option<kind> =>
@@ -216,17 +328,23 @@ let apply = async (
   ~generation,
   ~items: array<item>,
   ~tokens,
+  ~adopted,
   ~objects,
   ~databases,
 ) =>
-  switch valid(items) {
+  switch valid(items)->Result.flatMap(() => validAdopted(adopted->Option.getOr([]))) {
   | Error(_) as refused => refused
   | Ok() =>
     let kept = await store.read()
     if generation < kept.generation {
       Ok(kept.generation)
     } else {
-      switch beyond(items)->Option.orElse(unoffered(items, ~offered)) {
+      let beyondList = adopted->Option.flatMap(beyondAdopted(_, ~offered))
+      switch adopted
+      ->Option.flatMap(moved(kept, _))
+      ->Option.orElse(beyond(items))
+      ->Option.orElse(unoffered(items, ~offered))
+      ->Option.orElse(beyondList) {
       | Some(refused) => Error(refused)
       | None =>
         let held = id => kept.items->Array.find(k => k.item.id == id)
@@ -258,6 +376,12 @@ let apply = async (
           tokens: switch tokens {
           | Some(_) => tokens
           | None => kept.tokens
+          },
+          // An absent list leaves what is held, and one given replaces it whole, as items do.
+          adopted: adopted->Option.getOr(kept.adopted),
+          warnings: switch adopted {
+          | Some(adopted) => warnedOf(kept, adopted)
+          | None => kept.warnings
           },
         })
         Ok(generation)

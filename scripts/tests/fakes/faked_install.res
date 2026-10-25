@@ -40,6 +40,7 @@ let credentials = [
   ("DRIVER_API_TOKEN", "the-driver-token"),
   ("DATABASE_API_TOKEN", "the-database-token"),
   ("DRIVER_KINDS", "function,object,database"),
+  ("DRIVER_CONTROL_BASE", base),
 ]
 
 /** What the environment holds besides, which install never reads. */
@@ -66,7 +67,7 @@ type faked = {
   scratched: array<string>,
 }
 
-let make = (~env=credentials, ~stdin=token, ~drawn=id, ~draws=[], ~answer) => {
+let make = (~env=credentials, ~stdin=token, ~drawn=id, ~draws=drawnNames, ~answer) => {
   let ran = []
   let queued = draws->Array.copy
   let said = []
@@ -131,19 +132,42 @@ let installed = (~env=?, ~stdin=?, ~drawn=?, ~draws=?, account, root) => {
   (faked, result)
 }
 
+/** What a first install records, each name drawn by its role. */
+let drawnRecords = [
+  ("0a1b2c3d", "state"),
+  ("1b2c3d4e", "driver"),
+  ("2c3d4e5f", "object"),
+  ("3d4e5f6a", "bucket"),
+  ("4e5f6a7b", "database"),
+  ("5f6a7b8c", "user_database"),
+]
+
+/** The subdomain read and the bind, the last two a run with both its halves makes. */
+let subdomainRead = [
+  "curl -q --silent --show-error --fail-with-body ",
+  "--connect-timeout 10 --max-time 30 --header @- ",
+  "https://api.cloudflare.com/client/v4/accounts/023e105f4ecef8ad9ca31a8372d0c353/",
+  "workers/subdomain",
+]->Array.join("")
+let origin = "https://1b2c3d4e.my-subdomain.workers.dev"
+let bindLine = line(Install_bind.bindCall(~token="", ~base, ~origin, ~env=dict{}))
+let bound = [subdomainRead, bindLine]
+
 let first = [
   "wrangler d1 list --json",
   workersListed,
+  "wrangler r2 bucket list",
   "wrangler d1 list --json",
-  "wrangler d1 create driver-0a1b2c3d",
-  markerWritten("driver-0a1b2c3d"),
+  "wrangler d1 create 0a1b2c3d",
+  markerWritten("0a1b2c3d"),
   "wrangler d1 list --json",
-  "wrangler d1 migrations apply driver-0a1b2c3d --remote --config <driver>",
+  "wrangler d1 migrations apply 0a1b2c3d --remote --config <driver>",
+  recordsWritten("0a1b2c3d", drawnRecords),
   "wrangler d1 list --json",
-  "wrangler d1 create database-0a1b2c3d",
+  "wrangler d1 create 5f6a7b8c",
   "wrangler d1 list --json",
   "wrangler r2 bucket list",
-  "wrangler r2 bucket create objects-0a1b2c3d",
+  "wrangler r2 bucket create 3d4e5f6a",
   "rescript build in <driver>",
   "wrangler deploy --dry-run --outdir <out> --config <driver>",
   "wrangler versions list --json --config <driver>",
@@ -164,28 +188,36 @@ let first = [
   "wrangler secret list --config <database>",
   "wrangler secret put API_TOKEN --config <database>",
   "wrangler secret put BINDING --config <database>",
+  ...bound,
 ]
 
 let again = [
   "wrangler d1 list --json",
-  tablesRead("driver-0a1b2c3d"),
-  markerRead("driver-0a1b2c3d"),
+  tablesRead("0a1b2c3d"),
+  markerRead("0a1b2c3d"),
+  tablesRead("5f6a7b8c"),
+  workersListed,
+  recordsRead("0a1b2c3d"),
   "wrangler d1 list --json",
-  "wrangler d1 migrations apply driver-0a1b2c3d --remote --config <driver>",
+  "wrangler d1 migrations apply 0a1b2c3d --remote --config <driver>",
   "wrangler d1 list --json",
   "wrangler r2 bucket list",
   "rescript build in <driver>",
   "wrangler deploy --dry-run --outdir <out> --config <driver>",
   "wrangler versions list --json --config <driver>",
   "wrangler secret list --config <driver>",
+  "wrangler secret put BINDING --config <driver>",
   "rescript build in <object>",
   "wrangler deploy --dry-run --outdir <out> --config <object>",
   "wrangler versions list --json --config <object>",
   "wrangler secret list --config <object>",
+  "wrangler secret put BINDING --config <object>",
   "rescript build in <database>",
   "wrangler deploy --dry-run --outdir <out> --config <database>",
   "wrangler versions list --json --config <database>",
   "wrangler secret list --config <database>",
+  "wrangler secret put BINDING --config <database>",
+  ...bound,
 ]
 
 let moments = root => [
@@ -194,14 +226,18 @@ let moments = root => [
   Host.join([root, "cloudflare", "database", Install_world.moment]),
 ]
 
-/** The reads a dry run may run, the D1 list, the tables queries and the marker queries. */
+/** The reads a dry run may run, the D1 and Workers lists, and the tables, marker and records
+ * queries. */
 let reads = command => {
   let l = line(command)
   l == "wrangler d1 list --json" ||
-    (l->String.startsWith("wrangler d1 execute ") &&
-      [Install_ledger.tablesQuery, Install_ledger.markerQuery]->Array.some(q =>
-        l->String.endsWith(`${q} --json`)
-      ))
+  l == workersListed ||
+  (l->String.startsWith("wrangler d1 execute ") &&
+    [
+      Install_ledger.tablesQuery,
+      Install_ledger.markerQuery,
+      Install_ledger.recordsQuery,
+    ]->Array.some(q => l->String.endsWith(`${q} --json`)))
 }
 
 /** A dry run whose commands are answered by `account`, any but the reads refused. */
@@ -220,6 +256,7 @@ let writes = l =>
     " create ",
     "migrations apply",
     "CREATE TABLE",
+    "INSERT INTO",
     "deploy",
     "secret put",
     "rescript build",

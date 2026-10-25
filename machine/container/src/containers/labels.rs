@@ -14,12 +14,17 @@ const PORT: &str = "driver.port";
 const USER: &str = "driver.user";
 const ISOLATION: &str = "driver.isolation";
 const INTO: &str = "driver.into";
+/// The deployments it reaches, each as [`runs`] writes it, apart by commas.
+pub(super) const REACHING: &str = "driver.reaching";
+/// The entry a reacher reaches, the host's own address on the bridge and the entry's port.
+const ENTRY: &str = "driver.entry";
 
-/// A deployment's runs as a label holds it, `app/<id>` or `component/<name>`.
+/// A deployment's runs as a label holds it, `app/<id>` or `component/<id in 8 hex digits>`, as
+/// every resource of a scope is known by its id alone, RFC y2xd3.
 pub(super) fn runs(runs: &DeploymentRuns) -> String {
 	match runs {
 		DeploymentRuns::App { id } => format!("app/{id}"),
-		DeploymentRuns::Component { component } => format!("component/{component}"),
+		DeploymentRuns::Component { id, .. } => format!("component/{id:08x}"),
 	}
 }
 
@@ -90,6 +95,18 @@ pub(super) struct Kept {
 	pub(super) isolation: Vec<DeploymentIsolation>,
 	/// The container of capacity it runs in, by its item's id, none on one labelled before it was.
 	pub(super) into: Option<u32>,
+	/// The deployments it reaches, each as [`runs`] writes it, none on one labelled before it was.
+	pub(super) reaching: Vec<String>,
+	/// The entry it reaches, none on one labelled before it was.
+	pub(super) entry: Option<String>,
+}
+
+/// The deployments a container's labels say it reaches.
+pub(super) fn reaching(labels: &BTreeMap<String, String>) -> Vec<String> {
+	labels
+		.get(REACHING)
+		.map(|r| r.split(',').filter(|r| !r.is_empty()).map(str::to_owned).collect())
+		.unwrap_or_default()
 }
 
 impl Kept {
@@ -109,6 +126,13 @@ impl Kept {
 		if let Some(into) = self.into {
 			labels.insert(INTO.to_owned(), into.to_string());
 		}
+		if !self.reaching.is_empty() {
+			labels.insert(REACHING.to_owned(), self.reaching.join(","));
+		}
+		if let Some(entry) = &self.entry {
+			labels.insert(ENTRY.to_owned(), entry.clone());
+		}
+
 		labels
 	}
 
@@ -138,6 +162,8 @@ impl Kept {
 				.get(INTO)
 				.map(|n| n.parse().map_err(|_| format!("the label {INTO} is no item's id")))
 				.transpose()?,
+			reaching: reaching(labels),
+			entry: labels.get(ENTRY).cloned(),
 		})
 	}
 }

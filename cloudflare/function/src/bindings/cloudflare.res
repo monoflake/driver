@@ -118,13 +118,18 @@ let formOf = (bundle, ~bindings, ~tag) => {
 
 let idOf = result => result->member("id")->Option.flatMap(JSON.Decode.string)
 
-/** The Worker made with the stub answering stopped, and served at its workers.dev address. */
-let made = async (account, name) =>
+/**
+ * The Worker made with the stub answering stopped, served at its workers.dev address, and tagged
+ * `<owner>/made`, its owner all its first version's tag names before the last `/`.
+ */
+let made = async (account, name, ~tag) => {
+  let parts = tag->String.split("/")
+  let owner = parts->Array.slice(~start=0, ~end=Array.length(parts) - 1)->Array.join("/")
   switch await call(
     account,
     ~method="PUT",
     script(name),
-    ~form=formOf(Stopped.bundle, ~bindings=[], ~tag=None),
+    ~form=formOf(Stopped.bundle, ~bindings=[], ~tag=Some(`${owner}/made`)),
   ) {
   | Done(_) =>
     let json = JSON.Object(dict{"enabled": JSON.Boolean(true)})
@@ -136,6 +141,7 @@ let made = async (account, name) =>
   | Absent => Error(fault(`the Worker ${name} could not be made`))
   | Failed(why) => Error(fault(why))
   }
+}
 
 let uploaded = async (account, name, upload) => {
   let send = () =>
@@ -161,7 +167,7 @@ let uploaded = async (account, name, upload) => {
   | None =>
     switch await send() {
     | Absent =>
-      switch await made(account, name) {
+      switch await made(account, name, ~tag=upload.tag) {
       | Ok() => versioned(await send())
       | Error(_) as refused => refused
       }

@@ -157,7 +157,7 @@ let executed = async (env, item: option<Held.item>, input: Contracts.DatabaseExe
   }
 }
 
-let rewound = async (env, item: option<Held.item>, input: Contracts.DatabaseRewind.t, ~id) => {
+let rewound = async (env, item: option<Held.item>, input: Contracts.DatabaseRewind.t) => {
   let operation = Interface.rewind
   switch item {
   | None => refused(operation, "beyond_window", ~message=unheld)
@@ -173,14 +173,15 @@ let rewound = async (env, item: option<Held.item>, input: Contracts.DatabaseRewi
       // The moment before the restore, which a rewind to undoes it.
       let before = Date.now()
       let (accountId, databaseId, token) = (env.accountId, env.databaseId, env.apiToken)
-      // The restore acts by id, so the id is held to the name the guard holds every name to.
+      // The restore acts by id, so the id is held to the name the driver's records hold.
+      let recorded = await Held.recorded(env.db)
       let restored = switch await Restored.nameOf(~accountId, ~databaseId, ~token) {
-      | Ok(name) if name == `database-${id}` =>
+      | Ok(name) if Some(name) == recorded =>
         await Restored.restore(~accountId, ~databaseId, ~token, ~to=input.to)
       | Ok(name) =>
-        Error(
-          `the database ${env.databaseId} is ${name}, not database-${id}, so it is never restored`,
-        )
+        let held = recorded->Option.getOr("none")
+        let not = `not the one the driver's records hold, ${held}`
+        Error(`the database ${env.databaseId} is ${name}, ${not}, so it is never restored`)
       | Error(_) as refused => refused
       }
       switch restored {
@@ -206,7 +207,7 @@ let operationOf = (call: Interface.call) =>
   }
 
 /** A call on the database, against the one `database` item the list holds. */
-let answered = async (env, item, call: Interface.call, form, ~id) =>
+let answered = async (env, item, call: Interface.call, form) =>
   switch call {
   | Execute(input) =>
     (await executed(env, item, input))->Answer.written(
@@ -215,7 +216,7 @@ let answered = async (env, item, call: Interface.call, form, ~id) =>
       ~toCbor=Contracts.DatabaseExecuted.toCbor,
     )
   | Rewind(input) =>
-    (await rewound(env, item, input, ~id))->Answer.written(
+    (await rewound(env, item, input))->Answer.written(
       form,
       ~toJson=Contracts.DatabaseRewound.toJson,
       ~toCbor=Contracts.DatabaseRewound.toCbor,
@@ -223,7 +224,7 @@ let answered = async (env, item, call: Interface.call, form, ~id) =>
   }
 
 /** A call of a caller held to a token, as its path and its body say it. */
-let called = async (request, env, forms: Answer.forms, parts, ~holding, ~id) => {
+let called = async (request, env, forms: Answer.forms, parts, ~holding) => {
   let early = error => Answer.refused(error, forms.answer)
   switch (parts, request->Web.method_, forms.body) {
   | (["", "database", operation], "POST", Some(form)) =>
@@ -232,7 +233,7 @@ let called = async (request, env, forms: Answer.forms, parts, ~holding, ~id) => 
     | Some(bytes) =>
       switch Answer.call(form, bytes, ~fromJson=Interface.fromJson, ~fromCbor=Interface.fromCbor) {
       | Ok(envelope) if operationOf(envelope.call) == operation =>
-        await answered(env, holding, envelope.call, forms.answer, ~id)
+        await answered(env, holding, envelope.call, forms.answer)
       | Ok(envelope) =>
         let named = operationOf(envelope.call)
         early(Answer.malformed(`the path names ${operation} and the call ${named}`))
@@ -247,7 +248,7 @@ let called = async (request, env, forms: Answer.forms, parts, ~holding, ~id) => 
 }
 
 /** A call of a Worker installed whole, held to the binding's token before it is read. */
-let held = async (request, env, forms: Answer.forms, ~id) => {
+let held = async (request, env, forms: Answer.forms) => {
   let header = name => request->Web.requestHeaders->Web.header(name)->Nullable.toOption
   let early = error => Answer.refused(error, forms.answer)
   // An unset or empty BINDING holds no token, so every caller is denied.
@@ -272,14 +273,14 @@ let held = async (request, env, forms: Answer.forms, ~id) => {
   | Ok(false) => early(Answer.error("denied"))
   | Ok(true) =>
     let holding = await Held.item(env.db)
-    await called(request, env, forms, parts, ~holding, ~id)
+    await called(request, env, forms, parts, ~holding)
   }
 }
 
 /** A call answered, a fault unread where the Worker is not installed whole, never the caller's. */
 let serve = (request, env, forms: Answer.forms) =>
   switch Installed.idOf(env.installId) {
-  | Ok(id) => held(request, env, forms, ~id)
+  | Ok(_) => held(request, env, forms)
   | Error(message) => Promise.resolve(Answer.refused(Answer.error("fault", ~message), forms.answer))
   }
 

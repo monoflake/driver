@@ -148,5 +148,5 @@ async fn the_deployments_samples_of_modules_hold_but_what_they_send() {
 			sent += ran(case).await;
 		}
 	}
-	assert_eq!((cases, sent), (10, 7));
+	assert_eq!((cases, sent), (11, 7));
 }

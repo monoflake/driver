@@ -14,7 +14,7 @@ use axum::extract::Request;
 use axum::http::uri::{Authority, Scheme};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri, Version, header};
 use axum::response::{IntoResponse, Response};
-use driver_machine_container::{Containerd, Fault, Reached, Socket};
+use driver_machine_container::{Containerd, Fault, Listed, Reached, Socket, Task};
 use driver_machine_management::Binding;
 use envelope::contracts::DeploymentRuns;
 use hyper_util::client::legacy::Client;
@@ -38,6 +38,34 @@ pub(crate) struct Arguments {
 	/// containerd's socket.
 	#[arg(long, value_name = "socket", default_value = "/run/containerd/containerd.sock")]
 	containerd: PathBuf,
+	/// The containers' subnet, in CIDR notation, the driver's own `--subnet`; a request from it is
+	/// a deployment's, let reach only what that deployment reaches.
+	#[arg(long, value_name = "subnet", value_parser = subnet)]
+	subnet: Subnet,
+}
+
+/// An IPv4 subnet, its first address and its mask.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Subnet(u32, u32);
+
+impl Subnet {
+	fn holds(self, ip: IpAddr) -> bool {
+		match ip.to_canonical() {
+			IpAddr::V4(v4) => u32::from(v4) & self.1 == self.0,
+			IpAddr::V6(_) => false,
+		}
+	}
+}
+
+/// A subnet as `--subnet` takes it.
+fn subnet(text: &str) -> Result<Subnet, String> {
+	let malformed = || "expected an IPv4 subnet in CIDR notation".to_owned();
+	let (address, length) = text.split_once('/').ok_or_else(malformed)?;
+	let address: Ipv4Addr = address.parse().map_err(|_| malformed())?;
+	let length: u32 = length.parse().map_err(|_| malformed())?;
+	let shift = 32u32.checked_sub(length).ok_or_else(malformed)?;
+	let mask = u32::MAX.checked_shl(shift).unwrap_or(0);
+	Ok(Subnet(u32::from(address) & mask, mask))
 }
 
 /// How long a deployment's address is given to accept a connection before it is taken as down.
@@ -69,11 +97,47 @@ const FORWARDED_FOR: HeaderName = HeaderName::from_static("x-forwarded-for");
 const FORWARDED_PROTO: HeaderName = HeaderName::from_static("x-forwarded-proto");
 const FORWARDED_HOST: HeaderName = HeaderName::from_static("x-forwarded-host");
 
-/// A deployment as a host names it, an app of a binding.
+/// What kind of deployment a name names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Kind {
+	/// `app-<id>`.
+	App,
+	/// `component-<id>`, its id in 8 lowercase hex digits, RFC y2xd3.
+	Component,
+}
+
+/// A deployment as a host names it, an app or a component of a binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Named {
 	pub(crate) binding: Binding,
-	pub(crate) app: u32,
+	pub(crate) kind: Kind,
+	pub(crate) id: u32,
+}
+
+impl Named {
+	/// What it runs, as the deployments interface names it.
+	fn runs(self) -> DeploymentRuns {
+		match self.kind {
+			Kind::App => DeploymentRuns::App { id: self.id },
+			Kind::Component => DeploymentRuns::Component { component: String::new(), id: self.id },
+		}
+	}
+
+	/// What it runs as the container kind's label holds it.
+	fn label(self) -> String {
+		match self.kind {
+			Kind::App => format!("app/{}", self.id),
+			Kind::Component => format!("component/{:08x}", self.id),
+		}
+	}
+
+	/// Its name, as a host gives it.
+	fn name(self) -> String {
+		match self.kind {
+			Kind::App => format!("app-{}.b{}", self.id, self.binding),
+			Kind::Component => format!("component-{:08x}.b{}", self.id, self.binding),
+		}
+	}
 }
 
 /// A decimal number written as a name writes it, digits alone with no zero leading but zero's own,
@@ -85,20 +149,81 @@ fn number<T: std::str::FromStr>(text: &str) -> Option<T> {
 	canonical.then(|| text.parse().ok()).flatten()
 }
 
-/// The deployment a host names by its leftmost two labels, `app-<id>.b<binding>`, its port and
-/// the rest of it passed over, none where those two labels are not so.
+/// An id written as a component's is, 8 lowercase hex digits, so one component has one name.
+fn hex(text: &str) -> Option<u32> {
+	let written = text.len() == 8 && text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+	written.then(|| u32::from_str_radix(text, 16).ok()).flatten()
+}
+
+/// The deployment a host names by its leftmost two labels, `app-<id>.b<binding>` or
+/// `component-<id>.b<binding>`, the rest passed over, none where those two are not so.
 pub(crate) fn named(host: &str) -> Option<Named> {
 	// A name is its deployment's address with no table, provisional for RFC n0o4l.
 	let host = host.split(':').next().unwrap_or_default();
 	let mut labels = host.split('.');
-	let app = labels.next()?;
+	let deployment = labels.next()?;
 	let binding = labels.next()?;
-	let (prefix, app) = (app.get(..4)?, app.get(4..)?);
+	let (kind, id) = [("app-", Kind::App), ("component-", Kind::Component)].into_iter().find_map(
+		|(prefix, kind)| {
+			let head = deployment.get(..prefix.len())?;
+			head.eq_ignore_ascii_case(prefix).then(|| (kind, deployment.get(prefix.len()..)))
+		},
+	)?;
 	let (letter, binding) = (binding.get(..1)?, binding.get(1..)?);
-	if !prefix.eq_ignore_ascii_case("app-") || !letter.eq_ignore_ascii_case("b") {
+	if !letter.eq_ignore_ascii_case("b") {
 		return None;
 	}
-	Some(Named { binding: number(binding)?, app: number(app)? })
+	let id = id?;
+	let id = match kind {
+		Kind::App => number(id)?,
+		Kind::Component => hex(id)?,
+	};
+	Some(Named { binding: number(binding)?, kind, id })
+}
+
+/// The labels the container kind writes on each container, read here as it writes them.
+pub(crate) const RUNS: &str = "driver.runs";
+pub(crate) const ADDRESS: &str = "driver.address";
+pub(crate) const REACHING: &str = "driver.reaching";
+
+/// Whether a request from `peer` may reach a deployment, a container held to its own `reaching`
+/// and a component reached by a container alone, RFC y2xd3.
+pub(crate) fn allowed(listed: &[Listed], named: Named, peer: IpAddr, subnet: Subnet) -> Gate {
+	let peer = peer.to_canonical();
+	if !subnet.holds(peer) {
+		// From loopback, the tunnel or the tailnet, an app as before and a component as nothing.
+		return match named.kind {
+			Kind::App => Gate::Pass,
+			Kind::Component => Gate::Hidden,
+		};
+	}
+	let ip = |l: &Listed| {
+		let address = l.labels.get(ADDRESS)?;
+		address.parse::<SocketAddr>().ok().map(|a| a.ip().to_canonical())
+	};
+	// A source is known only by a running container, never a label alone.
+	let running = |l: &&Listed| l.task == Some(Task::Running) && l.labels.contains_key(RUNS);
+	let source = listed.iter().filter(running).find(|l| ip(l) == Some(peer));
+	let target = named.label();
+	let reaches = source
+		.and_then(|s| s.labels.get(REACHING))
+		.is_some_and(|reaching| reaching.split(',').any(|r| r == target));
+	match reaches {
+		true => Gate::Pass,
+		false => Gate::Refused,
+	}
+}
+
+/// What the entry makes of who asks for a deployment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Gate {
+	/// Let through.
+	Pass,
+	/// A container asking for what its `reaching` does not hold, or a source no running container
+	/// of the binding holds.
+	Refused,
+	/// Answered as though nothing were deployed by the name.
+	Hidden,
 }
 
 /// Where a named deployment is reached, as it is found at a request.
@@ -110,12 +235,14 @@ pub(crate) enum Found {
 	Down,
 	/// Nothing deployed by the name.
 	Absent,
+	/// A deployment whose `reaching` does not hold it asked for it.
+	Refused,
 }
 
 /// What finds the deployment a name is bound to; implemented for [`Driver`].
 pub(crate) trait Find: Send + Sync + 'static {
-	/// The deployment, as it is now.
-	fn find(&self, named: Named) -> impl Future<Output = Found> + Send;
+	/// The deployment, as it is now, as a request from `peer` may reach it.
+	fn find(&self, named: Named, peer: IpAddr) -> impl Future<Output = Found> + Send;
 }
 
 /// The address each deployment was last found running at, and when.
@@ -128,7 +255,7 @@ impl Last {
 		let mut last = self.0.lock().unwrap_or_else(PoisonError::into_inner);
 		match found {
 			Found::Running(address) => last.insert(named, (address, at)),
-			Found::Down | Found::Absent => last.remove(&named),
+			Found::Down | Found::Absent | Found::Refused => last.remove(&named),
 		};
 	}
 
@@ -145,16 +272,22 @@ impl Last {
 struct Labels<C> {
 	containerd: C,
 	last: Last,
+	subnet: Subnet,
 }
 
 impl<C: Containerd + 'static> Find for Labels<C> {
 	/// Read at each request, as the container kind reads them at a start; while containerd cannot
 	/// be reached, the address last found, never once containerd has said it is gone.
-	async fn find(&self, named: Named) -> Found {
+	async fn find(&self, named: Named, peer: IpAddr) -> Found {
 		let namespace = crate::listed::namespace(named.binding);
-		let runs = DeploymentRuns::App { id: named.app };
+		let runs = named.runs();
 		match self.containerd.list(&namespace).await {
 			Ok(listed) => {
+				match allowed(&listed, named, peer, self.subnet) {
+					Gate::Pass => {}
+					Gate::Refused => return Found::Refused,
+					Gate::Hidden => return Found::Absent,
+				}
 				let found = match driver_machine_container::reached(&listed, &runs) {
 					Reached::Running(address) => address.parse().map_or(Found::Down, Found::Running),
 					Reached::Down => Found::Down,
@@ -162,6 +295,11 @@ impl<C: Containerd + 'static> Find for Labels<C> {
 				};
 				self.last.found(named, found, Instant::now());
 				found
+			}
+			// Who asks cannot be told now, so nothing a check would hold is let through.
+			Err(Fault(why)) if self.subnet.holds(peer) || named.kind == Kind::Component => {
+				eprintln!("entry {namespace}: {why}, the request refused");
+				Found::Refused
 			}
 			Err(Fault(why)) => {
 				let recalled = self.last.recalled(named, Instant::now());
@@ -201,7 +339,8 @@ fn unhopped(headers: &mut HeaderMap) {
 /// The host a request was sent to, the first of its `X-Forwarded-Host`, its target's authority and
 /// its `Host` that names a deployment, else the first it has, RFC rxmd9.
 fn host(request: &Request) -> Option<String> {
-	// Trusted, as only loopback, the private address and the tunnel reach it, never the public.
+	// Trusted, as only loopback, the private address, the tunnel and a reacher reach it; a reacher
+	// is held to its reaching by the host chosen here.
 	let text = |name| request.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_owned);
 	// workerd writes the gateway's host into the first alone, and an edge writes its own name there.
 	let given = [
@@ -269,11 +408,14 @@ async fn entered<F: Find>(entry: &Entry<F>, peer: SocketAddr, request: Request) 
 	let named = host.as_deref().and_then(named);
 	let (answer, name) = match (named, host) {
 		(Some(named), Some(host)) => {
-			let name = format!("app-{}.b{}", named.app, named.binding);
-			let answer = match entry.find.find(named).await {
+			let name = named.name();
+			let answer = match entry.find.find(named, peer.ip()).await {
 				Found::Running(address) => forwarded(entry, address, peer, &host, request).await,
 				Found::Down => own(StatusCode::SERVICE_UNAVAILABLE, "the deployment is not running\n"),
 				Found::Absent => own(StatusCode::NOT_FOUND, "nothing is deployed by this name\n"),
+				Found::Refused => {
+					own(StatusCode::FORBIDDEN, "the deployment asking does not reach this one\n")
+				}
 			};
 			(answer, name)
 		}
@@ -416,8 +558,8 @@ pub(crate) async fn run(arguments: Arguments) -> ExitCode {
 		Ok(address) => eprintln!("entry on {address}{whose}"),
 		Err(e) => eprintln!("entry on an address not read: {e}"),
 	}
-	let find =
-		Arc::new(Labels { containerd: Socket { path: arguments.containerd }, last: Last::default() });
+	let containerd = Socket { path: arguments.containerd };
+	let find = Arc::new(Labels { containerd, last: Last::default(), subnet: arguments.subnet });
 	let (stop, mut stopping) = tokio::sync::watch::channel(false);
 	let stopped = async move {
 		let _ = stopping.wait_for(|stopped| *stopped).await;
@@ -448,6 +590,9 @@ pub(crate) async fn run(arguments: Arguments) -> ExitCode {
 }
 
 #[cfg(test)]
+mod one_id;
+
+#[cfg(test)]
 mod tests {
 	use std::collections::BTreeMap;
 	use std::io::{Read as _, Write as _};
@@ -461,19 +606,159 @@ mod tests {
 
 	use std::time::{Duration, Instant};
 
-	use super::{Find, Found, KEPT, Last, Named, host, named, serve};
+	use super::{
+		Find, Found, Gate, KEPT, Kind, Labels, Last, Named, allowed, host, named, serve, subnet,
+	};
+	use driver_machine_container::Listed;
+	use driver_machine_container::{Containerd, Fault, Task};
+	use std::net::IpAddr;
 
 	/// Deployments found as the test says, none but those named.
 	struct Stub(BTreeMap<Named, Found>);
 
 	impl Find for Stub {
-		async fn find(&self, named: Named) -> Found {
+		async fn find(&self, named: Named, _: IpAddr) -> Found {
 			self.0.get(&named).copied().unwrap_or(Found::Absent)
 		}
 	}
 
 	const fn of(binding: u32, app: u32) -> Named {
-		Named { binding, app }
+		Named { binding, kind: Kind::App, id: app }
+	}
+
+	/// A container as the container kind labels it, what it runs, where and what it reaches, its
+	/// task running.
+	fn container(runs: &str, address: &str, reaching: &str) -> Listed {
+		let mut labels = BTreeMap::from([
+			("driver.runs".to_owned(), runs.to_owned()),
+			("driver.address".to_owned(), address.to_owned()),
+			("driver.version".to_owned(), "0".repeat(64)),
+			("driver.runtime".to_owned(), "runc".to_owned()),
+			("driver.port".to_owned(), "8080".to_owned()),
+			("driver.user".to_owned(), "0:0".to_owned()),
+		]);
+		if !reaching.is_empty() {
+			labels.insert("driver.reaching".to_owned(), reaching.to_owned());
+		}
+		Listed { id: runs.replace('/', "-"), labels, task: Some(Task::Running) }
+	}
+
+	fn app(id: u32) -> Named {
+		of(1, id)
+	}
+
+	fn component(id: u32) -> Named {
+		Named { binding: 1, kind: Kind::Component, id }
+	}
+
+	fn peer(ip: &str) -> IpAddr {
+		ip.parse().unwrap()
+	}
+
+	#[test]
+	fn a_container_reaches_through_the_entry_only_what_its_reaching_holds() {
+		let target = component(0x1a2b_3c4d).label();
+		let mut stopped = container("app/4", "192.0.2.8:8080", &target);
+		stopped.task = Some(Task::Stopped(0));
+		let listed = [
+			container("app/1", "192.0.2.5:8080", &format!("{target},app/3")),
+			container("app/2", "192.0.2.6:8080", ""),
+			container(&target, "192.0.2.9:8080", ""),
+			stopped,
+		];
+		let net = subnet("192.0.2.0/24").unwrap();
+		let gate = |named, ip| allowed(&listed, named, peer(ip), net);
+		assert_eq!(gate(component(0x1a2b_3c4d), "192.0.2.5"), Gate::Pass);
+		assert_eq!(gate(app(3), "::ffff:192.0.2.5"), Gate::Pass);
+		assert_eq!(gate(app(2), "192.0.2.5"), Gate::Refused, "not in its reaching");
+		assert_eq!(gate(component(0x1a2b_3c4d), "192.0.2.6"), Gate::Refused, "reaching nothing");
+		// One of the subnet no running container of the binding holds, as another binding's.
+		assert_eq!(gate(component(0x1a2b_3c4d), "192.0.2.77"), Gate::Refused);
+		assert_eq!(gate(component(0x1a2b_3c4d), "192.0.2.8"), Gate::Refused, "its task is not running");
+		// From elsewhere, an app as before, a component as nothing deployed.
+		assert_eq!(gate(app(2), "127.0.0.1"), Gate::Pass);
+		assert_eq!(gate(app(2), "198.51.100.4"), Gate::Pass);
+		assert_eq!(gate(component(0x1a2b_3c4d), "127.0.0.1"), Gate::Hidden);
+	}
+
+	/// containerd as the entry reads it, the containers given, or none to be had.
+	struct Held(Option<Vec<Listed>>);
+
+	impl Containerd for Held {
+		async fn import(
+			&self,
+			_: &str,
+			_: &std::path::Path,
+		) -> Result<driver_machine_container::Image, Fault> {
+			Err(Fault("not here".into()))
+		}
+		async fn prepare(
+			&self,
+			_: &str,
+			_: &str,
+			_: &driver_machine_container::Image,
+		) -> Result<Vec<driver_machine_container::Mount>, Fault> {
+			Err(Fault("not here".into()))
+		}
+		async fn snapshot_path(&self, _: &str, _: &str) -> Result<std::path::PathBuf, Fault> {
+			Err(Fault("not here".into()))
+		}
+		async fn create(
+			&self,
+			_: &str,
+			_: &driver_machine_container::Spec,
+			_: &[driver_machine_container::Mount],
+			_: &std::path::Path,
+		) -> Result<(), Fault> {
+			Err(Fault("not here".into()))
+		}
+		async fn start(&self, _: &str, _: &str) -> Result<u32, Fault> {
+			Err(Fault("not here".into()))
+		}
+		async fn stop(&self, _: &str, _: &str, _: u64) -> Result<(), Fault> {
+			Err(Fault("not here".into()))
+		}
+		async fn remove(&self, _: &str, _: &str) -> Result<(), Fault> {
+			Err(Fault("not here".into()))
+		}
+		async fn list(&self, _: &str) -> Result<Vec<Listed>, Fault> {
+			self.0.clone().ok_or_else(|| Fault("containerd is restarting".into()))
+		}
+	}
+
+	fn labels(held: Option<Vec<Listed>>) -> Labels<Held> {
+		Labels {
+			containerd: Held(held),
+			last: Last::default(),
+			subnet: subnet("192.0.2.0/24").unwrap(),
+		}
+	}
+
+	#[tokio::test]
+	async fn the_entry_finds_a_target_for_a_reacher_alone_and_refuses_when_it_cannot_tell() {
+		let target = component(0x1a2b_3c4d);
+		let listed = vec![
+			container("app/1", "192.0.2.5:8080", &target.label()),
+			container("app/2", "192.0.2.6:8080", ""),
+			container(&target.label(), "192.0.2.9:8080", ""),
+		];
+		let found = labels(Some(listed));
+		let at: std::net::SocketAddr = "192.0.2.9:8080".parse().unwrap();
+		assert_eq!(found.find(target, peer("192.0.2.5")).await, Found::Running(at));
+		assert_eq!(found.find(target, peer("192.0.2.6")).await, Found::Refused);
+		assert_eq!(found.find(target, peer("127.0.0.1")).await, Found::Absent);
+		// containerd unlisted, a container's request and a component's are refused.
+		let blind = labels(None);
+		assert_eq!(blind.find(target, peer("192.0.2.5")).await, Found::Refused);
+		assert_eq!(blind.find(target, peer("127.0.0.1")).await, Found::Refused);
+		assert_eq!(blind.find(app(2), peer("192.0.2.5")).await, Found::Refused);
+	}
+
+	#[tokio::test]
+	async fn a_request_refused_by_reaching_is_forbidden() {
+		let at = entry(BTreeMap::from([(of(1, 1), Found::Refused)])).await;
+		let (head, _) = sent(at, get("app-1.b1")).await;
+		assert!(head.starts_with("HTTP/1.1 403 "), "{head}");
 	}
 
 	#[test]
@@ -482,6 +767,9 @@ mod tests {
 		assert_eq!(named("app-1.b1"), Some(of(1, 1)));
 		assert_eq!(named("APP-42.B7.example.com:8080"), Some(of(7, 42)));
 		assert_eq!(named("app-0.b0.x"), Some(of(0, 0)));
+		let component = Named { binding: 1, kind: Kind::Component, id: 0x1a2b_3c4d };
+		assert_eq!(named("component-1a2b3c4d.b1:36879"), Some(component));
+		assert_eq!(named(&component.name()), Some(component));
 		for bad in [
 			"",
 			"app-1",
@@ -492,6 +780,12 @@ mod tests {
 			"app-+1.b1.x",
 			"app-1.c1.x",
 			"ap-1.b1.x",
+			"component-.b1",
+			"component-01.b1",
+			"component-439041101.b1",
+			"component-1A2B3C4D.b1",
+			"component-1a2b3c4.b1",
+			"comp-1.b1",
 			"www.app-1.b1.x",
 			"app-1.b99999999999.x",
 			"127.0.0.1:36879",

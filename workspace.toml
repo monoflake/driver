@@ -45,7 +45,7 @@ spelled = ["MONOFLAKE_FOOTING"]
 
 [[names.data]]
 file = "machine/container/tests/containers.rs"
-spelled = ["MONOFLAKE_FOOTING"]
+spelled = ["MONOFLAKE_FOOTING", "MONOFLAKE_ROOT", "MONOFLAKE_CERTIFICATE", "MONOFLAKE_KEY", "MONOFLAKE_SIGNING_KEY", "MONOFLAKE_REACHING"]
 
 [[names.data]]
 file = "machine/function/tests/workerd/echo.capnp"
@@ -53,7 +53,7 @@ spelled = ["MONOFLAKE_FOOTING"]
 
 [[names.data]]
 file = "cloudflare/function/src/function.res"
-spelled = ["MONOFLAKE_FOOTING"]
+spelled = ["MONOFLAKE_FOOTING", "MONOFLAKE_", "MONOFLAKE_ROOT", "MONOFLAKE_KEY", "MONOFLAKE_CERTIFICATE", "MONOFLAKE_SIGNING_KEY"]
 
 [[names.data]]
 file = "cloudflare/function/tests/cloudflare_test.res"
@@ -61,4 +61,28 @@ spelled = ["MONOFLAKE_FOOTING"]
 
 [[names.data]]
 file = "cloudflare/function/tests/function_test.res"
+spelled = ["MONOFLAKE_FOOTING", "MONOFLAKE_ROOT", "MONOFLAKE_KEY", "MONOFLAKE_CERTIFICATE", "MONOFLAKE_SIGNING_KEY", "MONOFLAKE_", "MONOFLAKEX", "monoflake_key"]
+
+[[names.data]]
+file = "cloudflare/tests/driver_test.res"
 spelled = ["MONOFLAKE_FOOTING"]
+
+[[names.data]]
+file = "machine/container/src/containers/handed.rs"
+spelled = ["MONOFLAKE_", "MONOFLAKE_ROOT", "MONOFLAKE_KEY", "MONOFLAKE_CERTIFICATE", "MONOFLAKE_SIGNING_KEY", "MONOFLAKE_REACHING"]
+
+[[names.data]]
+file = "machine/function/src/config.rs"
+spelled = ["MONOFLAKE_REACHING", "MONOFLAKE_ROOT", "MONOFLAKE_KEY", "MONOFLAKE_CERTIFICATE", "MONOFLAKE_SIGNING_KEY", "MONOFLAKE_"]
+
+[[names.data]]
+file = "machine/function/tests/config.rs"
+spelled = ["MONOFLAKE_FOOTING", "MONOFLAKE_KEY", "MONOFLAKE_CERTIFICATE", "MONOFLAKE_REACHING"]
+
+[[names.data]]
+file = "machine/function/tests/hosted.rs"
+spelled = ["MONOFLAKE_ROOT", "MONOFLAKE_SIGNING_KEY", "/MONOFLAKE_SIGNING_KEY", "MONOFLAKE_REACHING"]
+
+[[names.data]]
+file = "machine/src/entry/one_id.rs"
+spelled = ["MONOFLAKE_REACHING"]

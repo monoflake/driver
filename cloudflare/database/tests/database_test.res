@@ -526,20 +526,22 @@ test("a restore Cloudflare's API refuses is a fault naming what it answered", as
 })
 
 test(
-  "a rewind of a database not named database-<install id> is a fault, nothing restored",
+  "a rewind of a database the driver's records do not name is a fault, nothing restored",
   async () => {
     let served = Served.make(~size=1_000_000.)
     let start = served.clock.contents
     deepEqual((await served->Served.execute(["CREATE TABLE t (i INTEGER)"]))->Pair.first, 200)
     served.clock := start +. 60_000.
-    let names = ["my-database", "database-4e5f6a7b", "driver-0a1b2c3d"]
+    let names = ["my-database", "database-5f6a7b8c", "0a1b2c3d"]
     let answers = []
     for at in 0 to Array.length(names) - 1 {
       served.named := names->Array.getUnsafe(at)
       answers->Array.push(await served->rewind(start +. 30_000.))
     }
-    let never = name =>
-      `the database ${Served.databaseId} is ${name}, not database-0a1b2c3d, so it is never restored`
+    let never = name => {
+      let not = `not the one the driver's records hold, ${Served.recordedName}`
+      `the database ${Served.databaseId} is ${name}, ${not}, so it is never restored`
+    }
     deepEqual(
       answers->Array.map(answer => (reasonOf(answer), messageOf(answer))),
       names->Array.map(name => ((500, Some("fault")), Some(never(name)))),

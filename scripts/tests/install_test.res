@@ -1,26 +1,29 @@
 /***
  * `install` against an account faked as wrangler shows it, its plan dry, its first run making each
- * part in order and a second changing nothing, every name followed by the install id.
+ * part in order and a second changing nothing, every name drawn and recorded.
  */
 open Asserted
 open Faked_account
 open Faked_install
 
-test("a dry run reads the D1 list alone, writes nothing and shows no secret", () => {
+test("a dry run reads the D1 and Workers lists alone, writes nothing and shows no secret", () => {
   let root = fixture()
   let (faked, result) = dryOn(empty(), root)
   deepEqual(result, Ok())
-  deepEqual((plain(faked), faked.scratched), (["wrangler d1 list --json"], []))
+  deepEqual((plain(faked), faked.scratched), (["wrangler d1 list --json", workersListed], []))
   ok(!shows(faked), ~message="a secret was said")
   ok(moments(root)->Array.every(path => !Host.existsSync(path)))
   ok(
     [
       "d1 list names no driver's D1 holding its marker, so a new install id would be drawn",
-      "wrangler d1 execute driver-<install id> --remote --command CREATE TABLE install",
-      "wrangler d1 create driver-<install id>",
-      "wrangler d1 create database-<install id>",
-      "wrangler d1 migrations apply driver-<install id> --remote",
-      "wrangler r2 bucket create objects-<install id>",
+      "wrangler d1 execute <state's name> --remote --command CREATE TABLE install",
+      "wrangler d1 create <state's name>",
+      "wrangler d1 create <user_database's name>",
+      "wrangler d1 migrations apply <state's name> --remote",
+      "wrangler d1 execute <state's name> --remote --command INSERT INTO owned",
+      "wrangler r2 bucket create <bucket's name>",
+      "a name would be drawn for state, and recorded",
+      "a name would be drawn for user_database, and recorded",
       "rescript build in cloudflare",
       "rescript build in cloudflare/object",
       "rescript build in cloudflare/database",
@@ -37,38 +40,32 @@ test("a dry run reads the D1 list alone, writes nothing and shows no secret", ()
 test("a dry run says which install id it would reuse, and refuses where two are marked", () => {
   let account = empty()
   account.databases = ["other"]
-  account->holding("driver-0a1b2c3d", ~mark=id)
+  account->holding("0a1b2c3d", ~mark=id)
   let (faked, result) = dryOn(account, fixture())
   deepEqual(result, Ok())
   ok(
     faked.said->Array.includes(
-      "d1 list names driver-0a1b2c3d, so the install id 0a1b2c3d would be reused",
+      "d1 list names 0a1b2c3d, so the install id 0a1b2c3d would be reused",
     ),
   )
-  ok(
-    faked.said->Array.some(l => l->String.includes("wrangler d1 migrations apply driver-0a1b2c3d")),
-  )
-  account->holding("driver-4e5f6a7b", ~mark="4e5f6a7b")
+  ok(faked.said->Array.some(l => l->String.includes("wrangler d1 migrations apply 0a1b2c3d")))
+  account->holding("4e5f6a7b", ~mark="4e5f6a7b")
   let (faked, result) = dryOn(account, fixture())
   ok(result->Result.isError)
   deepEqual(
     plain(faked),
     [
       "wrangler d1 list --json",
-      tablesRead("driver-0a1b2c3d"),
-      markerRead("driver-0a1b2c3d"),
-      tablesRead("driver-4e5f6a7b"),
-      markerRead("driver-4e5f6a7b"),
+      tablesRead("0a1b2c3d"),
+      markerRead("0a1b2c3d"),
+      tablesRead("4e5f6a7b"),
+      markerRead("4e5f6a7b"),
     ],
   )
 })
 
 test("a dry run that cannot read the account prints the rule and says why", () => {
-  let rule =
-    [
-      "  it reuses the install id of the one driver-<8 hex> holding the driver's marker, ",
-      "draws a",
-    ]->Array.join("")
+  let rule = "  it reuses the install id of the one D1 named by 8 hex digits holding the driver's"
   let (failed, result) = dryOn(~answer=_ => Error("the list failed"), empty(), fixture())
   deepEqual(result, Ok())
   ok(failed.said->Array.includes(rule), ~message=failed.said->Array.join("\n"))
@@ -91,7 +88,7 @@ test("a dry run that cannot read the account prints the rule and says why", () =
 
 test("a missing input is refused by its name before anything runs, none read in its stead", () => {
   let root = fixture()
-  let env = [...ambient, ("DRIVER_ACCOUNT_ID", "")]
+  let env = [...ambient, ("DRIVER_ACCOUNT_ID", ""), ("DRIVER_CONTROL_BASE", base)]
   let faked = make(~env, ~answer=_ => Ok(""))
   let names = "DRIVER_ACCOUNT_ID, DRIVER_INSTALL_TOKEN, DRIVER_API_TOKEN"
   deepEqual(
@@ -144,7 +141,8 @@ test("a first install makes each part in order, and a second changes nothing", (
   let (made, result) = installed(account, root)
   deepEqual(result, Ok())
   deepEqual(plain(made), first)
-  deepEqual(account.marks->Dict.get(full("driver")), Some(id))
+  deepEqual(account.marks->Dict.get(id), Some(id))
+  deepEqual(account.records->Dict.get(id), Some(drawnRecords))
   let (kept, result) = installed(account, root)
   deepEqual(result, Ok())
   deepEqual(plain(kept), again)
@@ -158,24 +156,27 @@ test("a first install makes each part in order, and a second changes nothing", (
 test("each part the account holds already is passed over", () => {
   let root = fixture()
   let account = empty()
-  account.databases = ["other", "driver", "database-0a1b2c3d"]
-  account->holding("driver-0a1b2c3d", ~mark=id)
-  account.buckets = ["objects", "objects-0a1b2c3d"]
+  account.databases = ["other", "driver", userDatabaseName]
+  account->holding(id, ~mark=id)
+  account->recording(id, drawnRecords)
+  account.buckets = ["objects", bucketName]
   let (faked, result) = installed(account, root)
   deepEqual(result, Ok())
   let lines = plain(faked)
   ok(lines->Array.every(l => !(l->String.includes(" create "))), ~message=lines->Array.join("\n"))
-  ok(faked.said->Array.includes("the database driver-0a1b2c3d is there already"))
-  ok(faked.said->Array.includes("the database database-0a1b2c3d is there already"))
-  ok(faked.said->Array.includes("the bucket objects-0a1b2c3d is there already"))
+  ok(faked.said->Array.includes("the database 0a1b2c3d is there already"))
+  ok(faked.said->Array.includes("the database 5f6a7b8c is there already"))
+  ok(faked.said->Array.includes("the bucket 3d4e5f6a is there already"))
+  // The driver's own D1 is the records', so it is never said to be foreign.
+  ok(faked.said->Array.every(l => !(l->String.includes("5f6a7b8c holds no"))))
 })
 
 test("a Worker is deployed again only where its bundle or its configuration changed", () => {
   let root = fixture()
   let account = empty()
   let _ = installed(account, root)
-  let object = account.workers->Dict.getUnsafe(full("object"))
-  let driver = account.workers->Dict.getUnsafe(full("driver"))
+  let object = account.workers->Dict.getUnsafe(objectName)
+  let driver = account.workers->Dict.getUnsafe(driverName)
   object.bundle = "the object's bundle, changed"
   let (faked, result) = installed(account, root)
   deepEqual(result, Ok())
@@ -222,39 +223,36 @@ test("each configuration of the moment holds its databases' ids and the account'
       vars->Install_world.text("DATABASE_ID"),
     )
   }
-  let driver = (Some("DB"), Some("uuid-driver-0a1b2c3d"))
+  let driver = (Some("DB"), Some("uuid-0a1b2c3d"))
   let account = Some(accountId)
-  deepEqual(seen(full("driver")), (Some(full("driver")), [driver], account, None))
-  deepEqual(seen(full("object")), (Some(full("object")), [driver], account, None))
+  deepEqual(seen(driverName), (Some(driverName), [driver], account, None))
+  deepEqual(seen(objectName), (Some(objectName), [driver], account, None))
   deepEqual(
-    seen(full("database")),
+    seen(databaseName),
     (
-      Some(full("database")),
-      [driver, (Some("DATABASE"), Some("uuid-database-0a1b2c3d"))],
+      Some(databaseName),
+      [driver, (Some("DATABASE"), Some("uuid-5f6a7b8c"))],
       account,
-      Some("uuid-database-0a1b2c3d"),
+      Some("uuid-5f6a7b8c"),
     ),
   )
   let named = (name, key, field) =>
-    configOf(full(name))
+    configOf(name)
     ->Install_world.member(key)
     ->JSON.Decode.array
     ->Option.getOr([])
     ->Array.map(entry => entry->Install_world.text(field))
-  deepEqual(named("driver", "d1_databases", "database_name"), [Some(full("driver"))])
+  deepEqual(named(driverName, "d1_databases", "database_name"), [Some(id)])
   deepEqual(
-    named("database", "d1_databases", "database_name"),
-    [Some(full("driver")), Some(full("database"))],
+    named(databaseName, "d1_databases", "database_name"),
+    [Some(id), Some(userDatabaseName)],
   )
-  deepEqual(named("object", "r2_buckets", "bucket_name"), [Some(full("objects"))])
-  let varOf = (name, var) =>
-    configOf(full(name))->Install_world.member("vars")->Install_world.text(var)
+  deepEqual(named(objectName, "r2_buckets", "bucket_name"), [Some(bucketName)])
+  let varOf = (name, var) => configOf(name)->Install_world.member("vars")->Install_world.text(var)
+  let workers = [driverName, objectName, databaseName]
+  deepEqual(workers->Array.map(name => varOf(name, "INSTALL_ID")), [Some(id), Some(id), Some(id)])
   deepEqual(
-    ["driver", "object", "database"]->Array.map(name => varOf(name, "INSTALL_ID")),
-    [Some(id), Some(id), Some(id)],
-  )
-  deepEqual(
-    ["driver", "object", "database"]->Array.map(name => varOf(name, "KINDS")),
+    workers->Array.map(name => varOf(name, "KINDS")),
     [Some("function,object,database"), None, None],
   )
 })
@@ -264,9 +262,9 @@ test("a secret is put only where its name is missing, on stdin and never in an a
   let account = empty()
   let (made, _) = installed(account, root)
   ok(!shows(made), ~message="a secret was in an argument or said")
-  let driver = account.workers->Dict.getUnsafe(full("driver"))
-  let object = account.workers->Dict.getUnsafe(full("object"))
-  let database = account.workers->Dict.getUnsafe(full("database"))
+  let driver = account.workers->Dict.getUnsafe(driverName)
+  let object = account.workers->Dict.getUnsafe(objectName)
+  let database = account.workers->Dict.getUnsafe(databaseName)
   deepEqual(
     (driver.secrets, object.secrets, database.secrets),
     (
@@ -282,17 +280,48 @@ test("a secret is put only where its name is missing, on stdin and never in an a
     plain(faked)->Array.filter(l => l->String.includes("secret put")),
     [
       "wrangler secret put API_TOKEN --config <driver>",
+      "wrangler secret put BINDING --config <driver>",
+      "wrangler secret put BINDING --config <object>",
       "wrangler secret put API_TOKEN --config <database>",
+      "wrangler secret put BINDING --config <database>",
     ],
   )
   deepEqual(database.secrets->Dict.get("API_TOKEN"), Some("the-database-token"))
   ok(!shows(faked))
 })
 
+test("a token on stdin replaces BINDING though it exists, and none leaves it as it is", () => {
+  let root = fixture()
+  let account = empty()
+  let _ = installed(account, root)
+  let driver = account.workers->Dict.getUnsafe(driverName)
+  driver.secrets->Dict.set("BINDING", "an older hash")
+  let (replaced, _) = installed(account, root)
+  deepEqual(driver.secrets->Dict.get("BINDING"), Some(hashed))
+  ok(replaced.said->Array.includes("the secret BINDING of 1b2c3d4e replaced"))
+  // Another secret there already is still passed over.
+  ok(replaced.said->Array.includes("the secret API_TOKEN of 1b2c3d4e is there already"))
+  driver.secrets->Dict.set("BINDING", "an older hash")
+  let env = credentials->Array.filter(((name, _)) => name != "DRIVER_CONTROL_BASE")
+  let (left, _) = installed(~env, ~stdin="", account, root)
+  deepEqual(driver.secrets->Dict.get("BINDING"), Some("an older hash"))
+  ok(plain(left)->Array.every(l => !(l->String.includes("secret put BINDING"))))
+  // A dry run says it would replace BINDING, by its name alone.
+  let (dry, _) = dryOn(empty(), root)
+  ok(
+    dry.said->Array.some(l =>
+      l->String.includes("secret put BINDING") && l->String.includes("replacing what is there")
+    ),
+    ~message=dry.said->Array.join("\n"),
+  )
+  ok(!shows(dry))
+})
+
 test("with nothing on stdin BINDING is passed over and said so", () => {
   let root = fixture()
   let account = empty()
-  let (faked, result) = installed(~stdin=" \n", account, root)
+  let env = credentials->Array.filter(((name, _)) => name != "DRIVER_CONTROL_BASE")
+  let (faked, result) = installed(~env, ~stdin=" \n", account, root)
   deepEqual(result, Ok())
   deepEqual(
     plain(faked)->Array.filter(l => l->String.includes("secret put")),
@@ -301,9 +330,9 @@ test("with nothing on stdin BINDING is passed over and said so", () => {
       "wrangler secret put API_TOKEN --config <database>",
     ],
   )
-  ok(faked.said->Array.includes("BINDING of driver-0a1b2c3d passed over, nothing on stdin"))
-  ok(faked.said->Array.includes("BINDING of object-0a1b2c3d passed over, nothing on stdin"))
-  ok(faked.said->Array.includes("BINDING of database-0a1b2c3d passed over, nothing on stdin"))
+  ok(faked.said->Array.includes("BINDING of 1b2c3d4e passed over, nothing on stdin"))
+  ok(faked.said->Array.includes("BINDING of 2c3d4e5f passed over, nothing on stdin"))
+  ok(faked.said->Array.includes("BINDING of 4e5f6a7b passed over, nothing on stdin"))
 })
 
 test("BINDING is keys' own BLAKE3 of the token's secret, in lowercase hex", () => {
@@ -421,9 +450,9 @@ test("the databases and the bucket are placed by DRIVER_LOCATION, or by Cloudfla
   deepEqual(
     creates(faked),
     [
-      "wrangler d1 create driver-0a1b2c3d --location weur",
-      "wrangler d1 create database-0a1b2c3d --location weur",
-      "wrangler r2 bucket create objects-0a1b2c3d --location weur",
+      "wrangler d1 create 0a1b2c3d --location weur",
+      "wrangler d1 create 5f6a7b8c --location weur",
+      "wrangler r2 bucket create 3d4e5f6a --location weur",
     ],
   )
   let (faked, result) = installed(empty(), fixture())
@@ -431,9 +460,9 @@ test("the databases and the bucket are placed by DRIVER_LOCATION, or by Cloudfla
   deepEqual(
     creates(faked),
     [
-      "wrangler d1 create driver-0a1b2c3d",
-      "wrangler d1 create database-0a1b2c3d",
-      "wrangler r2 bucket create objects-0a1b2c3d",
+      "wrangler d1 create 0a1b2c3d",
+      "wrangler d1 create 5f6a7b8c",
+      "wrangler r2 bucket create 3d4e5f6a",
     ],
   )
   let dry = env => {
@@ -444,9 +473,9 @@ test("the databases and the bucket are placed by DRIVER_LOCATION, or by Cloudfla
   let said = dry(placed)
   ok(said->Array.includes("the databases and the bucket placed by the hint weur, DRIVER_LOCATION"))
   let includes = text => said->Array.some(l => l->String.includes(text))
-  ok(includes("wrangler d1 create driver-<install id> --location weur"))
-  ok(includes("wrangler d1 create database-<install id> --location weur"))
-  ok(includes("wrangler r2 bucket create objects-<install id> --location weur"))
+  ok(includes("wrangler d1 create <state's name> --location weur"))
+  ok(includes("wrangler d1 create <user_database's name> --location weur"))
+  ok(includes("wrangler r2 bucket create <bucket's name> --location weur"))
   let said = dry(credentials)
   ok(said->Array.includes("no DRIVER_LOCATION, so Cloudflare places the databases and the bucket"))
   ok(said->Array.every(l => !(l->String.includes("--location"))), ~message=said->Array.join("\n"))

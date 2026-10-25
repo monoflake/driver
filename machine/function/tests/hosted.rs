@@ -11,9 +11,10 @@ use std::path::PathBuf;
 
 use common::{WORKERD, binding, bundle, functions, hash};
 use driver_machine_container::{Binding, Deployments};
+use envelope::contracts::DeploymentOf;
 use envelope::contracts::{
-	DeploymentArtifact, DeploymentDeploy, DeploymentForm, DeploymentIsolation, DeploymentNetwork,
-	DeploymentRuns, DeploymentRuntime,
+	DeploymentArtifact, DeploymentDeploy, DeploymentForm, DeploymentHanded, DeploymentIsolation,
+	DeploymentNetwork, DeploymentRuns, DeploymentRuntime,
 };
 
 fn echo() -> DeploymentDeploy {
@@ -34,6 +35,8 @@ fn echo() -> DeploymentDeploy {
 		network: vec![DeploymentNetwork::Http],
 		into: None,
 		port: None,
+		handed: None,
+		reaching: None,
 	}
 }
 
@@ -78,13 +81,11 @@ async fn secrets_are_imported_only_where_a_deployment_has_them() {
 }
 
 #[tokio::test]
-async fn deployed_again_the_same_nothing_is_fetched_and_a_new_version_is() {
+async fn deployed_again_the_container_kind_tells_the_one_deployment_apart() {
 	let functions = functions(served());
 	functions.deploy(&binding(), echo()).await.unwrap();
 	functions.deploy(&binding(), echo()).await.unwrap();
-	assert_eq!(functions.containers.fetched.lock().unwrap().len(), 1);
-	let named = DeploymentDeploy { into: Some(1), version: [7; 32], ..echo() };
-	functions.deploy(&binding(), named).await.unwrap();
+	// The bundle is fetched each time, and the container kind is asked each time.
 	assert_eq!(functions.containers.fetched.lock().unwrap().len(), 2);
 	assert_eq!(functions.containers.hosted.lock().unwrap().len(), 2);
 }
@@ -121,4 +122,91 @@ async fn an_artifact_that_is_no_bundle_is_malformed_and_nothing_is_hosted() {
 	let broken = DeploymentDeploy { artifact, ..echo() };
 	assert_eq!(functions.deploy(&binding(), broken).await.map_err(|r| r.reason), Err("malformed"));
 	assert!(functions.containers.hosted.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn what_is_handed_is_bound_by_its_reserved_name_and_a_secret_imported() {
+	let functions = functions(served());
+	let handed = vec![
+		DeploymentHanded::Root { value: vec![0xc0, 0x01] },
+		DeploymentHanded::SigningKey { value: b"made-up signing key".to_vec() },
+	];
+	functions.deploy(&binding(), DeploymentDeploy { handed: Some(handed), ..echo() }).await.unwrap();
+	let hosted = functions.containers.hosted.lock().unwrap();
+	let [(_, hosted)] = hosted.as_slice() else { panic!("hosted {}", hosted.len()) };
+	assert_eq!(
+		hosted.cmd,
+		["serve", "/worker/config.capnp", "config", "--import-path", "/run/secrets"]
+	);
+	let config = String::from_utf8(hosted.files["config.capnp"].clone()).unwrap();
+	assert!(config.contains("(name = \"MONOFLAKE_ROOT\", text = \"c001\")"), "{config}");
+	let secret = "(name = \"MONOFLAKE_SIGNING_KEY\", text = embed \"/MONOFLAKE_SIGNING_KEY\")";
+	assert!(config.contains(secret), "{config}");
+	assert!(!config.contains("made-up"), "{config}");
+}
+
+#[tokio::test]
+async fn a_value_handed_twice_or_a_target_not_deployed_is_invalid_and_nothing_is_fetched() {
+	let functions = functions(served());
+	let twice = vec![
+		DeploymentHanded::Certificate { value: vec![1] },
+		DeploymentHanded::Certificate { value: vec![2] },
+	];
+	let stand_in = DeploymentRuns::Component { component: "stand-in".into(), id: 9 };
+	let reaching = DeploymentDeploy { reaching: Some(vec![stand_in.clone()]), ..echo() };
+	for input in [DeploymentDeploy { handed: Some(twice), ..echo() }, reaching.clone()] {
+		let answered = functions.deploy(&binding(), input.clone()).await.map_err(|r| r.reason);
+		assert_eq!(answered, Err("invalid"), "{input:?}");
+	}
+	assert!(functions.containers.fetched.lock().unwrap().is_empty());
+	// Once its target is deployed on the binding, it is reached.
+	functions.deploy(&binding(), DeploymentDeploy { runs: stand_in, ..echo() }).await.unwrap();
+	functions.deploy(&binding(), reaching).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_worker_reads_what_it_reaches_from_its_environment_beside_what_is_handed() {
+	let functions = functions(served());
+	let stand_in = DeploymentRuns::Component { component: "stand-in".into(), id: 0x1a2b_3c4d };
+	functions
+		.deploy(&binding(), DeploymentDeploy { runs: stand_in.clone(), ..echo() })
+		.await
+		.unwrap();
+	// A target stopped is still deployed, so it is reached.
+	functions.stop(&binding(), DeploymentOf { runs: stand_in.clone() }).await.unwrap();
+	let reacher = DeploymentDeploy {
+		runs: DeploymentRuns::App { id: 2 },
+		handed: Some(vec![DeploymentHanded::Root { value: vec![1] }]),
+		secrets: BTreeMap::from([("TOKEN".to_owned(), b"hidden".to_vec())]),
+		reaching: Some(vec![stand_in]),
+		..echo()
+	};
+	functions.deploy(&binding(), reacher).await.unwrap();
+	let hosted = functions.containers.hosted.lock().unwrap();
+	let config = String::from_utf8(hosted[1].1.files["config.capnp"].clone()).unwrap();
+	let root = config.find("\"MONOFLAKE_ROOT\"").unwrap();
+	let from = "(name = \"MONOFLAKE_REACHING\", fromEnvironment = \"MONOFLAKE_REACHING\")";
+	let reaching = config.find(from).unwrap_or_else(|| panic!("{config}"));
+	let token = config.find("\"TOKEN\"").unwrap();
+	assert!(root < reaching && reaching < token, "beside the values handed, {config}");
+	assert!(config.contains("allow = [\"public\", \"private\"]"), "{config}");
+}
+
+#[tokio::test]
+async fn reaching_nothing_again_at_the_same_version_reaches_the_container_kind() {
+	let functions = functions(served());
+	let stand_in = DeploymentRuns::App { id: 9 };
+	functions
+		.deploy(&binding(), DeploymentDeploy { runs: stand_in.clone(), ..echo() })
+		.await
+		.unwrap();
+	let reacher = DeploymentDeploy { runs: DeploymentRuns::App { id: 2 }, ..echo() };
+	let reaching = DeploymentDeploy { reaching: Some(vec![stand_in]), ..reacher.clone() };
+	functions.deploy(&binding(), reaching).await.unwrap();
+	functions.deploy(&binding(), reacher).await.unwrap();
+	let hosted = functions.containers.hosted.lock().unwrap();
+	let (input, last) = hosted.last().unwrap();
+	assert_eq!(input.reaching, None);
+	let config = String::from_utf8(last.files["config.capnp"].clone()).unwrap();
+	assert!(!config.contains("MONOFLAKE_REACHING") && !config.contains("private"), "{config}");
 }

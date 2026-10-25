@@ -17,14 +17,14 @@ const PERIOD: u64 = 100_000;
 /// The `PATH` a process is given where its image sets none, containerd's.
 const PATH: &str = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
-/// containerd's default capabilities.
-const CAPABILITIES: [&str; 14] = [
+/// containerd's default capabilities but `CAP_NET_RAW`, so no container forges a packet past the
+/// machine's firewall, RFC p95sv.
+const CAPABILITIES: [&str; 13] = [
 	"CAP_CHOWN",
 	"CAP_DAC_OVERRIDE",
 	"CAP_FSETID",
 	"CAP_FOWNER",
 	"CAP_MKNOD",
-	"CAP_NET_RAW",
 	"CAP_SETGID",
 	"CAP_SETUID",
 	"CAP_SETFCAP",
@@ -143,6 +143,8 @@ pub(super) struct Asked<'a> {
 	pub(super) secrets: Option<&'a Path>,
 	/// The directory of the files a hosted runtime is given on the host, and where it is bound.
 	pub(super) files: Option<(&'a Path, &'a str)>,
+	/// Its hosts file on the host, bound read-only at `/etc/hosts`, where it reaches others.
+	pub(super) hosts: Option<&'a Path>,
 }
 
 /// An environment with each of `over` set on it, the image's own entry of a name replaced.
@@ -227,6 +229,14 @@ pub(super) fn build(asked: &Asked<'_>) -> Result<Value, Refused> {
 			"destination": SECRETS,
 			"type": "bind",
 			"source": secrets,
+			"options": ["rbind", "ro", "nosuid", "nodev", "noexec"],
+		}));
+	}
+	if let Some(hosts) = asked.hosts {
+		mounts.push(json!({
+			"destination": "/etc/hosts",
+			"type": "bind",
+			"source": hosts,
 			"options": ["rbind", "ro", "nosuid", "nodev", "noexec"],
 		}));
 	}

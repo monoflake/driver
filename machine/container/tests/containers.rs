@@ -11,13 +11,13 @@ use std::sync::{Arc, Mutex};
 
 use driver_machine_container::{
 	Attachment, Binding, Capacity, Chosen, Containerd, Containers, Deployments, Fault, Fetch, Host,
-	Hosted, Image, ImageConfig, Listed, Mount, Network, Quota, Reached, Refused, Runtimes, Spec,
-	Task, Unfetched, Unmake, reached,
+	Hosted, Image, ImageConfig, Listed, Mount, Network, Quota, Reached, Refused, Restart, Runtimes,
+	Spec, Task, Unfetched, Unmake, reached,
 };
 use envelope::contracts::{
 	Architecture, DeploymentArtifact, DeploymentDeploy, DeploymentDescribed, DeploymentForm,
-	DeploymentIsolation, DeploymentNetwork, DeploymentOf, DeploymentRuns, DeploymentRuntime,
-	DeploymentState,
+	DeploymentHanded, DeploymentIsolation, DeploymentNetwork, DeploymentOf, DeploymentRuns,
+	DeploymentRuntime, DeploymentState,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -36,6 +36,8 @@ struct Machine {
 	config: ImageConfig,
 	rootfs: PathBuf,
 	held: Mutex<BTreeMap<(String, String), Held>>,
+	/// The containers whose start fails, by their ids.
+	unstartable: Mutex<Vec<String>>,
 }
 
 impl Machine {
@@ -90,6 +92,9 @@ impl Containerd for Machine {
 
 	async fn start(&self, namespace: &str, id: &str) -> Result<u32, Fault> {
 		self.note(format!("start {id}"));
+		if self.unstartable.lock().unwrap().iter().any(|u| u == id) {
+			return Err(Fault(format!("{id} does not start")));
+		}
 		let mut held = self.held.lock().unwrap();
 		let held =
 			held.get_mut(&(namespace.into(), id.into())).ok_or_else(|| Fault("no container".into()))?;
@@ -130,24 +135,53 @@ struct Net {
 	refusing: Mutex<u32>,
 	/// How many times an address was asked whether it accepts a connection.
 	probed: Mutex<usize>,
+	/// Each network's address while it is attached, a new one for a new network, as the bridge
+	/// gives.
+	held: Mutex<BTreeMap<String, u8>>,
+	/// What each namespace's fence lets through, as last written.
+	fences: Mutex<BTreeMap<String, Vec<SocketAddr>>>,
+	/// Whether removing an element fails, as `nft` may.
+	unfenceable: Mutex<bool>,
+	/// The entry's port the bridge answers, as `--entry` gives it now.
+	entry: Mutex<u16>,
 }
 
 impl Network for Net {
 	async fn attach(&self, id: &str, port: u16) -> Result<Attachment, Fault> {
 		self.log.lock().unwrap().push(format!("attach {id} {port}"));
 		let mut given = self.given.lock().unwrap();
-		*given += 1;
-		let address: SocketAddr = format!("10.88.0.{}:{port}", *given + 1).parse().unwrap();
-		Ok(Attachment { netns: PathBuf::from("/run/netns").join(id), address })
+		let mut held = self.held.lock().unwrap();
+		let last = held.entry(id.to_owned()).or_insert_with(|| {
+			*given += 1;
+			*given + 1
+		});
+		let address: SocketAddr = format!("10.88.0.{last}:{port}").parse().unwrap();
+		// The entry at the host's address and a port no default holds, so it is read, not assumed.
+		let entry = SocketAddr::from(([10, 88, 0, 1], *self.entry.lock().unwrap()));
+		Ok(Attachment { netns: PathBuf::from("/run/netns").join(id), address, entry })
 	}
 
 	async fn detach(&self, id: &str) -> Result<(), Fault> {
 		self.log.lock().unwrap().push(format!("detach {id}"));
+		self.held.lock().unwrap().remove(id);
+		Ok(())
+	}
+
+	async fn fence(&self, id: &str, reached: &[SocketAddr]) -> Result<(), Fault> {
+		self.log.lock().unwrap().push(format!("fence {id} {reached:?}"));
+		if reached.is_empty() && *self.unfenceable.lock().unwrap() {
+			return Err(Fault("nft delete element: refused".into()));
+		}
+		let mut fences = self.fences.lock().unwrap();
+		match reached.is_empty() {
+			true => fences.remove(id),
+			false => fences.insert(id.to_owned(), reached.to_vec()),
+		};
 		Ok(())
 	}
 
 	async fn reached(&self, address: SocketAddr) -> bool {
-		assert_eq!(address.port(), 8080);
+		assert_ne!(address.port(), 0);
 		*self.probed.lock().unwrap() += 1;
 		let mut refusing = self.refusing.lock().unwrap();
 		*refusing = refusing.saturating_sub(1);
@@ -259,12 +293,22 @@ fn driver(test: &str, config: ImageConfig, refuse: bool) -> (Driver, Log) {
 		("https://artifacts.invalid/large.tar", Served::TooLarge),
 	]);
 	let driver = Containers {
-		containerd: Machine { log: log.clone(), config, rootfs, held: Mutex::default() },
+		containerd: Machine {
+			log: log.clone(),
+			config,
+			rootfs,
+			held: Mutex::default(),
+			unstartable: Mutex::default(),
+		},
 		network: Net {
 			log: log.clone(),
 			given: Mutex::default(),
 			refusing: Mutex::default(),
 			probed: Mutex::default(),
+			held: Mutex::default(),
+			fences: Mutex::default(),
+			unfenceable: Mutex::default(),
+			entry: Mutex::new(4321),
 		},
 		quota: Share { log: log.clone(), refuse },
 		fetch: Artifacts { log: log.clone(), served },
@@ -319,6 +363,8 @@ fn deploy(address: &str, bytes: &[u8]) -> DeploymentDeploy {
 		network: vec![DeploymentNetwork::Http],
 		into: Some(3),
 		port: Some(8080),
+		handed: None,
+		reaching: None,
 	}
 }
 
@@ -396,6 +442,12 @@ async fn its_spec_holds_its_capacity_its_network_and_what_it_is_given() {
 		serde_json::json!(["PATH=/usr/bin:/bin", "MONOFLAKE_FOOTING=https://footing.invalid"])
 	);
 	assert_eq!(s["process"]["cwd"], "/");
+	// No container holds a raw socket, RFC p95sv.
+	for set in ["bounding", "effective", "permitted"] {
+		let held = s["process"]["capabilities"][set].as_array().unwrap();
+		assert!(held.contains(&"CAP_CHOWN".into()), "{set}");
+		assert!(!held.contains(&"CAP_NET_RAW".into()), "{set}");
+	}
 	assert_eq!(s["process"]["user"], serde_json::json!({ "uid": 0, "gid": 0 }));
 	assert_eq!(s["root"]["path"], "rootfs");
 	assert_eq!(
@@ -406,7 +458,7 @@ async fn its_spec_holds_its_capacity_its_network_and_what_it_is_given() {
 	assert_eq!(s["linux"]["cgroupsPath"], format!("/b1/{}", spec.id));
 	let network =
 		s["linux"]["namespaces"].as_array().unwrap().iter().find(|n| n["type"] == "network").unwrap();
-	assert_eq!(network["path"], format!("/run/netns/b1-{}", spec.id));
+	assert_eq!(network["path"], format!("/run/netns/b1-{}", spec.id), "reaching nothing, its own");
 	// A secret is a file bound into the container, never in its spec, labels or sealed copy.
 	let open = driver.secrets.join("b1").join(&spec.id);
 	let bound = s["mounts"].as_array().unwrap().iter().find(|m| m["destination"] == "/run/secrets");
@@ -525,7 +577,7 @@ async fn a_new_version_replaces_the_one_before() {
 	driver.deploy(&binding(), echo()).await.unwrap();
 	let two = driver.deploy(&binding(), deploy("file:///echo-two.tar", ECHO_TWO)).await.unwrap();
 	assert_eq!(two.version, hash(ECHO_TWO));
-	assert_eq!(two.state, running("10.88.0.3:8080"));
+	assert_eq!(two.state, running("10.88.0.3:8080"), "the new serves beside the old");
 	let held = driver.containerd.held.lock().unwrap();
 	assert_eq!(held.len(), 1);
 	let old =
@@ -533,7 +585,7 @@ async fn a_new_version_replaces_the_one_before() {
 	let log = lines(&log);
 	let start_two = log.iter().position(|l| l.starts_with("start ") && !l.ends_with(&old)).unwrap();
 	let stop_one = log.iter().position(|l| *l == format!("stop {old} within 10000")).unwrap();
-	assert!(start_two < stop_one, "the new runs before the old is stopped");
+	assert!(start_two < stop_one, "reaching nothing, the new runs before the old is stopped");
 	assert!(log.contains(&format!("remove {old}")));
 	assert!(log.contains(&format!("detach b1-{old}")));
 }
@@ -783,6 +835,7 @@ async fn a_container_item_emptied_takes_what_runs_in_it_and_nothing_else() {
 	let log = lines(&log);
 	assert!(log.iter().any(|l| l.starts_with("stop app-1-")), "{log:#?}");
 	assert!(log.iter().any(|l| l.starts_with("detach b1-app-1-")), "{log:#?}");
+	assert!(!log.iter().any(|l| l.starts_with("detach b1-app-2-")), "{log:#?}");
 }
 
 #[tokio::test]
@@ -946,24 +999,286 @@ async fn two_fetches_of_one_artifact_at_once_each_read_what_they_checked() {
 }
 
 #[tokio::test]
-async fn components_whose_names_clean_alike_run_in_containers_apart() {
+async fn a_component_is_known_by_its_id_and_not_its_name() {
 	let (driver, _) = driver("components", shell(), false);
-	let component = |name: &str| DeploymentDeploy {
-		runs: DeploymentRuns::Component { component: name.into() },
+	let component = |name: &str, id: u32| DeploymentDeploy {
+		runs: DeploymentRuns::Component { component: name.into(), id },
 		..echo()
 	};
-	for name in ["a.b", "a-b", "a..b"] {
-		driver.deploy(&binding(), component(name)).await.unwrap();
-	}
-	let long = "x.".repeat(100);
-	driver.deploy(&binding(), component(&long)).await.unwrap();
+	driver.deploy(&binding(), component("issuer", 0x1a2b_3c4d)).await.unwrap();
+	driver.deploy(&binding(), component("issuer", 0x0000_0007)).await.unwrap();
 	let ids: Vec<String> =
 		driver.containerd.held.lock().unwrap().keys().map(|k| k.1.clone()).collect();
-	assert_eq!(ids.len(), 4);
-	// Each id is one containerd takes, at most 76 of its letters, digits and lone separators.
-	for id in ids {
-		assert!(id.len() <= 76, "{id}");
-		let taken = |p: &str| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric());
-		assert!(id.split(['-', '.', '_']).all(taken), "{id}");
+	let short = &hash(ECHO).iter().map(|b| format!("{b:02x}")).collect::<String>()[..12];
+	assert_eq!(ids, [format!("component-00000007-{short}"), format!("component-1a2b3c4d-{short}")]);
+	// The same id under another name is the one deployment, described as it is asked.
+	let renamed = DeploymentOf { runs: DeploymentRuns::Component { component: "x".into(), id: 7 } };
+	assert_eq!(driver.describe(&binding(), renamed.clone()).await.unwrap().runs, renamed.runs);
+}
+
+#[tokio::test]
+async fn what_is_handed_is_bound_under_its_reserved_name() {
+	let (driver, _) = driver("handed", shell(), false);
+	let handed = vec![
+		DeploymentHanded::Root { value: vec![0xc0, 0x01] },
+		DeploymentHanded::Key { value: b"made-up key".to_vec() },
+		DeploymentHanded::Certificate { value: vec![0x0e] },
+		DeploymentHanded::SigningKey { value: b"made-up signing key".to_vec() },
+	];
+	driver.deploy(&binding(), DeploymentDeploy { handed: Some(handed), ..echo() }).await.unwrap();
+	let spec = spec_of(&driver);
+	assert_eq!(
+		spec.runtime_spec["process"]["env"],
+		serde_json::json!([
+			"PATH=/usr/bin:/bin",
+			"MONOFLAKE_FOOTING=https://footing.invalid",
+			"MONOFLAKE_ROOT=c001",
+			"MONOFLAKE_CERTIFICATE=0e",
+		])
+	);
+	// A secret handed is a file among its secrets, beside its own.
+	let open = driver.secrets.join("b1").join(&spec.id);
+	// Every value handed is hex text, a secret's too.
+	let hex = |b: &[u8]| b.iter().map(|b| format!("{b:02x}")).collect::<String>().into_bytes();
+	assert_eq!(std::fs::read(open.join("MONOFLAKE_KEY")).unwrap(), hex(b"made-up key"));
+	let signing = std::fs::read(open.join("MONOFLAKE_SIGNING_KEY")).unwrap();
+	assert_eq!(signing, hex(b"made-up signing key"));
+	assert_eq!(std::fs::read(open.join("TOKEN")).unwrap(), b"hidden");
+	let labels = serde_json::to_string(&spec.labels).unwrap();
+	assert!(!labels.contains(&String::from_utf8(hex(b"made-up")).unwrap()), "{labels}");
+}
+
+#[tokio::test]
+async fn a_value_handed_twice_is_invalid_and_nothing_is_made() {
+	let (driver, log) = driver("handed-twice", shell(), false);
+	let twice =
+		vec![DeploymentHanded::Root { value: vec![1] }, DeploymentHanded::Root { value: vec![2] }];
+	let refused = driver.deploy(&binding(), DeploymentDeploy { handed: Some(twice), ..echo() }).await;
+	assert_eq!(refused.map_err(reason), Err("invalid"));
+	assert!(lines(&log).is_empty());
+}
+
+#[tokio::test]
+async fn a_deployment_reaches_only_what_is_deployed_on_its_binding() {
+	let (driver, _) = driver("reaching", shell(), false);
+	let target = DeploymentRuns::Component { component: "stand-in".into(), id: 9 };
+	let reaching = |runs: DeploymentRuns| DeploymentDeploy { reaching: Some(vec![runs]), ..echo() };
+	// Not deployed yet, so not reached.
+	let refused = driver.deploy(&binding(), reaching(target.clone())).await;
+	assert_eq!(refused.map_err(reason), Err("invalid"));
+	driver.deploy(&binding(), DeploymentDeploy { runs: target.clone(), ..echo() }).await.unwrap();
+	// Deployed on another binding is not on this one.
+	let other = Binding { namespace: "b2".into(), ..binding() };
+	assert_eq!(driver.deploy(&other, reaching(target.clone())).await.map_err(reason), Err("invalid"));
+	driver.deploy(&binding(), reaching(target)).await.unwrap();
+}
+
+/// The networks whose reacher's element is written, each by its name.
+fn fenced(driver: &Driver) -> Vec<String> {
+	driver.network.fences.lock().unwrap().keys().cloned().collect()
+}
+
+/// The environment of the container running a deployment of the label given.
+fn env_of(driver: &Driver, runs: &str) -> Vec<Value> {
+	let held = driver.containerd.held.lock().unwrap();
+	let mine =
+		held.values().find(|h| h.labels["driver.runs"] == runs && h.task == Some(Task::Running));
+	mine.unwrap().spec.runtime_spec["process"]["env"].as_array().unwrap().clone()
+}
+
+fn reaching(runs: DeploymentRuns) -> DeploymentDeploy {
+	DeploymentDeploy { reaching: Some(vec![runs]), ..echo() }
+}
+
+/// The id of the one container of a deployment's label.
+fn id_of(driver: &Driver, runs: &str) -> String {
+	let held = driver.containerd.held.lock().unwrap();
+	held.iter().find(|(_, h)| h.labels["driver.runs"] == runs).unwrap().0.1.clone()
+}
+
+#[tokio::test]
+async fn a_reacher_is_told_each_target_by_its_name_at_the_entry() {
+	let (driver, _) = driver("reacher-told", shell(), false);
+	let target = DeploymentRuns::Component { component: "stand-in".into(), id: 0x1a2b_3c4d };
+	driver.deploy(&binding(), DeploymentDeploy { runs: target.clone(), ..echo() }).await.unwrap();
+	driver.deploy(&binding(), reaching(target)).await.unwrap();
+	let origins = r#"MONOFLAKE_REACHING={"1a2b3c4d":"http://component-1a2b3c4d.b1:4321"}"#;
+	assert!(env_of(&driver, "app/1").contains(&origins.into()));
+}
+
+/// The spec of the container running a deployment of the label given.
+fn spec_running(driver: &Driver, runs: &str) -> Value {
+	let held = driver.containerd.held.lock().unwrap();
+	let mine =
+		held.values().find(|h| h.labels["driver.runs"] == runs && h.task == Some(Task::Running));
+	mine.unwrap().spec.runtime_spec.clone()
+}
+
+/// What a container's spec binds at `/etc/hosts`, read, none where it binds nothing there.
+fn hosts_of(spec: &Value) -> Option<String> {
+	let mounts = spec["mounts"].as_array().unwrap();
+	let bound = mounts.iter().find(|m| m["destination"] == "/etc/hosts")?;
+	assert_eq!(bound["options"], serde_json::json!(["rbind", "ro", "nosuid", "nodev", "noexec"]));
+	Some(std::fs::read_to_string(bound["source"].as_str().unwrap()).unwrap())
+}
+
+#[tokio::test]
+async fn a_reacher_resolves_the_names_it_reaches_alone_to_the_host() {
+	let (driver, _) = driver("hosts", shell(), false);
+	// The image's own is never read, so what it holds is not carried.
+	std::fs::write(driver.containerd.rootfs.join("etc/hosts"), "192.0.2.200\timage.example\n")
+		.unwrap();
+	let target = DeploymentRuns::Component { component: "stand-in".into(), id: 0x1a2b_3c4d };
+	let other = DeploymentRuns::App { id: 2 };
+	driver.deploy(&binding(), DeploymentDeploy { runs: target.clone(), ..echo() }).await.unwrap();
+	driver.deploy(&binding(), DeploymentDeploy { runs: other, ..echo() }).await.unwrap();
+	driver.deploy(&binding(), reaching(target)).await.unwrap();
+	let hosts = hosts_of(&spec_running(&driver, "app/1")).unwrap();
+	assert_eq!(hosts, "127.0.0.1\tlocalhost\n::1\tlocalhost\n10.88.0.1\tcomponent-1a2b3c4d.b1\n");
+	// Reaching nothing, it is given nothing, and keeps the image's own.
+	assert_eq!(hosts_of(&spec_running(&driver, "app/2")), None);
+	assert_eq!(hosts_of(&spec_running(&driver, "component/1a2b3c4d")), None);
+}
+
+#[tokio::test]
+async fn a_reacher_alone_is_let_reach_the_entry_and_its_element_goes_with_it() {
+	let (driver, log) = driver("elements", shell(), false);
+	let target = DeploymentRuns::App { id: 9 };
+	driver.deploy(&binding(), DeploymentDeploy { runs: target.clone(), ..echo() }).await.unwrap();
+	assert!(fenced(&driver).is_empty(), "nothing for a deployment reaching nothing");
+	driver.deploy(&binding(), reaching(target)).await.unwrap();
+	let reacher = format!("b1-{}", id_of(&driver, "app/1"));
+	assert_eq!(fenced(&driver), std::slice::from_ref(&reacher));
+	// The entry the attachment answered.
+	let entry: SocketAddr = "10.88.0.1:4321".parse().unwrap();
+	assert_eq!(driver.network.fences.lock().unwrap()[&reacher], [entry]);
+	driver.stop(&binding(), of()).await.unwrap();
+	driver.delete(&binding(), of()).await.unwrap();
+	assert!(fenced(&driver).is_empty());
+	let log = lines(&log);
+	let unfenced = log.iter().position(|l| *l == format!("fence {reacher} []")).unwrap();
+	let detached = log.iter().position(|l| *l == format!("detach {reacher}")).unwrap();
+	assert!(unfenced < detached, "its element goes before its address is given back");
+}
+
+#[tokio::test]
+async fn a_reacher_resumed_is_let_reach_the_entry_again() {
+	let (driver, _) = driver("resumed-fence", shell(), false);
+	let target = DeploymentRuns::App { id: 9 };
+	driver.deploy(&binding(), DeploymentDeploy { runs: target.clone(), ..echo() }).await.unwrap();
+	driver.deploy(&binding(), reaching(target)).await.unwrap();
+	driver.stop(&binding(), of()).await.unwrap();
+	// As a boot empties the set.
+	driver.network.fences.lock().unwrap().clear();
+	driver.resume(&binding(), of()).await.unwrap();
+	assert_eq!(fenced(&driver), [format!("b1-{}", id_of(&driver, "app/1"))]);
+}
+
+#[tokio::test]
+async fn a_target_stopped_is_still_reached_and_one_never_deployed_is_invalid() {
+	let (driver, _) = driver("stopped-target", shell(), false);
+	let target = DeploymentRuns::App { id: 9 };
+	assert_eq!(
+		driver.deploy(&binding(), reaching(target.clone())).await.map_err(reason),
+		Err("invalid")
+	);
+	driver.deploy(&binding(), DeploymentDeploy { runs: target.clone(), ..echo() }).await.unwrap();
+	driver.stop(&binding(), DeploymentOf { runs: target.clone() }).await.unwrap();
+	driver.deploy(&binding(), reaching(target)).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_reacher_is_replaced_with_no_gap_and_each_container_has_its_element() {
+	let (driver, log) = driver("no-gap", shell(), false);
+	let target = DeploymentRuns::App { id: 9 };
+	driver.deploy(&binding(), DeploymentDeploy { runs: target.clone(), ..echo() }).await.unwrap();
+	driver.deploy(&binding(), reaching(target.clone())).await.unwrap();
+	let old = id_of(&driver, "app/1");
+	let two =
+		DeploymentDeploy { reaching: Some(vec![target]), ..deploy("file:///echo-two.tar", ECHO_TWO) };
+	driver.deploy(&binding(), two).await.unwrap();
+	let new = id_of(&driver, "app/1");
+	let log = lines(&log);
+	let start_two = log.iter().position(|l| *l == format!("start {new}")).unwrap();
+	let stop_one = log.iter().position(|l| l.starts_with(&format!("stop {old} "))).unwrap();
+	assert!(start_two < stop_one, "{log:#?}");
+	assert_eq!(fenced(&driver), [format!("b1-{new}")]);
+}
+
+#[tokio::test]
+async fn reaching_nothing_again_takes_effect_at_the_same_version() {
+	let (driver, _) = driver("unreached", shell(), false);
+	let target = DeploymentRuns::App { id: 9 };
+	driver.deploy(&binding(), DeploymentDeploy { runs: target.clone(), ..echo() }).await.unwrap();
+	driver.deploy(&binding(), reaching(target)).await.unwrap();
+	driver.deploy(&binding(), echo()).await.unwrap();
+	let env = env_of(&driver, "app/1");
+	assert!(!env.iter().any(|e| e.as_str().unwrap().starts_with("MONOFLAKE_REACHING=")), "{env:?}");
+	assert!(fenced(&driver).is_empty());
+}
+
+#[tokio::test]
+async fn a_new_version_reaching_nothing_failing_leaves_the_one_before_running() {
+	let (mut driver, _) = driver("failed-overlapped", shell(), false);
+	driver.deploy(&binding(), echo()).await.unwrap();
+	driver.containerd.config = ImageConfig::default();
+	let two = deploy("file:///echo-two.tar", ECHO_TWO);
+	assert_eq!(driver.deploy(&binding(), two).await.map_err(reason), Err("malformed"));
+	let described = driver.describe(&binding(), of()).await.unwrap();
+	assert_eq!((described.version, described.state), (hash(ECHO), running("10.88.0.2:8080")));
+}
+
+#[tokio::test]
+async fn a_restart_goes_on_past_a_failure_and_names_each() {
+	let (driver, _) = driver("restarted", shell(), false);
+	driver.deploy(&binding(), echo()).await.unwrap();
+	let other = DeploymentDeploy { runs: DeploymentRuns::App { id: 2 }, ..echo() };
+	driver.deploy(&binding(), other).await.unwrap();
+	let (one, two) = (id_of(&driver, "app/1"), id_of(&driver, "app/2"));
+	// As a reboot ends every task.
+	for held in driver.containerd.held.lock().unwrap().values_mut() {
+		held.task = None;
 	}
+	driver.containerd.unstartable.lock().unwrap().push(one.clone());
+	let refused = driver.restarted(&binding()).await.unwrap_err();
+	assert_eq!(refused.reason, "fault");
+	let message = refused.message.unwrap();
+	assert!(message.contains(&format!("{two} started")), "{message}");
+	assert!(message.contains(&format!("{one} not started, {one} does not start")), "{message}");
+	let held = driver.containerd.held.lock().unwrap();
+	assert_eq!(held[&("b1".to_owned(), two)].task, Some(Task::Running));
+}
+
+#[tokio::test]
+async fn a_reacher_removed_while_nft_fails_still_gives_everything_back() {
+	let (driver, log) = driver("unfenced", shell(), false);
+	let target = DeploymentRuns::App { id: 9 };
+	driver.deploy(&binding(), DeploymentDeploy { runs: target.clone(), ..echo() }).await.unwrap();
+	driver.deploy(&binding(), reaching(target)).await.unwrap();
+	let reacher = id_of(&driver, "app/1");
+	driver.stop(&binding(), of()).await.unwrap();
+	*driver.network.unfenceable.lock().unwrap() = true;
+	let refused = driver.delete(&binding(), of()).await.unwrap_err();
+	assert_eq!(refused.message.as_deref(), Some("nft delete element: refused"));
+	// Its network, its decrypted secrets and its hosts go all the same.
+	assert!(lines(&log).contains(&format!("detach b1-{reacher}")));
+	assert!(!driver.secrets.join("b1").join(&reacher).exists());
+	assert!(!driver.state.join("hosts/b1").join(&reacher).exists());
+	assert!(driver.containerd.held.lock().unwrap().keys().all(|k| k.1 != reacher));
+}
+
+#[tokio::test]
+async fn a_reacher_resumed_is_let_reach_the_entry_it_was_made_with() {
+	let (driver, _) = driver("resumed-entry", shell(), false);
+	let target = DeploymentRuns::App { id: 9 };
+	driver.deploy(&binding(), DeploymentDeploy { runs: target.clone(), ..echo() }).await.unwrap();
+	driver.deploy(&binding(), reaching(target)).await.unwrap();
+	driver.stop(&binding(), of()).await.unwrap();
+	driver.network.fences.lock().unwrap().clear();
+	// The driver started again with another entry.
+	*driver.network.entry.lock().unwrap() = 4999;
+	driver.resume(&binding(), of()).await.unwrap();
+	let reacher = format!("b1-{}", id_of(&driver, "app/1"));
+	let made: SocketAddr = "10.88.0.1:4321".parse().unwrap();
+	assert_eq!(driver.network.fences.lock().unwrap()[&reacher], [made]);
 }
