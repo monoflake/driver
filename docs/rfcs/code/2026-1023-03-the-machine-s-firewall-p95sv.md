@@ -96,13 +96,24 @@ Choices made provisionally while the thread runs, read by the author at its end.
   the normal path or removed before that step counts as done, the author choosing which for each.
 - **A container on the local test machine is given a public nameserver**, a small matter,
   provisional, chosen by the advisor on 2026-10-24, as on a real machine, and the fence makes no
-  exception for the local machine's own resolver.
+  exception for the local machine's own resolver. Docker's own flags give it, `--dns` for the
+  public nameservers and `--add-host` for the host the driver fetches artifacts from, since the
+  container's `/etc/resolv.conf` and `/etc/hosts` are Docker's files and no unit rewrites them.
 - **A connection the fence allowed outlives its element**, a small matter, provisional, chosen by
   the advisor on 2026-10-24, and is not handled: an element goes only with its container, and the
   container's connections go with it.
 - **The fence's unit is ordered as NixOS's own firewall is**, a small matter, provisional, chosen
   by the advisor on 2026-10-24, with no default dependencies, before the network.
-- **The fence drops new forwarded connections leaving by the containers' bridge**, a small matter,
-  provisional, chosen by the advisor on 2026-10-24, so a neighbor routing through the host never
-  reaches a container's port; a container publishing a host port is named, never excepted on its
-  own.
+- **The fence drops everything forwarded into the containers' bridge but replies**, a small matter,
+  provisional, chosen by the advisor on 2026-10-24, replies being `ct state established,related`
+  so an ICMP error such as fragmentation-needed still reaches a container. Nothing legitimate
+  starts a forwarded connection into the bridge: the entry reaches a container from the host
+  itself, and no container publishes a port. So a neighbor routing through the host never reaches
+  a container's port.
+- **NixOS's firewall reloading leaves the fence standing**, a small matter, provisional, chosen by
+  the advisor on 2026-10-24, as evaluated against nixpkgs `nixos-26.05` at
+  `da6dc0e7b26060f2f71ce3ef7088fb56ee44fa36`: `flushRuleset` is false, the state version being
+  26.05 with no other ruleset, and the reload deletes only `table inet nixos-fw`. A reload of the
+  fence keeps the driver's elements; a boot empties them and the driver writes them again. No
+  restore is built. The driver and the entry, its socket included, require the fence and start
+  after it.
