@@ -124,7 +124,9 @@ Decided by the author on 2026-10-23, from the research the Options below record.
   network. A deploy cannot carry that inline path yet: once built, the deploy gives a Worker bindings
   to what the same binding holds, such as a service binding to the driver's own object Worker, as the
   control compiles the paths fewest jumps first, RFCs vr5lw and 94y0d; a machine's equivalent is its
-  loopback. It waits on a moment, the workspace's deferred item `inline-data-path`.
+  loopback. It waits on a moment, the workspace's deferred item `inline-data-path`, whose machine
+  half is under way since 2026-10-24 and whose Cloudflare half waits; until it lands, a deployment's
+  `reaching` here answers `beyond_host`.
 - **An exception list, decided in principle by the author on 2026-10-24**: an organization's admin
   may register named resources the driver also manages, each mapped to an item id, so what is
   managed is the id-form resources and that list, and everything else is ignored. Its two details,
