@@ -26,9 +26,20 @@ type proc
 @val external process: proc = "process"
 @set external setExitCode: (proc, int) => unit = "exitCode"
 
-/** What stdin holds whole, read only where it is no terminal. */
-@val @scope(("process", "stdin")) external stdinTerminal: Nullable.t<bool> = "isTTY"
-@module("node:fs") external readStdin: (@as(0) _, @as("utf8") _) => string = "readFileSync"
+/** Whether stdin is a terminal, asked of descriptor 0 without making process.stdin. */
+@module("node:tty") external stdinTerminal: @as(0) _ => bool = "isatty"
+/** One read of stdin into a buffer from its start, the count of bytes read, 0 at its end. */
+@module("node:fs")
+external readStdinInto: (@as(0) _, Uint8Array.t, @as(0) _, int, @as(json`null`) _) => int =
+  "readSync"
+/** The code a node error names itself by, as `EAGAIN`. */
+@get external errorCode: JsExn.t => Nullable.t<string> = "code"
+type shared
+@new external sharedBuffer: int => shared = "SharedArrayBuffer"
+@new external int32sOf: shared => Int32Array.t = "Int32Array"
+@val @scope("Atomics") external waitOn: (Int32Array.t, int, int, int) => string = "wait"
+/** The thread held still for some milliseconds, as a synchronous read waits. */
+let pause = milliseconds => waitOn(int32sOf(sharedBuffer(4)), 0, 0, milliseconds)->ignore
 
 type hash
 @module("node:crypto") external createHash: string => hash = "createHash"
@@ -40,6 +51,7 @@ type buffer
 @module("node:buffer") @scope("Buffer")
 external fromEncoded: (string, string) => Uint8Array.t = "from"
 @module("node:buffer") @scope("Buffer") external fromBytes: Uint8Array.t => buffer = "from"
+@module("node:buffer") @scope("Buffer") external joined: array<Uint8Array.t> => buffer = "concat"
 @send external encoded: (buffer, string) => string = "toString"
 
 type spawned = {status: Nullable.t<int>, stdout: Nullable.t<string>, stderr: Nullable.t<string>}
