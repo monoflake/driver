@@ -127,3 +127,16 @@ Choices made provisionally while the thread runs, read by the author at its end.
   provisional, chosen by the advisor on 2026-10-24: the sysctl is one string set in one place, so an
   option adding to the list is the only way the local test machine adds conform's two ports without
   writing the entry's and the driver's a second time. The entry's and the driver's are always kept.
+- **A driver manages only the `reaching` elements whose reacher lies in its own `--subnet`**, a
+  small matter, provisional, chosen by the advisor on 2026-10-25: it adds, deletes and rewrites
+  those alone, so two drivers on one machine, the live one and conform's, coexist. As a fact,
+  before this the first machine holding both a reacher and a conform run would have lost the
+  reacher's path every 60 s, each driver deleting the other's elements; none had one yet.
+- **The fence covers every driver bridge, `driver0` and conform's `conform0`**, provisional, chosen
+  by the advisor on 2026-10-25: each takes the same `host` and `routed` chains and the same refusal
+  of frames between containers, and the build-time scope check accepts rules scoped to either
+  alone, so conform's containers are held as live ones and conform proves the fence on a real
+  machine. `machine.conform` holds conform's bridge, entry and driver ports in one place, opens the
+  entry's port on its bridge alone and reserves both, replacing the hand-written reserved ports.
+  Rejected: conform inserting rules into the live firewall itself. NixOS's firewall forced off on
+  the local machine hid that conform's entry was closed on a real one.
