@@ -504,3 +504,8 @@ Choices made provisionally while the thread runs, read by the author at its end.
   overwriting a name its records hold, the driver reads that Worker's tags and acts only when it
   carries the tag the driver gave that deployment, refusing otherwise. A claim is given back only
   once the Worker is confirmed absent.
+- **The tag the driver gives a Worker begins with its install and its own name**, a small matter,
+  provisional, chosen by the advisor on 2026-10-24: `<install id>/<own name>/...`, so the tag ties
+  the Worker to this install of the driver as well as to its deployment, where the name alone could
+  be written alike by anyone holding the account or by another install. It guards against accident,
+  not against the account's owner, who can do anything there anyway.
