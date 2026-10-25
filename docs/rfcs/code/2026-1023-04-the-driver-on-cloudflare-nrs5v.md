@@ -178,8 +178,9 @@ Decided by the author on 2026-10-23, from the research the Options below record.
   - **The binding's token** is kept as its BLAKE3 in hex, the secret `BINDING`, as RFC 3d3nt keeps
     only a hash; once an `apply` carries `tokens`, the list in D1 stands in its place.
   - **A deployment's Worker** is named by its deployment's resource id, bare, an app's or a
-    component's. Its version is the tag `version-<hash in hex>`, cut
-    short where a tag holds less, the rule written here when it is. Its address is
+    component's. Its version is the tag `<install id>/<own name>/version-<hash in hex>`, the stub's
+    `<install id>/<own name>/stopped` and a first deploy's `<install id>/<own name>/made`, as the
+    Ledger has it. Its address is
     `<Worker>.<the account's subdomain>.workers.dev`, a Custom Domain waiting on a domain, RFC
     vr5lw.
   - **Stopping** deploys a stub version answering every request 503 `stopped`, and keeps the
@@ -201,8 +202,8 @@ Decided by the author on 2026-10-23, from the research the Options below record.
     `too_large`; a list holding a `container` or `volume` item is refused whole as `beyond_host`, as
     driver(machine) refuses a list it cannot hold; a bundle's `.json` module is refused as
     `beyond_host`, since turning JSON into an ES module goes past mapping the metadata field for
-    field, until an app needs one; a version's tag is 72 bytes, within the 100 a tag holds, so none
-    is cut.
+    field, until an app needs one; a version's tag is at most 90 bytes, within the 100 a tag
+    holds, so none is cut.
   - **Its tests** are each block's own, Cloudflare's API answered by fixtures taken from its
     documents' examples, each naming its address; the function's samples run against those fakes,
     and the program's are the management's three and `lifecycle.json`.
@@ -305,8 +306,9 @@ Decided by the author on 2026-10-23, from the research the Options below record.
     2026-10-24 `DRIVER_ACCOUNT_ID` and `DRIVER_INSTALL_TOKEN` for itself, never the ambient
     `CLOUDFLARE_*` names, as the Ledger has it, and the Worker `driver`'s `API_TOKEN` as
     `DRIVER_API_TOKEN`. The binding's token is read on stdin, as `driver-machine bind` reads it,
-    and put as `BINDING` by its BLAKE3; with nothing on stdin that step is passed over, how a
-    binding is made waiting on monoflake/platform's RFC 7i2at.
+    and put as `BINDING` by its BLAKE3, and with `DRIVER_CONTROL_BASE` install binds once every
+    Worker is deployed, monoflake/platform's RFC 8j7b0; the token and the base go both or neither,
+    and with neither both steps are passed over.
   - **Where the parts are placed is `DRIVER_LOCATION`**, a location hint given to the database and
     the bucket, `wnam` on the test account; with none given no hint is passed and Cloudflare places
     them, so a user binding an account of their own chooses. `install` builds each Worker's package
@@ -362,7 +364,8 @@ Choices made provisionally while the thread runs, read by the author at its end.
   - It refuses to run when `DRIVER_ACCOUNT_ID` is unset, rather than falling back.
   - Every `CF_*` name is stripped from a child's environment as well, and wrangler is kept from
     reading `.env` files, since wrangler 4 still reads the older names and loads `.env` and
-    `.env.local` before every command, after review on 2026-10-24.
+    `.env.local` before every command, after review on 2026-10-24. Since replaced by an allow list,
+    "install hands its children an allow-listed environment" below.
 - **The exception list reaches the driver through management**, provisional, chosen by the advisor
   on 2026-10-24: `apply` carries it, the driver keeps it in its state, and management describe
   reports every listed name and its item.
@@ -419,7 +422,8 @@ Choices made provisionally while the thread runs, read by the author at its end.
     run and the run as "possibly an interrupted install of this driver; delete it by hand if it is
     yours". It is still never touched, and a non-conflicting id is drawn.
 - **curl for List Workers, the token on stdin as a header**, provisional, chosen by the advisor on
-  2026-10-24, wrangler listing no Workers. If paging exists, install reads every page before
+  2026-10-24, wrangler listing no Workers, and since RFC 8j7b0 to read the account's Workers
+  subdomain and to call the control's `bind`. If paging exists, install reads every page before
   deciding anything; a list it could not read whole counts as a failed read-only check, so install
   stops with nothing changed.
 - **`delete` answers Success with no Cloudflare call when `KINDS` lacks `function`**, provisional,
@@ -520,3 +524,37 @@ Choices made provisionally while the thread runs, read by the author at its end.
   the Worker to this install of the driver as well as to its deployment, where the name alone could
   be written alike by anyone holding the account or by another install. It guards against accident,
   not against the account's owner, who can do anything there anyway.
+- **install sends its bind to `DRIVER_CONTROL_BASE`**, a small matter, provisional, chosen by the
+  advisor on 2026-10-24, named as the runner's `--base` is, where a control's calls are sent. A base
+  is `https`, a DNS host, the default port and a path allowed, with no query, fragment or user; a
+  trailing `/` is dropped and a call goes to the base and `/{interface}/{operation}`, joined by one
+  `/`. A control at the gateway's `/v{n}/app-{id}` is the gateway's design, not a gap. The binding's
+  token on stdin and the base go both or neither: one alone refuses before anything is deployed. The
+  Worker's origin install reports keeps platform's RFC 8j7b0 origin rule, no path, judged apart.
+- **install hands its children an allow-listed environment**, provisional, chosen by the advisor
+  on 2026-10-24: wrangler and curl get the five base names `PATH`, `HOME`, `TMPDIR`, `USER` and
+  `LANG`, plus the values install sets itself, `WRANGLER_SEND_METRICS` false, `CI` 1, and wrangler's
+  account and token from its `DRIVER_*` values, nothing else, `--env-file /dev/null` kept. This
+  repository is public and its install is run from people's own shells, which hold names nobody
+  here thought of, so a deny list guards too little. A name a tool truly needs is added alone with a
+  comment saying why, and the environment never falls back to being passed whole.
+- **A Worker whose tag carries no install id is refused**, provisional, chosen by the advisor on
+  2026-10-24: only the test account holds such Workers, made before the tag gained its install id,
+  and they are deleted by hand before that account is installed again.
+- **`HTTPS_PROXY` is not among the names install hands its children**, a known limit, provisional,
+  chosen by the advisor on 2026-10-24: a shell that needs a proxy is the case for adding that one
+  name with a comment, and nothing else.
+- **Install is run again without the token or the base once a bind has succeeded**, provisional,
+  chosen by the advisor on 2026-10-24: so it updates and passes the bind over, the token being spent
+  by its first bind. After a bind failing for any reason but `denied`, a run with the token tries
+  the bind again. On `denied` install says, in a fixed message, that the token may already be
+  used, that the install itself is complete, and that a run without token and base updates it.
+- **A dry run given half of a bind's inputs refuses**, provisional, chosen by the advisor on
+  2026-10-24, as the real run would.
+- **`BINDING` is written whenever a token is given on stdin**, provisional, chosen by the advisor
+  on 2026-10-24, narrowing "each secret put only where its name is missing" for `BINDING` alone: a
+  Cloudflare secret cannot be read back to compare, a token on stdin already means a bind, and
+  opening a binding again is how platform's RFC 8j7b0 moves one, which must not need a secret
+  deleted by hand. A run with no token never touches it. As a fact, a run with a wrong token
+  replaces `BINDING` and the control's calls are refused until a run with the right one, which
+  writes it again even where its bind then answers `denied`; the `denied` message says so.
