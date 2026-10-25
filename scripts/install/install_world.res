@@ -85,7 +85,7 @@ type world = {
   run: command => result<string, string>,
   env: Dict.t<string>,
   say: string => unit,
-  /** What stdin holds, empty where it is a terminal. */
+  /** What stdin holds, empty where it is a terminal, `Install.Unread` raised where a read fails. */
   stdin: unit => string,
   /** A directory of its own, made empty. */
   scratch: unit => string,

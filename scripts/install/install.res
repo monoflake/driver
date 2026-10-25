@@ -30,11 +30,46 @@ let bindingHash = token =>
   | _ => Error("the token on stdin is not <id>.<secret>, its secret 32 bytes in unpadded base64url")
   }
 
+/** A read of stdin that failed for a reason of its own, which install refuses with. */
+exception Unread(string)
+
+/** The codes a read answers where stdin is non-blocking and its writer has not written yet. */
+let wouldBlock = ["EAGAIN", "EWOULDBLOCK"]
+
+/**
+ * All that stdin holds, read to its end, each read that would block waited on and tried again, and
+ * any other failure an error named by its code.
+ */
+let readWhole = (~read, ~wait) => {
+  let chunk = Uint8Array.fromLength(65536)
+  let held = []
+  let ended = ref(None)
+  while ended.contents == None {
+    switch read(chunk) {
+    | 0 => ended := Some(Ok(joined(held)->encoded("utf8")))
+    | count => held->Array.push(chunk->TypedArray.slice(~start=0, ~end=count))
+    | exception JsExn(error) =>
+      switch errorCode(error)->Nullable.toOption {
+      | Some(code) if wouldBlock->Array.includes(code) => wait()
+      | code =>
+        let named = code->Option.orElse(JsExn.message(error))->Option.getOr("an unnamed error")
+        ended :=
+          Some(Error(`stdin could not be read, ${named}, so whether it holds a token is not known`))
+      }
+    }
+  }
+  ended.contents->Option.getOr(Ok(""))
+}
+
 /** The binding token and its hash where stdin holds one, None where it holds nothing. */
 let tokenOfStdin = w =>
-  switch w.stdin()->String.trim {
-  | "" => Ok(None)
-  | token => bindingHash(token)->Result.map(hash => Some((token, hash)))
+  switch w.stdin() {
+  | exception Unread(why) => Error(why)
+  | held =>
+    switch held->String.trim {
+    | "" => Ok(None)
+    | token => bindingHash(token)->Result.map(hash => Some((token, hash)))
+    }
   }
 
 /** The kinds `DRIVER_KINDS` names, comma-separated, `function` alone where it names none. */
@@ -352,13 +387,17 @@ let real = {
   },
   env: processEnv,
   say: Console.log,
+  // A terminal holds no token, and a pipe is read to its end however late its writer writes.
   stdin: () =>
-    if stdinTerminal->Nullable.toOption == Some(true) {
+    if stdinTerminal() {
       ""
     } else {
-      switch readStdin() {
-      | read => read
-      | exception JsExn(_) => ""
+      switch readWhole(
+        ~read=chunk => readStdinInto(chunk, TypedArray.length(chunk)),
+        ~wait=() => pause(10),
+      ) {
+      | Ok(held) => held
+      | Error(why) => throw(Unread(why))
       }
     },
   scratch: () => mkdtempSync(join([tmpdir(), "driver-install-"])),
