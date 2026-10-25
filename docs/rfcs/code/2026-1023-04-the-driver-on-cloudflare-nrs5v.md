@@ -492,3 +492,9 @@ Choices made provisionally while the thread runs, read by the author at its end.
   each with a message saying which.
 - **A listed Worker the account no longer holds is described with the warning `missing`**,
   provisional, chosen by the advisor on 2026-10-24.
+- **install reports a `driver-<8 hex>` D1 or Worker as left over from the old naming**, a small
+  matter, provisional, chosen by the advisor on 2026-10-24. It writes and deletes nothing there,
+  and the author clears it by hand.
+- **A user D1 holding a forged `install` table can make install refuse**, a known issue, a small
+  matter, provisional, chosen by the advisor on 2026-10-24. `database` is not offered on a free
+  account, and the workspace's `d1-per-item` reshapes the user D1s, so it is fixed then.
