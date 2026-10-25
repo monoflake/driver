@@ -1,14 +1,14 @@
 /***
- * driver(cloudflare)'s database, the Worker `database-<install id>` over the binding's one D1, its
- * item kept in the driver's D1, RFC nrs5v. This file is its interface, the model's.
+ * driver(cloudflare)'s database, a Worker over the binding's one D1, its item kept in the driver's
+ * D1, RFC nrs5v. This file is its interface, the model's.
  */
 
 /** A D1 database binding, as the Worker is given it. */
 type database
 
 /**
- * What the Worker is given, the D1 `driver-<install id>` and `database-<install id>`, its token,
- * the binding's hash and its install id, absent only where install broke.
+ * What the Worker is given, the driver's D1 and the binding's own as the records name them, its
+ * token, the binding's hash and its install id, absent only where install broke.
  */
 type env = {
   @as("DB") db: database,

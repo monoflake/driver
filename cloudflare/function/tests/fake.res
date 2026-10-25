@@ -103,9 +103,6 @@ let served = (addresses: dict<Uint8Array.t>, fetched) =>
     }
   }
 
-/** The install id every fake Worker's name ends in, a made-up one. */
-let installId = "0a1b2c3d"
-
 /** No Worker listed for any deployment. */
 let unlisted = _ => None
 
@@ -117,7 +114,6 @@ let setUp = (~addresses=dict{"hello": artifact}, ~listed=unlisted, ~released=[])
     api,
     store,
     fetch: served(addresses, fetched),
-    installId,
     listed,
     released: async name => released->Array.push(name),
   }

@@ -1,6 +1,6 @@
 /***
- * driver(cloudflare)'s object, the Worker `object-<install id>` over the binding's one bucket
- * `objects-<install id>` counted in the driver's D1, RFC nrs5v. This file is its interface.
+ * driver(cloudflare)'s object, a Worker over the binding's one bucket counted in the driver's D1,
+ * each named as the driver's records hold it, RFC nrs5v. This file is its interface.
  */
 
 /** A D1 database binding, as the Worker is given it. */

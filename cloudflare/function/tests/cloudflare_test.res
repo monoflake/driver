@@ -42,7 +42,7 @@ let upload: Script.upload = {
     PlainText({name: "MONOFLAKE_FOOTING", text: "https://footing.invalid"}),
     SecretText({name: "KEY", text: "s3cret"}),
   ],
-  tag: "version-00",
+  tag: "0a1b2c3d/00000001/version-00",
 }
 
 let metadataOf = (s: sent) =>
@@ -69,7 +69,7 @@ test(
         ],
         "compatibility_date": "2026-10-21",
         "compatibility_flags": ["nodejs_compat"],
-        "annotations": {"workers/tag": "version-00"}
+        "annotations": {"workers/tag": "0a1b2c3d/00000001/version-00"}
       }`),
       ),
     )
@@ -107,7 +107,8 @@ test(
       metadataOf(made),
       Some(
         JSON.parseOrThrow(`{"main_module": "stopped.js", "bindings": [],
-        "compatibility_date": "2026-10-21", "compatibility_flags": []}`),
+        "compatibility_date": "2026-10-21", "compatibility_flags": [],
+        "annotations": {"workers/tag": "0a1b2c3d/00000001/made"}}`),
       ),
     )
     deepEqual(bodyJson(sent->Array.getUnsafe(2)), Some(JSON.parseOrThrow(`{"enabled": true}`)))

@@ -176,5 +176,5 @@ test("the deployments samples of modules hold but what they send", async () => {
       sent := sent.contents + (await ran(listed->Array.getUnsafe(c)))
     }
   }
-  deepEqual((cases.contents, sent.contents), (9, 4))
+  deepEqual((cases.contents, sent.contents), (10, 4))
 })

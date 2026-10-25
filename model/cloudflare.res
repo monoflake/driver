@@ -15,7 +15,7 @@ let driver: Made.driver = {
       ],
     },
     {kind: #instance, contract: "deployments", language: #rescript, as_: "a Durable Object"},
-    // The Worker `object-<install id>`, its bucket `objects-<install id>` counted in D1, nrs5v.
+    // A Worker over the binding's one bucket, counted in D1, each named by the records, nrs5v.
     {
       kind: #object,
       contract: "object",

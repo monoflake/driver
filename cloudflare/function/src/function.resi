@@ -70,23 +70,19 @@ type store = {
   forget: string => promise<unit>,
 }
 
-/**
- * What each operation works through, the API, the store, an artifact fetched by address and the
- * install id each Worker's name ends in, RFC nrs5v.
- */
+/** What each operation works through, the API, the store and an artifact fetched by address. */
 type through = {
   api: api,
   store: store,
   fetch: string => promise<result<Uint8Array.t, refused>>,
-  installId: string,
   /** The Worker an organization listed for a deployment, which it runs as in place of its own. */
   listed: Contracts.DeploymentRuns.t => option<string>,
   /** A listed Worker let go, never deleted, so a person is told to delete it by hand. */
   released: string => promise<unit>,
 }
 
-/** The Worker a deployment runs as, `app-<id>-<install id>` or `component-<name>-<install id>`. */
-let workerOf: (Contracts.DeploymentRuns.t, ~installId: string) => string
+/** The Worker a deployment runs as, its resource id in 8 lowercase hex digits, RFC nrs5v. */
+let workerOf: Contracts.DeploymentRuns.t => string
 
 /** The tag a version is kept as, `version-<hash in hex>`, cut short where a tag holds less. */
 let tagOf: Uint8Array.t => string

@@ -66,3 +66,11 @@ let fromUtf8 = bytes =>
 
 /** Bytes copied into others from an offset by `set`, never number by number. */
 @send external copyInto: (Uint8Array.t, Uint8Array.t, int) => unit = "set"
+
+/** A call's options, its method and its headers. */
+type sendInit = {method: string, headers: dict<string>}
+
+/** What sends a call to an API, the runtime's `fetch`. */
+@val external send: (string, sendInit) => promise<response> = "fetch"
+@send external text: response => promise<string> = "text"
+@val external encodeURIComponent: string => string = "encodeURIComponent"

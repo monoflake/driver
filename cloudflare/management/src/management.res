@@ -25,7 +25,7 @@ type state =
 
 type keptItem = {item: item, state: state}
 
-type adoptedFor = App(float) | Component(string) | Item(float)
+type adoptedFor = App(float) | Component({component: string, id: float}) | Item(float)
 
 type adopted = {kind: [#function | #object | #database], name: string, for_: adoptedFor}
 
@@ -75,10 +75,21 @@ let kindName = (kind: kind) =>
 /** What makes a name a pattern rather than one exact name, or no name at all, RFC nrs5v. */
 let pattern = /[*?\[\]{}\s]/
 
+/** A Worker's name as Cloudflare takes one, which a listed Worker's name is held to. */
+let workerName = /^[a-z0-9][a-z0-9_-]{0,62}$/
+
+/** What an entry stands for as matching keys it, a component by its id alone, RFC y2xd3. */
+let forKey = (for_: adoptedFor) =>
+  switch for_ {
+  | App(id) => `app ${Float.toString(id)}`
+  | Component({id}) => `component ${Float.toString(id)}`
+  | Item(id) => `item ${Float.toString(id)}`
+  }
+
 let forName = (for_: adoptedFor) =>
   switch for_ {
   | App(id) => `app ${Float.toString(id)}`
-  | Component(name) => `component ${name}`
+  | Component({component, id}) => `component ${component} ${Float.toString(id)}`
   | Item(id) => `item ${Float.toString(id)}`
   }
 
@@ -102,14 +113,16 @@ let validAdopted = (adopted: array<adopted>) => {
     | Ok() if entry.name == "" => invalid("an adopted name is one exact name, never empty")
     | Ok() if pattern->RegExp.test(entry.name) =>
       invalid(`the adopted name "${entry.name}" is one exact name, never a pattern`)
+    | Ok() if entry.kind == #function && !(workerName->RegExp.test(entry.name)) =>
+      invalid(`the adopted name "${entry.name}" is no Worker's name, ^[a-z0-9][a-z0-9_-]{0,62}$`)
     | Ok() if !fits(entry) =>
       invalid(`${entry.name} is adopted as ${kindName(entry.kind)} for ${forName(entry.for_)}`)
     | Ok() if names->Set.has(entry.name) => invalid(`the list adopts ${entry.name} twice`)
-    | Ok() if fors->Set.has(forName(entry.for_)) =>
-      invalid(`the list adopts two resources for ${forName(entry.for_)}`)
+    | Ok() if fors->Set.has(forKey(entry.for_)) =>
+      invalid(`the list adopts two resources for ${forKey(entry.for_)}`)
     | Ok() =>
       names->Set.add(entry.name)
-      fors->Set.add(forName(entry.for_))
+      fors->Set.add(forKey(entry.for_))
       Ok()
     }
   )
@@ -139,24 +152,29 @@ let beyondAdopted = (adopted: array<adopted>, ~offered: array<kind>) =>
     }
   )
 
-/** What a person is told of an adopted Worker the driver let go, never deleting it, RFC nrs5v. */
-let released = name => {
-  reason: "delete_by_hand",
-  name,
-  message: `${name} is no longer managed, so delete it by hand in Cloudflare's dashboard`,
+/**
+ * The warnings standing once the list is `adopted`, each cleared only for a name it newly adds;
+ * a Worker let go is warned of by the driver, which alone knows whether it took it over.
+ */
+let warnedOf = (kept: kept, adopted: array<adopted>) => {
+  let added = name =>
+    adopted->Array.some(entry => entry.name == name) &&
+      !(kept.adopted->Array.some(entry => entry.name == name))
+  kept.warnings->Array.filter(warning => !added(warning.name))
 }
 
-/** The warnings standing once the list is `adopted`, each name it dropped released. */
-let warnedOf = (kept: kept, adopted: array<adopted>) => {
-  let listed = name => adopted->Array.some(entry => entry.name == name)
-  let dropped =
+/** An entry pointing a name kept at another deployment or item, which takes two applies, nrs5v. */
+let moved = (kept: kept, adopted: array<adopted>) =>
+  adopted->Array.findMap(entry =>
     kept.adopted
-    ->Array.filter(entry => !listed(entry.name))
-    ->Array.map(entry => released(entry.name))
-  let standing = kept.warnings->Array.filter(warning => !listed(warning.name))
-  let warned = name => standing->Array.some(warning => warning.name == name)
-  Array.concat(standing, dropped->Array.filter(warning => !warned(warning.name)))
-}
+    ->Array.find(held => held.name == entry.name && held.for_ != entry.for_)
+    ->Option.map(held => {
+      reason: "invalid",
+      message: `${entry.name} stands for ${forName(held.for_)}; moving it to ${forName(
+          entry.for_,
+        )} takes two applies, one dropping it and one adding it`,
+    })
+  )
 
 /** The most an `object` item holds in bytes, 1 TiB, while this driver's cost is watched, nrs5v. */
 let most = 1_099_511_627_776.
@@ -322,7 +340,11 @@ let apply = async (
       Ok(kept.generation)
     } else {
       let beyondList = adopted->Option.flatMap(beyondAdopted(_, ~offered))
-      switch beyond(items)->Option.orElse(unoffered(items, ~offered))->Option.orElse(beyondList) {
+      switch adopted
+      ->Option.flatMap(moved(kept, _))
+      ->Option.orElse(beyond(items))
+      ->Option.orElse(unoffered(items, ~offered))
+      ->Option.orElse(beyondList) {
       | Some(refused) => Error(refused)
       | None =>
         let held = id => kept.items->Array.find(k => k.item.id == id)

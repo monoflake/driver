@@ -1,75 +1,72 @@
 /***
- * How the install id is read from the account, the D1s surveyed for their markers, an id drawn
- * or reused, and every read failing stopping install before anything is made.
+ * How the install id is read from the account, the D1s surveyed for their markers, each name drawn
+ * or reused from the records, and every read failing stopping install before anything is made.
  */
 open Asserted
 open Faked_account
 open Faked_install
 
-test("the install id is drawn where no driver-<8 hex> is listed, and reused where one is", () => {
-  let account = empty()
-  account.databases = ["driver", "driver-0A1B2C3D", "driver-0a1b2c3d-old", "objects-4e5f6a7b"]
-  let (drawn, result) = installed(account, fixture())
-  deepEqual(result, Ok())
-  ok(
-    drawn.said->Array.includes(
-      "no driver's D1 holding its marker on the account, so the install id 0a1b2c3d is drawn",
-    ),
-  )
-  ok(account.databases->Array.includes(full("driver")))
-  // A second install draws another, which is never taken while one is listed.
-  let (reused, result) = installed(~drawn="4e5f6a7b", account, fixture())
-  deepEqual(result, Ok())
-  ok(
-    reused.said->Array.includes(
-      "the install id 0a1b2c3d is reused, the account holding driver-0a1b2c3d",
-    ),
-  )
-  ok(plain(reused)->Array.every(l => !(l->String.includes("4e5f6a7b"))))
-})
+test(
+  "the install id is drawn where no D1 named by 8 hex is marked, and reused where one is",
+  () => {
+    let account = empty()
+    account.databases = ["driver", "0A1B2C3D", "driver-0a1b2c3d", "objects"]
+    let (drawn, result) = installed(account, fixture())
+    deepEqual(result, Ok())
+    ok(drawn.said->Array.includes("the name 0a1b2c3d is drawn for state"))
+    ok(account.databases->Array.includes(id))
+    // A second install reuses it, and draws nothing, every part recorded.
+    let (reused, result) = installed(~draws=["6e7f8a9b"], account, fixture())
+    deepEqual(result, Ok())
+    ok(
+      reused.said->Array.includes(
+        "the install id 0a1b2c3d is reused, the account holding the D1 0a1b2c3d",
+      ),
+    )
+    ok(plain(reused)->Array.every(l => !(l->String.includes("6e7f8a9b"))))
+  },
+)
 
-test("more than one driver-<8 hex> is refused by name, and nothing is made", () => {
+test("more than one marked D1 is refused by name, and nothing is made", () => {
   let account = empty()
   account.databases = ["other"]
-  account->holding("driver-0a1b2c3d", ~mark=id)
-  account->holding("driver-4e5f6a7b", ~mark="4e5f6a7b")
+  account->holding("0a1b2c3d", ~mark=id)
+  account->holding("4e5f6a7b", ~mark="4e5f6a7b")
   let (faked, result) = installed(account, fixture())
   deepEqual(
     result,
-    Error(
-      [
-        "the account holds more than one driver's D1, driver-0a1b2c3d, driver-4e5f6a7b, ",
-        "so none is chosen",
-      ]->Array.join(""),
-    ),
+    Error("the account holds more than one driver's D1, 0a1b2c3d, 4e5f6a7b, so none is chosen"),
   )
   deepEqual(
     plain(faked),
     [
       "wrangler d1 list --json",
-      tablesRead("driver-0a1b2c3d"),
-      markerRead("driver-0a1b2c3d"),
-      tablesRead("driver-4e5f6a7b"),
-      markerRead("driver-4e5f6a7b"),
+      tablesRead("0a1b2c3d"),
+      markerRead("0a1b2c3d"),
+      tablesRead("4e5f6a7b"),
+      markerRead("4e5f6a7b"),
     ],
   )
 })
 
 test("a drawn id not of the id form is refused before anything is made", () => {
-  let (faked, result) = installed(~drawn="0A1B2C3D", empty(), fixture())
+  let (faked, result) = installed(~draws=[], ~drawn="0A1B2C3D", empty(), fixture())
   deepEqual(result, Error("an install id drawn is not 8 lowercase hex digits, 0A1B2C3D"))
-  deepEqual(plain(faked), ["wrangler d1 list --json", workersListed])
+  deepEqual(plain(faked), ["wrangler d1 list --json", workersListed, "wrangler r2 bucket list"])
 })
 
-test("a driver-<8 hex> holding no marker is foreign, passed over and never written", () => {
+/** Names drawn past those the faked account holds, each part's in turn. */
+let elsewhere = ["5c6d7e8f", "1b2c3d4e", "2c3d4e5f", "3d4e5f6a", "6e7f8a9b", "5f6a7b8c"]
+
+test("a D1 named by 8 hex holding no marker of its own is foreign, never written", () => {
   let root = fixture()
   let account = empty()
 
-  // One holds a table of its own and no marker, another a marker naming another install.
-  account.databases = ["driver-20261024"]
-  account.own->Dict.set("driver-20261024", ["notes"])
-  account->holding("driver-4e5f6a7b", ~mark="0a1b2c3d")
-  let foreign = ["driver-20261024", "driver-4e5f6a7b"]
+  // One holds a table of its own and no marker, another a marker naming another D1.
+  account.databases = ["20261024"]
+  account.own->Dict.set("20261024", ["notes"])
+  account->holding("4e5f6a7b", ~mark="0a1b2c3d")
+  let foreign = ["20261024", "4e5f6a7b"]
   let (dry, result) = dryOn(account, root)
   deepEqual(result, Ok())
   foreign->Array.forEach(name =>
@@ -81,83 +78,76 @@ test("a driver-<8 hex> holding no marker is foreign, passed over and never writt
     )
   )
   ok(dry.said->Array.some(l => l->String.includes("so a new install id would be drawn")))
-  let (faked, result) = installed(~draws=["5c6d7e8f"], account, root)
+  let (faked, result) = installed(~draws=elsewhere, account, root)
   deepEqual(result, Ok())
   let lines = plain(faked)
   deepEqual(
     foreign->Array.map(name => lines->Array.filter(l => l->String.includes(name))),
-    [
-      [tablesRead("driver-20261024")],
-      [tablesRead("driver-4e5f6a7b"), markerRead("driver-4e5f6a7b")],
-    ],
+    [[tablesRead("20261024")], [tablesRead("4e5f6a7b"), markerRead("4e5f6a7b")]],
   )
-  ok(
-    faked.said->Array.includes(
-      "no driver's D1 holding its marker on the account, so the install id 5c6d7e8f is drawn",
-    ),
-  )
+  ok(faked.said->Array.includes("the name 5c6d7e8f is drawn for state"))
   deepEqual(
-    (account.marks->Dict.get("driver-20261024"), account.marks->Dict.get("driver-4e5f6a7b")),
+    (account.marks->Dict.get("20261024"), account.marks->Dict.get("4e5f6a7b")),
     (None, Some("0a1b2c3d")),
   )
-  deepEqual(account.marks->Dict.get("driver-5c6d7e8f"), Some("5c6d7e8f"))
+  deepEqual(account.marks->Dict.get("5c6d7e8f"), Some("5c6d7e8f"))
   // The next install reuses the one marked, the foreign ones still passed over.
-  let (again, result) = installed(~draws=["6e7f8a9b"], account, root)
+  let (again, result) = installed(~draws=["7f8a9b0c"], account, root)
   deepEqual(result, Ok())
   ok(
     again.said->Array.includes(
-      "the install id 5c6d7e8f is reused, the account holding driver-5c6d7e8f",
+      "the install id 5c6d7e8f is reused, the account holding the D1 5c6d7e8f",
     ),
   )
 })
 
-test("a driver-<8 hex> holding no table is said as possibly interrupted, and never touched", () => {
+test("a D1 named by 8 hex holding no table is said as possibly interrupted, never touched", () => {
   let root = fixture()
   let account = empty()
-  account.databases = ["driver-4e5f6a7b"]
+  account.databases = ["4e5f6a7b"]
   let said =
     [
-      "driver-4e5f6a7b holds no tables, possibly an interrupted install of this driver;",
+      "4e5f6a7b holds no tables, possibly an interrupted install of this driver;",
       " delete it by hand if it is yours",
     ]->Array.join("")
   let (dry, result) = dryOn(account, root)
   deepEqual(result, Ok())
   ok(dry.said->Array.includes(said), ~message=dry.said->Array.join("\n"))
-  ok(dry.said->Array.some(l => l->String.includes("so a new install id would be drawn")))
-  let (faked, result) = installed(~draws=["4e5f6a7b", "5c6d7e8f"], account, root)
+  let (faked, result) = installed(~draws=elsewhere, account, root)
   deepEqual(result, Ok())
   ok(faked.said->Array.includes(said), ~message=faked.said->Array.join("\n"))
   deepEqual(
-    plain(faked)->Array.filter(l => l->String.includes("driver-4e5f6a7b")),
-    [tablesRead("driver-4e5f6a7b")],
+    plain(faked)->Array.filter(l => l->String.includes("4e5f6a7b")),
+    [tablesRead("4e5f6a7b")],
   )
-  deepEqual(
-    (account.marks->Dict.get("driver-4e5f6a7b"), account.migrated),
-    (None, ["driver-5c6d7e8f"]),
-  )
-  deepEqual(account.marks->Dict.get("driver-5c6d7e8f"), Some("5c6d7e8f"))
+  deepEqual((account.marks->Dict.get("4e5f6a7b"), account.migrated), (None, ["5c6d7e8f"]))
+  deepEqual(account.marks->Dict.get("5c6d7e8f"), Some("5c6d7e8f"))
 })
 
-test("the marker is written right after the D1 is made, before its first migration", () => {
+test("the marker is written right after the D1 is made, and the records before any part", () => {
   let account = empty()
   let (faked, result) = installed(account, fixture())
   deepEqual(result, Ok())
   let lines = plain(faked)
   let at = line => lines->Array.indexOf(line)
-  let created = at("wrangler d1 create driver-0a1b2c3d")
+  let created = at("wrangler d1 create 0a1b2c3d")
   deepEqual(
-    (at(markerWritten("driver-0a1b2c3d")) - created, created >= 0),
+    (at(markerWritten("0a1b2c3d")) - created, created >= 0),
     (1, true),
     ~message=lines->Array.join("\n"),
   )
+  let migrated = at("wrangler d1 migrations apply 0a1b2c3d --remote --config <driver>")
+  ok(at(markerWritten("0a1b2c3d")) < migrated)
+  // The records follow the migrations, which make their table, and precede every part.
+  let records = at(recordsWritten("0a1b2c3d", drawnRecords))
+  deepEqual(records - migrated, 1, ~message=lines->Array.join("\n"))
   ok(
-    at(markerWritten("driver-0a1b2c3d")) <
-    at("wrangler d1 migrations apply driver-0a1b2c3d --remote --config <driver>"),
+    records < at("wrangler d1 create 5f6a7b8c") &&
+      records < at("wrangler r2 bucket create 3d4e5f6a"),
   )
-  deepEqual(account.marks->Dict.get(full("driver")), Some(id))
-  // A reused D1 is never marked again, and one listed though its id was drawn is refused.
+  // A reused D1 is never marked again, and one listed though its name was drawn is refused.
   let (again, _) = installed(account, fixture())
-  ok(plain(again)->Array.every(l => l != markerWritten("driver-0a1b2c3d")))
+  ok(plain(again)->Array.every(l => l != markerWritten("0a1b2c3d")))
   let raced = empty()
   let lists = ref(0)
   let faked = make(~answer=command =>
@@ -166,7 +156,7 @@ test("the marker is written right after the D1 is made, before its first migrati
 
       // The second list, the driver's D1's own, sees one made since the survey.
       if lists.contents == 2 {
-        raced.databases->Array.push(full("driver"))
+        raced.databases->Array.push(id)
       }
       answered(raced, command)
     } else {
@@ -175,49 +165,97 @@ test("the marker is written right after the D1 is made, before its first migrati
   )
   deepEqual(
     Install.install(faked.world, ~dry=false, ~root=fixture()),
-    Error("driver-0a1b2c3d is listed already, though its install id was drawn as free"),
+    Error("0a1b2c3d is listed already, though its name was drawn as free"),
   )
   deepEqual(raced.marks, dict{})
 })
 
-test("a drawn id is drawn again while a D1's or a Worker's name ends in it", () => {
+test("a drawn name is drawn again while a D1, a Worker or a bucket is so named", () => {
   let account = empty()
-  account.databases = ["objects-0a1b2c3d"]
-  account->running("app-7-4e5f6a7b")
-  let (faked, result) = installed(~draws=["0a1b2c3d", "4e5f6a7b", "5c6d7e8f"], account, fixture())
+  account.databases = ["2c3d4e5f"]
+  account.buckets = ["1b2c3d4e"]
+  account->running("0a1b2c3d")
+  let draws = [
+    "0a1b2c3d",
+    "1b2c3d4e",
+    "2c3d4e5f",
+    "9a8b7c6d",
+    "3d4e5f6a",
+    "4e5f6a7b",
+    "5f6a7b8c",
+    "6e7f8a9b",
+    "7f8a9b0c",
+  ]
+  let (faked, result) = installed(~draws, account, fixture())
   deepEqual(result, Ok())
-  let taken = id => `the install id ${id} drawn ends a name the account holds, so another is drawn`
-  ok(faked.said->Array.includes(taken("0a1b2c3d")), ~message=faked.said->Array.join("\n"))
-  ok(faked.said->Array.includes(taken("4e5f6a7b")))
-  ok(account.databases->Array.includes("driver-5c6d7e8f"))
+  let taken = id =>
+    `the name ${id} drawn is the account's or the driver's already, so another is drawn`
+  ["0a1b2c3d", "1b2c3d4e", "2c3d4e5f"]->Array.forEach(id =>
+    ok(faked.said->Array.includes(taken(id)), ~message=faked.said->Array.join("\n"))
+  )
+  ok(account.databases->Array.includes("9a8b7c6d"))
+  deepEqual(
+    account.records->Dict.get("9a8b7c6d")->Option.map(r => r->Array.map(((n, _)) => n)),
+    Some(["9a8b7c6d", "3d4e5f6a", "4e5f6a7b", "5f6a7b8c", "6e7f8a9b", "7f8a9b0c"]),
+  )
   deepEqual(plain(faked)->Array.filter(l => l == workersListed)->Array.length, 1)
   // An account where every draw is taken is refused, nothing made.
   let account = empty()
-  account.databases = ["objects-0a1b2c3d"]
-  let (faked, result) = installed(account, fixture())
-  deepEqual(result, Error("no install id drawn was free in 8 draws"))
+  account->running("0a1b2c3d")
+  let (faked, result) = installed(~draws=[], account, fixture())
+  deepEqual(result, Error("no name drawn was free in 8 draws"))
+  unchanged(faked)
+})
+
+test("a marked D1 made before the records were has its parts drawn and itself recorded", () => {
+  let account = empty()
+  account.databases = [id]
+  account.marks->Dict.set(id, id)
+  let (faked, result) = installed(
+    ~draws=["1b2c3d4e"],
+    ~env=[...credentials, ("DRIVER_KINDS", "function")],
+    account,
+    fixture(),
+  )
+  deepEqual(result, Ok())
+  ok(plain(faked)->Array.every(l => l != recordsRead(id)), ~message="no table owned to read")
+  deepEqual(account.records->Dict.get(id), Some([(id, "state"), ("1b2c3d4e", "driver")]))
+})
+
+test("the records failing to be read stop install, nothing run", () => {
+  let account = empty()
+  account->holding(id, ~mark=id)
+  let faked = make(~answer=command =>
+    line(command) == recordsRead(id)
+      ? Error("Authentication error [code: 10000]")
+      : answered(account, command)
+  )
+  deepEqual(
+    Install.install(faked.world, ~dry=false, ~root=fixture()),
+    Error("the records of 0a1b2c3d are not known, Authentication error [code: 10000]"),
+  )
   unchanged(faked)
 })
 
 test("a marker read failing otherwise than for want of a marker stops install, nothing run", () => {
   let account = empty()
-  account->holding("driver-0a1b2c3d", ~mark=id)
+  account->holding("0a1b2c3d", ~mark=id)
   let answer = command =>
-    line(command) == markerRead("driver-0a1b2c3d")
+    line(command) == markerRead("0a1b2c3d")
       ? Error("Authentication error [code: 10000]")
       : answered(account, command)
   let faked = make(~answer)
   deepEqual(
     Install.install(faked.world, ~dry=false, ~root=fixture()),
-    Error("the marker of driver-0a1b2c3d is not known, Authentication error [code: 10000]"),
+    Error("the marker of 0a1b2c3d is not known, Authentication error [code: 10000]"),
   )
   unchanged(faked)
   let faked = make(~answer=command =>
-    line(command) == markerRead("driver-0a1b2c3d") ? Ok("not JSON") : answered(account, command)
+    line(command) == markerRead("0a1b2c3d") ? Ok("not JSON") : answered(account, command)
   )
   deepEqual(
     Install.install(faked.world, ~dry=false, ~root=fixture()),
-    Error("the marker of driver-0a1b2c3d is not known, d1 execute printed no JSON array"),
+    Error("the marker of 0a1b2c3d is not known, d1 execute printed no JSON array"),
   )
   unchanged(faked)
 })
@@ -247,7 +285,7 @@ test("curl is given -q first, so it reads no .curlrc", () => {
 test("a Workers list answered in pages, or not a success, stops install with nothing made", () => {
   let answer = (account, body) =>
     (command: Install_world.command) =>
-      Host.basename(command.program) == "curl" ? Ok(body) : answered(account, command)
+      line(command) == workersListed ? Ok(body) : answered(account, command)
   let answers = [
     (
       `{"success":true,"result":[{"id":"app-7-4e5f6a7b"}],
@@ -286,16 +324,63 @@ test("a Workers list answered in pages, or not a success, stops install with not
 
 test("a D1's tables read failing stops install, nothing run", () => {
   let account = empty()
-  account.databases = ["driver-4e5f6a7b"]
+  account.databases = ["4e5f6a7b"]
   let faked = make(~answer=command =>
-    line(command) == tablesRead("driver-4e5f6a7b")
+    line(command) == tablesRead("4e5f6a7b")
       ? Error("Authentication error [code: 10000]")
       : answered(account, command)
   )
   deepEqual(
     Install.install(faked.world, ~dry=false, ~root=fixture()),
-    Error("the marker of driver-4e5f6a7b is not known, Authentication error [code: 10000]"),
+    Error("the marker of 4e5f6a7b is not known, Authentication error [code: 10000]"),
   )
+  unchanged(faked)
+})
+
+/** What install says of a D1 or a Worker left over from the old naming. */
+let leftOver = (what, name) =>
+  `the ${what} ${name} is left over from the old naming; install never writes, deletes or`
+
+test("a D1 of the old naming is said left over, never written, deleted or reused", () => {
+  let account = empty()
+  account->holding("driver-0a1b2c3d", ~mark="0a1b2c3d")
+  let (faked, result) = installed(account, fixture())
+  deepEqual(result, Ok())
+  ok(
+    faked.said->Array.includes(leftOver("D1", "driver-0a1b2c3d")),
+    ~message=faked.said->Array.join("\n"),
+  )
+  deepEqual(plain(faked)->Array.filter(l => l->String.includes("driver-0a1b2c3d")), [])
+  // A new state is made beside it, the old one never taken as the state.
+  ok(faked.said->Array.includes("the name 0a1b2c3d is drawn for state"))
+  ok(account.databases->Array.includes("driver-0a1b2c3d"))
+  deepEqual(account.marks->Dict.get("0a1b2c3d"), Some("0a1b2c3d"))
+})
+
+test("a Worker of the old naming is said left over, never written or deleted", () => {
+  let account = empty()
+  account->running("driver-4e5f6a7b")
+  let (faked, result) = installed(account, fixture())
+  deepEqual(result, Ok())
+  ok(
+    faked.said->Array.includes(leftOver("Worker", "driver-4e5f6a7b")),
+    ~message=faked.said->Array.join("\n"),
+  )
+  deepEqual(plain(faked)->Array.filter(l => l->String.includes("driver-4e5f6a7b")), [])
+  ok(account.workers->Dict.get("driver-4e5f6a7b")->Option.isSome)
+})
+
+test("a dry run names each D1 and Worker of the old naming, and writes nothing", () => {
+  let account = empty()
+  account.databases = ["driver-0a1b2c3d", "driver"]
+  account->running("driver-4e5f6a7b")
+  account->running("driver-shop")
+  let (faked, result) = dryOn(account, fixture())
+  deepEqual(result, Ok())
+  let said = faked.said
+  ok(said->Array.includes(leftOver("D1", "driver-0a1b2c3d")), ~message=said->Array.join("\n"))
+  ok(said->Array.includes(leftOver("Worker", "driver-4e5f6a7b")))
+  ok(said->Array.every(l => !(l->String.includes(" driver ") || l->String.includes("driver-shop"))))
   unchanged(faked)
 })
 

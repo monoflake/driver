@@ -66,11 +66,16 @@ let databasePath = `/client/v4/accounts/${accountId}/d1/database/${databaseId}`
 /** The restore's path on the account, its timestamp read from the address. */
 let restorePath = `${databasePath}/time_travel/restore`
 
+/** The name install drew for the database kind's D1 and recorded, made up. */
+let recordedName = "5f6a7b8c"
+
 /** A binding new at a moment, holding no item unless `size` names one. */
 let make = (~size=?, ~at=1_790_000_000_000.) => {
   let clock = ref(at)
   clockedBy(clock)
   let driver = migrated()
+  // The database kind's D1 as install records it, a made-up name it drew.
+  driver->exec(`INSERT INTO owned (name, role) VALUES ('${recordedName}', 'user_database')`)
   let sqlite = openSqlite(":memory:")
   // D1 keeps a table of its own in every database, which no user's call reaches.
   sqlite->exec("CREATE TABLE _cf_KV (key TEXT PRIMARY KEY, value BLOB)")
@@ -88,7 +93,7 @@ let make = (~size=?, ~at=1_790_000_000_000.) => {
     ),
     dict{"INSTALL_ID": installId},
   )
-  let named = ref(`database-${installId}`)
+  let named = ref(recordedName)
   let getting = ref(None)
   let served = {env, driver, sqlite, clock, sent: [], refusing: ref(None), named, getting}
   answering(served.sent, async (url, init) => {

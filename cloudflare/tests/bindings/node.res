@@ -56,12 +56,34 @@ let migrated = () => {
   db
 }
 
-/** A database in memory with the driver's migrations applied in order. */
-let database = () => asDatabase(migrated())
+/** The names install records for the driver's own parts, made up as install would draw them. */
+let parts = [
+  ("0a1b2c3d", "state"),
+  ("1b2c3d4e", "driver"),
+  ("2c3d4e5f", "object"),
+  ("3d4e5f6a", "bucket"),
+  ("4e5f6a7b", "database"),
+  ("5f6a7b8c", "user_database"),
+]
+
+/** node's SQLite in memory migrated, each of the driver's own parts recorded as install does. */
+let installed = () => {
+  let db = migrated()
+  parts->Array.forEach(((name, role)) =>
+    db->exec(`INSERT INTO owned (name, role) VALUES ('${name}', '${role}')`)
+  )
+  db
+}
+
+/** The D1 the driver's Worker is given, as its store reads it. */
+external stored: Driver.database => Stores.database = "%identity"
+
+/** A database in memory migrated and installed. */
+let database = () => asDatabase(installed())
 
 /** Every row of every table the migrations make, as JSON, to tell a write. */
 let rows: sqlite => string = %raw(`db => JSON.stringify(
-  ["held", "items", "tokens", "deployments", "adopted", "warnings"]
+  ["held", "items", "tokens", "deployments", "adopted", "warnings", "owned"]
     .map(t => db.prepare("SELECT * FROM " + t).all())
 )`)
 
@@ -78,6 +100,48 @@ let refusing: (Driver.database, string) => Driver.database = %raw(`(db, prefix) 
   batch: statements => db.batch(statements),
 })`)
 
+/** A database whose batches holding a statement beginning with `prefix` throw, nothing written. */
+let failing: (Driver.database, string) => Driver.database = %raw(`(db, prefix) => {
+  const wrap = (s, sql) => ({
+    sql,
+    inner: s,
+    bind: (...values) => wrap(s.bind(...values), sql),
+    first: () => s.first(),
+    all: () => s.all(),
+    run: () => s.run(),
+  })
+  return {
+    prepare: sql => wrap(db.prepare(sql), sql),
+    batch: async statements => {
+      if (statements.some(s => s.sql.startsWith(prefix))) throw new Error("refused " + prefix)
+      return db.batch(statements.map(s => s.inner))
+    },
+  }
+}`)
+
+/** A database whose first batch holding a statement beginning with `prefix` throws, once. */
+let failingOnce: (Driver.database, string) => Driver.database = %raw(`(db, prefix) => {
+  let left = 1
+  const wrap = (s, sql) => ({
+    sql,
+    inner: s,
+    bind: (...values) => wrap(s.bind(...values), sql),
+    first: () => s.first(),
+    all: () => s.all(),
+    run: () => s.run(),
+  })
+  return {
+    prepare: sql => wrap(db.prepare(sql), sql),
+    batch: async statements => {
+      if (left > 0 && statements.some(s => s.sql.startsWith(prefix))) {
+        left -= 1
+        throw new Error("refused " + prefix)
+      }
+      return db.batch(statements.map(s => s.inner))
+    },
+  }
+}`)
+
 type requestInit = {method: string, headers: dict<string>, body?: Uint8Array.t}
 @new external request: (string, requestInit) => Web.request = "Request"
 @get external responseHeaders: Web.response => Web.headers = "headers"
@@ -91,6 +155,12 @@ type answer
 type answerInit = {status: int}
 @new external answerText: (string, answerInit) => answer = "Response"
 @new external answerBytes: (Uint8Array.t, answerInit) => answer = "Response"
+
+/** An answer of `status` whose body breaks as it is read. */
+let broken: int => answer = %raw(`status => new Response(
+  new ReadableStream({ start(controller) { controller.error(new Error("cut")) } }),
+  { status },
+)`)
 
 /** A body that never ends, a MiB at each pull, and how many times it was pulled. */
 let endless: unit => (answer, ref<int>) = %raw(`() => {

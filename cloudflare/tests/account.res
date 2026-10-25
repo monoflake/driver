@@ -95,6 +95,10 @@ let make = (~artifacts: dict<Uint8Array.t>) => {
           )
         | None => absent()
         }
+      | ("GET", ["", "workers", "scripts", name]) =>
+        scripts->Map.has(name)
+          ? answerText(`export default { fetch: () => new Response("") }`, {status: 200})
+          : absent()
       | ("DELETE", ["", "workers", "scripts", name]) =>
         scripts->Map.delete(name) ? answerText(Documented.scriptDeleted, {status: 200}) : absent()
       | _ => answerText(`{"success": false, "errors": [], "result": null}`, {status: 400})

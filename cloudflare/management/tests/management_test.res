@@ -352,7 +352,11 @@ test("a token is held by the binding's secret until a list names the tokens", as
 /** A Worker of the organization's own adopted for app 1, by a made-up name. */
 let front: Management.adopted = {kind: #function, name: "shop-front", for_: App(1.)}
 
-let pages: Management.adopted = {kind: #function, name: "docs-pages", for_: Component("pages")}
+let pages: Management.adopted = {
+  kind: #function,
+  name: "docs-pages",
+  for_: Component({component: "pages", id: 2.}),
+}
 
 test("an adopted list is kept as given, an absent one leaving what is held", async () => {
   let m = memory()
@@ -390,16 +394,81 @@ test("an adopted kind not offered, an object or a database, is beyond the host",
   deepEqual(await beyond([front], ~offered=[#function]), None)
 })
 
-test("an adopted Worker the list drops is warned of by name until it is listed again", async () => {
+/** A warning the driver raised for a Worker it let go, as it words one. */
+let warning = (name): Management.warning => {
+  reason: "delete_by_hand",
+  name,
+  message: `${name} is no longer managed`,
+}
+
+test(
+  "a warning is cleared only for a name the list newly adds, never by a list sent again",
+  async () => {
+    let m = memory(~kept={...initial, adopted: [front], warnings: [warning("shop-front")]})
+    ignore(await m->apply(1., [], ~adopted=[front]))
+    deepEqual(m.kept.contents.warnings, [warning("shop-front")])
+    ignore(await m->apply(2., [], ~adopted=[]))
+    // A list dropping a name raises nothing here, the driver alone knowing whether it took it over.
+    deepEqual(m.kept.contents.warnings, [warning("shop-front")])
+    ignore(await m->apply(3., [], ~adopted=[front, pages]))
+    deepEqual(m.kept.contents.warnings, [])
+  },
+)
+
+test(
+  "a Worker's name of no Worker's grammar is invalid, an item's held to exactness alone",
+  async () => {
+    let m = memory()
+    let invalid = async adopted => reasonOf(await m->apply(1., [], ~adopted))
+    deepEqual(await invalid([{...front, name: "Shop-front"}]), Some("invalid"))
+    deepEqual(await invalid([{...front, name: "-shop"}]), Some("invalid"))
+    deepEqual(await invalid([{...front, name: "shop.front"}]), Some("invalid"))
+    deepEqual(await invalid([{...front, name: String.repeat("a", 64)}]), Some("invalid"))
+    deepEqual(await invalid([{...front, name: "0a_shop-front"}]), None)
+    deepEqual(await invalid([{...front, name: "1" ++ String.repeat("a", 62)}]), None)
+  },
+)
+
+test(
+  "a name pointed at another deployment in one apply is refused, two applies moving it",
+  async () => {
+    let m = memory()
+    ignore(await m->apply(1., [], ~adopted=[front]))
+    let elsewhere = {...front, for_: App(2.)}
+    deepEqual(
+      await m->apply(2., [], ~adopted=[elsewhere]),
+      Error({
+        reason: "invalid",
+        message: [
+          "shop-front stands for app 1; moving it to app 2 takes two applies,",
+          "one dropping it and one adding it",
+        ]->Array.join(" "),
+      }),
+    )
+    deepEqual(m.kept.contents.adopted, [front])
+    deepEqual(await m->apply(2., [], ~adopted=[]), Ok(2.))
+    deepEqual(await m->apply(3., [], ~adopted=[elsewhere]), Ok(3.))
+    deepEqual(m.kept.contents.adopted, [elsewhere])
+  },
+)
+
+test("two entries for one component's id are invalid, whatever its name", async () => {
   let m = memory()
-  ignore(await m->apply(1., [], ~adopted=[front, pages]))
-  ignore(await m->apply(2., [], ~adopted=[pages]))
-  let warned = m.kept.contents.warnings
-  deepEqual(warned->Array.map(w => (w.reason, w.name)), [("delete_by_hand", "shop-front")])
-  deepEqual(warned->Array.every(w => w.message->String.includes("shop-front")), true)
-  ignore(await m->apply(3., [], ~adopted=[]))
-  let names = m.kept.contents.warnings->Array.map(w => w.name)
-  deepEqual(names, ["shop-front", "docs-pages"])
-  ignore(await m->apply(4., [], ~adopted=[front]))
-  deepEqual(m.kept.contents.warnings->Array.map(w => w.name), ["docs-pages"])
+  let one: Management.adopted = {
+    kind: #function,
+    name: "docs-pages",
+    for_: Component({component: "pages", id: 3.}),
+  }
+  let other = {...one, name: "docs-site", for_: Component({component: "site", id: 3.})}
+  deepEqual(reasonOf(await m->apply(1., [], ~adopted=[one, other])), Some("invalid"))
+  deepEqual(
+    reasonOf(
+      await m->apply(
+        1.,
+        [],
+        ~adopted=[one, {...other, for_: Component({component: "site", id: 4.})}],
+      ),
+    ),
+    None,
+  )
 })

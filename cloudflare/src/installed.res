@@ -1,14 +1,12 @@
 /***
  * What install gives the Worker beside its bindings, its install id and the kinds it offers, and
- * the guard holding every name the driver acts on to that id, RFC nrs5v's Ledger.
+ * the guard holding every name the driver acts on to its records or the list, RFC nrs5v.
  */
 module Function = DriverCloudflareFunction.Function
 module Management = DriverCloudflareManagement.Management
 
+/** A resource's id bare, 8 lowercase hex digits, as the state D1's own name is. */
 let idForm = /^[0-9a-f]{8}$/
-
-/** A name in the id form, a lowercase word or words joined by hyphens, then the install id. */
-let nameForm = /^[a-z0-9]+(-[a-z0-9]+)*-[0-9a-f]{8}$/
 
 /** The install id given, or why install is broken, its message naming the variable. */
 let idOf = (given: option<string>) =>
@@ -40,46 +38,139 @@ let kindsOf = (given: option<string>) => {
   }
 }
 
-/** Whether a resource is the driver's own, its name ending in its own install id. */
-let owned = (name, ~id) => nameForm->RegExp.test(name) && name->String.endsWith(`-${id}`)
-
-/** A name the driver formed, refused as its own fault where it is not `<name>-<own id>`. */
-let held = (name, ~id): result<string, Function.refused> =>
-  owned(name, ~id)
+/**
+ * A deployment's own Worker as the driver formed it, a fault where it is not 8 lowercase hex
+ * digits, the envelope having held its id to a resource's already, RFC nrs5v's Ledger.
+ */
+let formed = name =>
+  idForm->RegExp.test(name)
     ? Ok(name)
     : Error({
-        reason: "fault",
-        message: `${name} is not in the driver's id form, so it is never acted on`,
+        Function.reason: "fault",
+        message: `${name} is not a name the driver forms, so it is never acted on`,
       })
 
+/** The most a version's tag holds, Cloudflare's `workers/tag` of 100 bytes. */
+let tagLength = 100
+
+/** A name neither the records nor the list hold, refused untouched. */
+let unheld = name => Error({
+  Function.reason: "fault",
+  message: `${name} is in neither the driver's records nor the list, so it is never acted on`,
+})
+
+/** Whether a Worker is on the account, by name. */
+type exists = string => promise<result<bool, Function.refused>>
+
+/** The account read for whether a Worker is there, only for a name in `read`. */
+let seen = (exists: exists, ~read: array<string>): exists =>
+  name => read->Array.includes(name) ? exists(name) : Promise.resolve(unheld(name))
+
 /**
- * An account's API on owned names, and on the names an organization `listed` checked against that
- * list, never by their form; a listed Worker is never deleted, RFC nrs5v.
+ * Whether a Worker the records hold is the one this install made for this deployment, its version
+ * tagged `<install id>/<owner>/...`, or absent, so nothing of another's is deleted or overwritten.
+ * It guards against accident, a name anyone holding the account can write, RFC nrs5v.
+ */
+let carries = async (api: Function.api, name, ~install, ~owner, ~exists: exists, ~act) => {
+  let refused = () => Error({
+    Function.reason: "fault",
+    message: `${name} carries no tag the driver gave ${owner}, so it is never ${act}`,
+  })
+  switch await api.running(name) {
+  | Ok(Some({tag: Some(tag)})) if tag->String.startsWith(`${install}/${owner}/`) => Ok()
+  | Ok(Some(_)) => refused()
+  | Ok(None) =>
+    switch await exists(name) {
+    | Ok(false) => Ok()
+    | Ok(true) => refused()
+    | Error(_) as failed => failed
+    }
+  | Error(_) as failed => failed
+  }
+}
+
+/**
+ * An account's API on the names the records hold, `held`, and those an organization `listed`; a
+ * listed Worker is never deleted and never made, only updated where it is, and a held one is
+ * deleted or overwritten only where it carries the tag this install gave `owner`, RFC nrs5v. Each
+ * version uploaded is tagged with the install id first, and a tag read back without it is none.
  */
 let api = (
-  api: Function.api,
-  ~id,
+  raw: Function.api,
+  ~held: array<string>,
   ~listed: array<string>,
-  ~released: array<string>,
+  ~exists: exists,
+  ~install: string,
+  ~owner: string,
 ): Function.api => {
-  let through = async (name, act, ~beside) =>
-    switch held(name, ~id) {
-    | Ok(name) if !(listed->Array.includes(name)) => await act(name)
-    | Ok(_) | Error(_) if beside->Array.includes(name) => await act(name)
-    | Ok(_) =>
+  let prefix = `${install}/`
+  let api = {
+    ...raw,
+    // The whole tag is held to Cloudflare's 100 bytes, refused rather than cut past them.
+    upload: (name, upload) =>
+      switch prefix ++ upload.tag {
+      | tag if String.length(tag) <= tagLength => raw.upload(name, {...upload, tag})
+      | tag =>
+        Promise.resolve(
+          Error({
+            Function.reason: "fault",
+            message: `the tag ${tag} is past the ${Int.toString(tagLength)} bytes a tag holds`,
+          }),
+        )
+      },
+    running: async name =>
+      (await raw.running(name))->Result.map(running =>
+        running->Option.map((running): Function.running => {
+          ...running,
+          tag: running.tag->Option.flatMap(
+            tag =>
+              tag->String.startsWith(prefix)
+                ? Some(tag->String.slice(~start=String.length(prefix)))
+                : None,
+          ),
+        })
+      ),
+  }
+  let may = name => held->Array.includes(name) || listed->Array.includes(name)
+  let through = async (name, act) => may(name) ? await act(name) : unheld(name)
+  let upload = async (name, upload) =>
+    if listed->Array.includes(name) {
+      switch await exists(name) {
+      | Ok(true) => await api.upload(name, upload)
+      | Ok(false) =>
+        Error({
+          Function.reason: "beyond_host",
+          message: `${name} is listed but no Worker on the account, and adoption never makes one`,
+        })
+      | Error(_) as refused => refused
+      }
+    } else if held->Array.includes(name) {
+      switch await carries(raw, name, ~install, ~owner, ~exists, ~act="overwritten") {
+      | Ok() => await api.upload(name, upload)
+      | Error(_) as refused => refused
+      }
+    } else {
+      unheld(name)
+    }
+  let delete = async name =>
+    switch (held->Array.includes(name), listed->Array.includes(name)) {
+    | (true, false) =>
+      switch await carries(raw, name, ~install, ~owner, ~exists, ~act="deleted") {
+      | Ok() => await api.delete(name)
+      | Error(_) as refused => refused
+      }
+    | (_, true) =>
       Error({
         Function.reason: "fault",
         message: `${name} is the organization's own, so it is never deleted`,
       })
-    | Error(_) as refused => refused
+    | (false, false) => unheld(name)
     }
-  // A released Worker is only read, to find whether it is gone yet.
-  let read = Array.concat(listed, released)
   {
-    upload: (name, upload) => through(name, name => api.upload(name, upload), ~beside=listed),
-    deploy: (name, version) => through(name, name => api.deploy(name, version), ~beside=listed),
-    running: name => through(name, name => api.running(name), ~beside=read),
-    delete: name => through(name, name => api.delete(name), ~beside=[]),
-    address: name => through(name, name => api.address(name), ~beside=listed),
+    upload,
+    deploy: (name, version) => through(name, name => api.deploy(name, version)),
+    running: name => through(name, name => api.running(name)),
+    delete,
+    address: name => through(name, name => api.address(name)),
   }
 }

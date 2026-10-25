@@ -4,10 +4,15 @@
  */
 open Host
 
-/** The names nrs5v gives each part, the driver's D1 and the binding's one database. */
+/** The names each Worker's own configuration gives the driver's D1, the database kind's and the
+ * bucket, which install replaces by the names it records. */
 let database = "driver"
 let userDatabase = "database"
 let bucket = "objects"
+
+/** The role the driver records a part of its configuration in, by its kind and its own name. */
+let databaseRole = name => name == database ? "state" : "user_database"
+let bucketRole = "bucket"
 
 /** What it is given, read from the environment alone, as this repository is public. */
 let account = "DRIVER_ACCOUNT_ID"
@@ -15,26 +20,19 @@ let installToken = "DRIVER_INSTALL_TOKEN"
 let driverToken = "DRIVER_API_TOKEN"
 let databaseToken = "DATABASE_API_TOKEN"
 let kindsInput = "DRIVER_KINDS"
+/** Where the control's calls are sent, as the runner's `--base` names it, platform RFC 8j7b0. */
+let controlBase = "DRIVER_CONTROL_BASE"
 
 /** The names wrangler reads, set in its own environment alone and never read from install's. */
 let wranglerToken = "CLOUDFLARE_API_TOKEN"
 let wranglerAccount = "CLOUDFLARE_ACCOUNT_ID"
 
-/** The prefixes of every sign-in name wrangler reads, its legacy `CF_` names among them. */
-let ambient = ["CLOUDFLARE_", "CF_"]
-
 /** The file wrangler loads in place of `.env` and `.env.local`, which holds nothing. */
 let noEnvFile = ["--env-file", "/dev/null"]
-
-/** The tokens kept out of every command's environment by their own names. */
-let tokens = [installToken, driverToken, databaseToken]
 
 /** The kinds the driver may offer, `function` alone where `DRIVER_KINDS` names none. */
 let kinds = ["function", "object", "database"]
 let defaultKinds = ["function"]
-
-/** A part's name followed by the install id. */
-let named = (name, ~id) => `${name}-${id}`
 
 /** The hint the database and the bucket are placed by, none given letting Cloudflare place them. */
 let location = "DRIVER_LOCATION"
@@ -45,8 +43,14 @@ type source = Environment(string) | Bound
 /** A Worker, its directory beneath the root and the secrets it is given by name. */
 type worker = {name: string, directory: array<string>, secrets: array<(string, source)>}
 
-/** What one install acts on, its install id and the kinds it offers. */
-type install = {id: string, kinds: array<string>}
+/**
+ * What one install acts on, its install id, the state D1's own name, the kinds it offers and each
+ * part's name by the role the driver records it in, RFC nrs5v's bare ids.
+ */
+type install = {id: string, kinds: array<string>, parts: dict<string>}
+
+/** A part's name by its role, said by its role where a dry run has not drawn it. */
+let nameOf = (install, role) => install.parts->Dict.get(role)->Option.getOr(`<${role}'s name>`)
 
 let offers = (install, kind) => install.kinds->Array.includes(kind)
 
@@ -100,19 +104,16 @@ let shown = command => {
 }
 
 /**
- * The environment the commands run in, quiet and unasking, every token and every ambient
- * `CLOUDFLARE_` or `CF_` name taken out.
+ * The names a spawned command is given from install's own environment, and nothing else, since
+ * install runs in a person's shell holding secrets of every kind a deny list would miss.
  */
+let allowed = ["PATH", "HOME", "TMPDIR", "USER", "LANG"]
+
+/** The environment the commands run in, the allowed names alone, quiet and unasking. */
 let quiet = env => {
-  let given = Dict.copy(env)
-  given
-  ->Dict.keysToArray
-  ->Array.forEach(name =>
-    if (
-      ambient->Array.some(prefix => name->String.startsWith(prefix)) || tokens->Array.includes(name)
-    ) {
-      given->Dict.delete(name)
-    }
+  let given = Dict.make()
+  allowed->Array.forEach(name =>
+    env->Dict.get(name)->Option.forEach(value => given->Dict.set(name, value))
   )
   given->Dict.set("WRANGLER_SEND_METRICS", "false")
   given->Dict.set("CI", "1")

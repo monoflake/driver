@@ -30,7 +30,7 @@ type state =
 type keptItem = {item: item, state: state}
 
 /** What an adopted resource stands for, a deployment by its app or component, or an item. */
-type adoptedFor = App(float) | Component(string) | Item(float)
+type adoptedFor = App(float) | Component({component: string, id: float}) | Item(float)
 
 /**
  * A resource of the organization's own the driver manages by its exact name, only ever updated and

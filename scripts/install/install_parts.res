@@ -42,9 +42,9 @@ let listedBuckets = body =>
 
 /**
  * A database made with its hint where the account lists none by its name, and its id, marked with
- * `marker` by its first statement where one is given, so it must be made here.
+ * `marker` by its first statement where one is given, so it must be made here, as one `drawn` must.
  */
-let databaseOf = (w, ~dry, ~root, ~marker=?, database) => {
+let databaseOf = (w, ~dry, ~root, ~marker=?, ~drawn=false, database) => {
   let list = commanded(w, ~root, ~cwd=root, ["d1", "list", "--json"])
   let create = commanded(w, ~root, ~cwd=root, ["d1", "create", database, ...placed(w)])
   let marking =
@@ -70,8 +70,8 @@ let databaseOf = (w, ~dry, ~root, ~marker=?, database) => {
   } else {
     switch w.run(list)->then(body => listedDatabase(body, database)) {
     | Error(why) => Error(why)
-    | Ok(Some(_)) if marking != None =>
-      Error(`${database} is listed already, though its install id was drawn as free`)
+    | Ok(Some(_)) if marking != None || drawn =>
+      Error(`${database} is listed already, though its name was drawn as free`)
     | Ok(Some(id)) =>
       w.say(`the database ${database} is there already`)
       Ok(id)
@@ -91,8 +91,8 @@ let databaseOf = (w, ~dry, ~root, ~marker=?, database) => {
   }
 }
 
-/** The bucket made with its hint where the account lists none by its name. */
-let bucketOf = (w, ~dry, ~root, ~bucket) => {
+/** The bucket made with its hint where the account lists none by its name, as one `drawn` is. */
+let bucketOf = (w, ~dry, ~root, ~drawn=false, ~bucket) => {
   let list = commanded(w, ~root, ~cwd=root, ["r2", "bucket", "list"])
   let create = commanded(w, ~root, ~cwd=root, ["r2", "bucket", "create", bucket, ...placed(w)])
   if dry {
@@ -101,6 +101,8 @@ let bucketOf = (w, ~dry, ~root, ~bucket) => {
   } else {
     switch w.run(list)->Result.map(listedBuckets) {
     | Error(why) => Error(why)
+    | Ok(names) if names->Array.includes(bucket) && drawn =>
+      Error(`the bucket ${bucket} is listed already, though its name was drawn as free`)
     | Ok(names) if names->Array.includes(bucket) =>
       w.say(`the bucket ${bucket} is there already`)
       Ok()
@@ -132,10 +134,10 @@ let eachOf = (filled, config, key, change) =>
   )
 
 /**
- * A Worker's own configuration with its name, its databases' and its bucket's followed by the
- * install id, each D1 database's real id by its name, and the variables given set beside its own.
+ * A Worker's own configuration with its name, its databases' and its bucket's replaced by those the
+ * driver records, each D1 database's real id by its own name, and the variables given set.
  */
-let configured = (given, ~id, ~ids: dict<string>, ~vars as set: dict<string>) =>
+let configured = (given, ~install, ~ids: dict<string>, ~vars as set: dict<string>) =>
   switch parsed(given)->Option.flatMap(JSON.Decode.object) {
   | None => Error("a Worker's wrangler.json is not JSON")
   | Some(config) =>
@@ -143,21 +145,18 @@ let configured = (given, ~id, ~ids: dict<string>, ~vars as set: dict<string>) =>
     config
     ->Dict.get("name")
     ->Option.flatMap(JSON.Decode.string)
-    ->Option.forEach(name => filled->Dict.set("name", JSON.String(named(name, ~id))))
+    ->Option.forEach(name => filled->Dict.set("name", JSON.String(nameOf(install, name))))
     filled->eachOf(config, "d1_databases", d =>
       d
       ->Dict.get("database_name")
       ->Option.flatMap(JSON.Decode.string)
       ->Option.forEach(name => {
-        d->Dict.set("database_name", JSON.String(named(name, ~id)))
+        d->Dict.set("database_name", JSON.String(nameOf(install, databaseRole(name))))
         ids->Dict.get(name)->Option.forEach(real => d->Dict.set("database_id", JSON.String(real)))
       })
     )
     filled->eachOf(config, "r2_buckets", d =>
-      d
-      ->Dict.get("bucket_name")
-      ->Option.flatMap(JSON.Decode.string)
-      ->Option.forEach(name => d->Dict.set("bucket_name", JSON.String(named(name, ~id))))
+      d->Dict.set("bucket_name", JSON.String(nameOf(install, bucketRole)))
     )
     let vars =
       config
@@ -198,15 +197,15 @@ let within = (w, ~dry, ~root, ~install, ~ids, worker, next) => {
   if dry {
     let shortened = [...worker.directory, moment]->Array.join("/")
     let given = varsOf(w, ~install, ~ids, worker)->Dict.keysToArray->Array.join(", ")
-    let full = named(worker.name, ~id=install.id)
-    w.say(`would write ${shortened}, ${worker.name}'s wrangler.json with every name followed by`)
-    w.say(`  the install id, its databases' ids, and the variables ${given} filled in,`)
+    let full = nameOf(install, worker.name)
+    w.say(`would write ${shortened}, ${worker.name}'s wrangler.json with every name the one`)
+    w.say(`  recorded, its databases' ids, and the variables ${given} filled in,`)
     w.say(`  and remove it once ${full} is done`)
     next(directory, config)
   } else {
     let done = switch configured(
       readFileSync(join([directory, "wrangler.json"])),
-      ~id=install.id,
+      ~install,
       ~ids,
       ~vars=varsOf(w, ~install, ~ids, worker),
     )->then(text => {
@@ -274,8 +273,11 @@ let listedSecrets = body =>
   ->Option.flatMap(JSON.Decode.array)
   ->Option.mapOr([], all => all->Array.filterMap(s => s->text("name")))
 
-/** Each of a Worker's secrets put where it holds none by that name, `BINDING` passed over where
- * stdin held nothing. */
+/**
+ * Each of a Worker's secrets put where it holds none by that name, and `BINDING` written whenever
+ * stdin holds a token, replacing what is there, since a secret cannot be read back to compare and
+ * a token given means bind; with nothing on stdin it is never touched.
+ */
 let secretsPut = (w, ~dry, ~root, ~directory, ~config, ~hashed, worker) => {
   let list = commanded(w, ~root, ~cwd=directory, ["secret", "list", "--config", config])
   let put = (name, given) => {
@@ -284,8 +286,8 @@ let secretsPut = (w, ~dry, ~root, ~directory, ~config, ~hashed, worker) => {
   }
   let given = worker.secrets->Array.filterMap(((name, source)) =>
     switch source {
-    | Environment(variable) => value(w.env, variable)->Option.map(v => (name, v))
-    | Bound => hashed->Option.map(v => (name, v))
+    | Environment(variable) => value(w.env, variable)->Option.map(v => (name, v, false))
+    | Bound => hashed->Option.map(v => (name, v, true))
     }
   )
   let passed = () =>
@@ -293,8 +295,10 @@ let secretsPut = (w, ~dry, ~root, ~directory, ~config, ~hashed, worker) => {
       w.say(`${binding} of ${worker.name} passed over, nothing on stdin`)
     }
   if dry {
-    w.say(`would run ${shown(list)}, and put each secret it does not name:`)
-    given->Array.forEach(((name, _)) => w.say(`  ${shown(put(name, ""))}`))
+    w.say(`would run ${shown(list)}, and put each secret it does not name, and ${binding} always`)
+    given->Array.forEach(((name, _, replaced)) =>
+      w.say(`  ${shown(put(name, ""))}${replaced ? ", replacing what is there" : ""}`)
+    )
     passed()
     Ok()
   } else {
@@ -302,15 +306,16 @@ let secretsPut = (w, ~dry, ~root, ~directory, ~config, ~hashed, worker) => {
     ->Result.map(listedSecrets)
     ->then(held => {
       passed()
-      given->Array.reduce(Ok(), (done, (name, secret)) =>
+      given->Array.reduce(Ok(), (done, (name, secret, replaced)) =>
         done->then(
           () =>
-            if held->Array.includes(name) {
+            if held->Array.includes(name) && !replaced {
               w.say(`the secret ${name} of ${worker.name} is there already`)
               Ok()
             } else {
+              let was = held->Array.includes(name) ? "replaced" : "put"
               w.run(put(name, secret))->Result.map(
-                _ => w.say(`the secret ${name} of ${worker.name} put`),
+                _ => w.say(`the secret ${name} of ${worker.name} ${was}`),
               )
             },
         )
