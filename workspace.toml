@@ -52,6 +52,10 @@ file = "machine/container/tests/reaching.rs"
 spelled = ["MONOFLAKE_REACHING"]
 
 [[names.data]]
+file = "machine/container/tests/bindings.rs"
+spelled = ["MONOFLAKE_REACHING"]
+
+[[names.data]]
 file = "machine/function/tests/workerd/echo.capnp"
 spelled = ["MONOFLAKE_FOOTING"]
 

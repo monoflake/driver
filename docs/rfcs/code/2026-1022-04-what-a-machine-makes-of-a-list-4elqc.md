@@ -73,8 +73,10 @@ The agent's proposal, for the author to take, change or refuse.
 - **Bound**: a list fits where its `container` items' cores and memory are at most the machine's,
   read by `driver-machine-management`'s usage, and its other items' sizes sum to at most the free
   space of the workloads' btrfs, `--mount`; a holder's own bound, D8, lowers it later.
-- **Names**: a binding's namespace is `b<binding>` and its qgroup `1/<binding>`, the binding's
-  integer in decimal, made on the first item and limited to what its items' sizes sum to.
+- **Names**: a binding's namespace is `b<binding>`, its id in 8 hex digits as platform's RFC b8f35
+  writes it, a binding made before ids were drawn keeping `b<decimal>` until none such remains, and
+  its qgroup `1/<binding>` in decimal, made on the first item and limited to what its items' sizes
+  sum to; amended on 2026-10-25 when bindings drew their ids.
 - **Items**: a `container` item is recorded alone, `made` at once with the driver's own address,
   since the container kind applies its share as it creates each container; the other three wait
   for their kinds' blocks, answering `failed` with `beyond_host` until each is written.
