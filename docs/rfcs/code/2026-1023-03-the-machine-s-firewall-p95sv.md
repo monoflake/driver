@@ -50,11 +50,17 @@ Decided by the author on 2026-10-23.
 
 Choices made provisionally while the thread runs, read by the author at its end.
 
-- **A deployment's `reaching` is fenced on the host, in this table**, a small matter, provisional,
-  chosen by the advisor on 2026-10-24, monoflake/platform's RFC y2xd3. The machine's module writes
-  the base rules: forwarding across the containers' bridge, and every private destination, RFC
-  1918, ULA and link-local, dropped unless an allowed element matches, filtered in the bridge
-  family. driver(machine) writes only `(reacher, target, port)` elements, never a rule, as this
-  RFC has it; the per-container iptables of the first try was the departure. The host side also
-  closes what a container could send past its own namespace's rules, a raw frame or an IPv6
-  link-local address. The machine's change is applied before the driver change it serves.
+- **A deployment's `reaching` is fenced on the host, in two tables of the fence's own**, a small
+  matter, provisional, chosen by the advisor on 2026-10-24, monoflake/platform's RFC y2xd3, the
+  structure as monoflake/machine's module builds it. `table bridge fence` drops every frame between
+  the ports of the containers' bridge but ARP, since filtering in the bridge family needs a table of
+  that family, never this RFC's one `table inet filter`. `table inet fence` drops what a container
+  sends the host unless it answers the host or matches an element of its set `reaching`, and drops
+  every private destination a container's traffic is routed to, RFC 1918, the tailnet's shared
+  address space of RFC 6598, link-local and ULA, and anything leaving by the tailnet.
+  driver(machine) writes only `(reacher address, entry address, entry port)` elements into
+  `reaching`, never a rule: a reacher reaches its targets through the machine's local entry, by
+  name. The host side also closes what a container could send past its own namespace's rules, an
+  IPv6 link-local address. Both tables stand beside NixOS's firewall until this RFC's table is
+  built; the machine's change is applied before the driver change it serves, and reverts by itself
+  unless confirmed.
