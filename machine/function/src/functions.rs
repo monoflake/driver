@@ -57,7 +57,7 @@ fn once(handed: &[DeploymentHanded]) -> Result<(), Refused> {
 /// A deployment as a person reads it.
 fn named(runs: &DeploymentRuns) -> String {
 	match runs {
-		DeploymentRuns::App { id } => format!("the app {id}"),
+		DeploymentRuns::App { id } => format!("the app {id:08x}"),
 		DeploymentRuns::Component { component, id } => format!("the component {component} {id:08x}"),
 	}
 }
