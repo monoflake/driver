@@ -77,7 +77,8 @@ Choices made provisionally while the thread runs, read by the author at its end.
   `reaching`, never a rule: a reacher reaches its targets through the machine's local entry, by
   name. The host side also closes what a container could send past its own namespace's rules, an
   IPv6 link-local address. Both tables stand beside NixOS's firewall until this RFC's table is
-  built; the machine's change is applied before the driver change it serves.
+  built; the machine's change and the driver change it serves are applied in one step, since each
+  passes or requires the other's flags.
 - **A container holds no `CAP_NET_RAW`**, a small matter, provisional, chosen by the advisor on
   2026-10-24. It closes both spoofing a neighbor's source and sending a raw frame past the fence
   at once, and an image that truly needs raw sockets is a request to be made, not a default. A
