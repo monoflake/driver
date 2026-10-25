@@ -120,8 +120,14 @@ Decided by the author on 2026-10-23, from the research the Options below record.
   its lists and when each item went unasked, is kept in D1, and the grace is swept by a Cron
   Trigger, where the Options had a Durable Object and its alarm; the instance kind waits. **The
   Cron Trigger is struck by monoflake/cloud's RFC rxmd9**, which puts every timer on a machine: the
-  grace is swept as each request to the management arrives, never one to a kind, and which machine
-  calls the sweep on a timer, and how, is **Pending**.
+  grace is swept as each request to the management arrives, never one to a kind. **Which machine
+  calls the sweep on time was decided by the author on 2026-10-24**: the grace is event-driven. When
+  an applied list leaves an item on a Cloudflare binding unasked, its grace end is known, and that
+  event sets one tick at that time; at the tick the binding's management is called once, and that
+  request's arrival sweeps what is past grace. The sweep on every management request stays as the
+  fallback, ticks being at least once and the sweep idempotent. The tick is the clock of
+  monoflake/platform's RFC p6fg3, which the platform above takes from the compute product of the
+  platform beneath.
 - **A database is D1**, where `database` is offered.
 - **Each `database` item gets a D1 of its own**, decided by the author on 2026-10-24, made for it
   and removed with it, never handed to another item; this supersedes "a binding holds one
@@ -415,3 +421,8 @@ Choices made provisionally while the thread runs, read by the author at its end.
   --command` runs two statements apart by `;`, whether D1 answers a query of `sqlite_master`, and
   whether List Workers, read by curl since wrangler lists no Workers, pages its answer; its
   documentation shows no paging, so install reads one answer and refuses one that says it is part.
+- **The component that sets the tick is the control of the platform above**, provisional, chosen by
+  the advisor on 2026-10-24, the one that applied the list. It reads each unasked item's grace end
+  from the binding's answer.
+- **A tick carries only its row's id**, provisional, chosen by the advisor on 2026-10-24, as
+  `?clock`'s contract says.
