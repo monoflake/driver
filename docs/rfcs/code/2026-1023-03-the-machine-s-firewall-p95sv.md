@@ -73,5 +73,4 @@ Choices made provisionally while the thread runs, read by the author at its end.
   machine's trusted interface on the tailnet, and the driver's API port is the case in point.
 - **One switch, one trial**, a small matter, provisional, chosen by the advisor on 2026-10-24: the
   NixOS firewall opening the entry's port on the containers' bridge is applied in the same switch
-  as the fence, so it comes under the same trial and reverts with it, or under a trial of its own
-  that the run sheet names.
+  as the fence, so it comes under the same trial and reverts with it.
