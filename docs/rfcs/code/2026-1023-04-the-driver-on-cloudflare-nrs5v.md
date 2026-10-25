@@ -498,3 +498,9 @@ Choices made provisionally while the thread runs, read by the author at its end.
 - **A user D1 holding a forged `install` table can make install refuse**, a known issue, a small
   matter, provisional, chosen by the advisor on 2026-10-24. `database` is not offered on a free
   account, and the workspace's `d1-per-item` reshapes the user D1s, so it is fixed then.
+- **A deployment's row is taken by its `runs`, never by its Worker's name**, a small matter,
+  provisional, chosen by the advisor on 2026-10-24. A deployment whose bare name the organization
+  listed for another answers `not_found` on `stop`, `resume` and `describe`. Before deleting or
+  overwriting a name its records hold, the driver reads that Worker's tags and acts only when it
+  carries the tag the driver gave that deployment, refusing otherwise. A claim is given back only
+  once the Worker is confirmed absent.

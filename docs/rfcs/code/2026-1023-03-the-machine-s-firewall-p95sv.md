@@ -45,3 +45,16 @@ Decided by the author on 2026-10-23.
   addresses dropped from any other interface; whether the bridge plugin's masquerade stays the
   plugin's or moves into the table; how a deployment's `network` is written as addresses and ports
   on a machine.
+
+### Ledger
+
+Choices made provisionally while the thread runs, read by the author at its end.
+
+- **A deployment's `reaching` is fenced on the host, in this table**, a small matter, provisional,
+  chosen by the advisor on 2026-10-24, monoflake/platform's RFC y2xd3. The machine's module writes
+  the base rules: forwarding across the containers' bridge, and every private destination, RFC
+  1918, ULA and link-local, dropped unless an allowed element matches, filtered in the bridge
+  family. driver(machine) writes only `(reacher, target, port)` elements, never a rule, as this
+  RFC has it; the per-container iptables of the first try was the departure. The host side also
+  closes what a container could send past its own namespace's rules, a raw frame or an IPv6
+  link-local address. The machine's change is applied before the driver change it serves.
