@@ -2,8 +2,10 @@
 	"name": "@monoflake/driver",
 	"sources": [
 		{ "dir": "model", "subdirs": true },
-		{ "dir": "scripts", "subdirs": true },
-		{ "dir": ".github/release" }
+		{ "dir": "scripts", "subdirs": ["bindings"] },
+		{ "dir": "scripts/install", "type": "dev" },
+		{ "dir": "scripts/tests", "subdirs": true, "type": "dev" },
+		{ "dir": ".github/release", "type": "dev" }
 	],
 	"dependencies": ["@monoflake/platform", "@monoflake/keys"],
 	"package-specs": [{ "module": "esmodule", "in-source": true }],

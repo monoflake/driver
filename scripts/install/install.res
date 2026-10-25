@@ -9,7 +9,7 @@ open Install_parts
 
 let usage = "install [--dry-run]"
 
-let root = join([fileURLToPath(importMetaUrl), "..", ".."])
+let root = join([fileURLToPath(importMetaUrl), "..", "..", ".."])
 
 @module("node:crypto") external randomBytes: int => Uint8Array.t = "randomBytes"
 

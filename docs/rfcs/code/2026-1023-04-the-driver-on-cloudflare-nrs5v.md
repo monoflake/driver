@@ -270,7 +270,7 @@ Decided by the author on 2026-10-23, from the research the Options below record.
     of the driver's table `database_held`, its item, `since` and the `size` last read.
 
   What makes it on an account, provisional, chosen by the advisor on 2026-10-24:
-  - **`mise run install`**, `scripts/install.res` beside `archive` and `dev`, makes what is absent
+  - **`mise run install`**, `scripts/install/install.res` beside `archive` and `dev`, makes what is absent
     and passes over what is there, as monoflake/cloud's `install` does: the D1 database `driver`
     and its migrations, the bucket `objects`, the Workers `driver` and `object` with the database's
     id and the account's in a configuration of the moment, a deploy passed over where nothing

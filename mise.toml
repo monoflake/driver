@@ -80,7 +80,7 @@ run = 'rescript build > /dev/null && node scripts/dev.res.mjs "$usage_host" ${us
 [tasks.install]
 description = "Make driver(cloudflare) on the account DRIVER_ACCOUNT_ID names, each part where it is absent: `install [--dry-run]`"
 usage = 'flag "-n --dry-run" help="Print each wrangler command it would run, a secret by its name alone, and write nothing, reading the D1 list and the tables of each driver-<id> database to say which install id it would use"'
-run = 'rescript build > /dev/null && node scripts/install.res.mjs ${usage_dry_run:+--dry-run}'
+run = 'rescript build > /dev/null && node scripts/install/install.res.mjs ${usage_dry_run:+--dry-run}'
 
 [tasks.test]
 description = "Test the scripts, wrangler faked"
