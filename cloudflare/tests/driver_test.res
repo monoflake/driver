@@ -103,7 +103,7 @@ test("a binding new holds nothing, its grace a week, and names the revision give
       200,
       Some("application/json"),
       success(`{"generation": 0, "policy": 0, "grace": 604800, "items": [],
-        "revision": "4b825dc"}`),
+        "revision": "4b825dc", "kinds": ["function", "object", "database"], "adopted": []}`),
     ),
   )
 })
@@ -127,7 +127,8 @@ test("a database item is made at the Worker `database`'s address, as an object i
     "capacity": {"name": "object", "size": 1048576}, "state": {"name": "made",
     "address": "object-0a1b2c3d.my-subdomain.workers.dev"}}, {"id": 2,
     "capacity": {"name": "database", "size": 1048576}, "state": {"name": "made",
-    "address": "database-0a1b2c3d.my-subdomain.workers.dev"}}]}`),
+    "address": "database-0a1b2c3d.my-subdomain.workers.dev"}}],
+    "kinds": ["function", "object", "database"], "adopted": []}`),
   )
 })
 
@@ -144,7 +145,8 @@ test(
       described,
       success(`{"generation": 1, "policy": 0, "grace": 604800, "items": [{"id": 1,
       "capacity": {"name": "object", "size": 1048576}, "state": {"name": "made",
-      "address": "object-0a1b2c3d.my-subdomain.workers.dev"}}]}`),
+      "address": "object-0a1b2c3d.my-subdomain.workers.dev"}}],
+      "kinds": ["function", "object", "database"], "adopted": []}`),
     )
     deepEqual(
       reasonOf(await manage(env, "end", `{"id": 1}`)),
@@ -171,7 +173,8 @@ test(
       (
         200,
         Some("application/json"),
-        success(`{"generation": 2, "policy": 1, "grace": 0, "items": []}`),
+        success(`{"generation": 2, "policy": 1, "grace": 0, "items": [],
+        "kinds": ["function", "object", "database"], "adopted": []}`),
       ),
     )
   },
@@ -218,7 +221,10 @@ test("a call in CBOR is answered in CBOR", async () => {
     ->Contracts.Answer.fromCbor(Contracts.ManagementDescribed.fromCbor)
   deepEqual(
     answer->Result.map(a => Contracts.Answer.toJson(a, Contracts.ManagementDescribed.toJson)),
-    Ok(success(`{"generation": 0, "policy": 0, "grace": 604800, "items": []}`)),
+    Ok(
+      success(`{"generation": 0, "policy": 0, "grace": 604800, "items": [],
+      "kinds": ["function", "object", "database"], "adopted": []}`),
+    ),
   )
   deepEqual(
     response->responseHeaders->Web.header("content-type")->Nullable.toOption,
@@ -568,7 +574,11 @@ test("a list naming a kind KINDS does not offer is refused whole as beyond_host"
     ),
   )
   let (_, _, described) = await manage(env, "describe", "{}")
-  deepEqual(described, success(`{"generation": 0, "policy": 0, "grace": 604800, "items": []}`))
+  deepEqual(
+    described,
+    success(`{"generation": 0, "policy": 0, "grace": 604800, "items": [],
+    "kinds": ["function"], "adopted": []}`),
+  )
   let objects = envOf(~db=database(), ~vars=dict{"INSTALL_ID": installId, "KINDS": "object"}, ())
   ignore(await manage(objects, "apply", `{"generation": 2, "items": []}`))
   // A list behind is answered by the generation held, before its kinds are read.
@@ -707,7 +717,7 @@ test("the guard answers fault for a name the driver formed, never calling Cloudf
     delete: name => reached(name)->Promise.thenResolve(r => r->Result.map(_ => ())),
     address: reached,
   }
-  let held = account->Installed.api(~id=installId)
+  let held = account->Installed.api(~id=installId, ~listed=[], ~released=[])
   let reasons = [
     (await held.address("object-ffffffff"))->Result.mapError(r => r.reason),
     (await held.address("object"))->Result.mapError(r => r.reason),
@@ -717,4 +727,172 @@ test("the guard answers fault for a name the driver formed, never calling Cloudf
   deepEqual(asked, [])
   ignore(await held.address("object-0a1b2c3d"))
   deepEqual(asked, ["object-0a1b2c3d"])
+})
+
+test("a listed name passes the guard by the list alone, and is never deleted", async () => {
+  let asked = []
+  let reached = name => {
+    asked->Array.push(name)
+    Promise.resolve(Ok("reached"))
+  }
+  let account: Function.api = {
+    upload: (name, _) => reached(name),
+    deploy: (name, _) => reached(name)->Promise.thenResolve(r => r->Result.map(_ => ())),
+    running: name => reached(name)->Promise.thenResolve(r => r->Result.map(_ => None)),
+    delete: name => reached(name)->Promise.thenResolve(r => r->Result.map(_ => ())),
+    address: reached,
+  }
+  let held = account->Installed.api(~id=installId, ~listed=["shop-front"], ~released=["old-blog"])
+  let reasonOf = (result: result<_, Function.refused>) =>
+    switch result {
+    | Ok(_) => "ok"
+    | Error(refused) => refused.reason
+    }
+  deepEqual(
+    [
+      reasonOf(await held.address("shop-front")),
+      reasonOf(await held.running("shop-front")),
+      reasonOf(await held.delete("shop-front")),
+      reasonOf(await held.running("old-blog")),
+      reasonOf(await held.address("old-blog")),
+      reasonOf(await held.delete("old-blog")),
+      reasonOf(await held.address("shop-back")),
+    ],
+    ["ok", "ok", "fault", "ok", "fault", "fault", "fault"],
+  )
+  deepEqual(asked, ["shop-front", "shop-front", "old-blog"])
+})
+
+let member = Account.member
+
+/** An apply adopting the organization's Worker `shop-front` for app 1, a made-up name. */
+let adopting = (generation, adopted) =>
+  `{"generation": ${Int.toString(generation)}, "items": [], "adopted": ${adopted}}`
+
+let shopFront = `{"kind": "function", "name": "shop-front",
+  "for": {"name": "deployment", "runs": {"name": "app", "id": 1}}}`
+
+let docsPages = `{"kind": "function", "name": "docs-pages",
+  "for": {"name": "deployment", "runs": {"name": "component", "component": "pages"}}}`
+
+/** The data of a management describe, by one of its fields. */
+let describedOf = async (env, key) => {
+  let (_, _, json) = await manage(env, "describe", "{}")
+  json
+  ->JSON.Decode.object
+  ->Option.flatMap(o => o->Dict.get("data"))
+  ->Option.flatMap(d => d->JSON.Decode.object->Option.flatMap(o => o->Dict.get(key)))
+}
+
+/** Each warning's reason and name, as describe answers them. */
+let warnedOf = async env =>
+  (await describedOf(env, "warnings"))
+  ->Option.flatMap(JSON.Decode.array)
+  ->Option.map(warnings =>
+    warnings->Array.map(w => {
+      let text = key => w->member(key)->Option.flatMap(JSON.Decode.string)->Option.getOr("")
+      (text("reason"), text("name"), text("message")->String.includes(text("name")))
+    })
+  )
+
+test("an adopted list is kept in D1 as given and described with the kinds offered", async () => {
+  let env = envOf()
+  let (_, _, applied) = await manage(env, "apply", adopting(1, `[${shopFront}, ${docsPages}]`))
+  deepEqual(applied, success(`{"generation": 1}`))
+  deepEqual(
+    await describedOf(env, "adopted"),
+    Some(JSON.parseOrThrow(`[${shopFront}, ${docsPages}]`)),
+  )
+  deepEqual(
+    await describedOf(env, "kinds"),
+    Some(JSON.parseOrThrow(`["function", "object", "database"]`)),
+  )
+  ignore(await manage(env, "apply", `{"generation": 2, "items": []}`))
+  deepEqual(
+    await describedOf(env, "adopted"),
+    Some(JSON.parseOrThrow(`[${shopFront}, ${docsPages}]`)),
+  )
+  deepEqual(await warnedOf(env), None)
+})
+
+test("an adopted list not exact, or beyond what is offered, is refused whole", async () => {
+  let env = envOf(~vars=dict{"INSTALL_ID": installId, "KINDS": "function,object"}, ())
+  let refused = async adopted => reasonOf(await manage(env, "apply", adopting(1, adopted)))
+  let invalid = (400, Some(JSON.String("invalid")))
+  let beyond = (400, Some(JSON.String("beyond_host")))
+  let pattern = shopFront->String.replace(`"shop-front"`, `"shop-*"`)
+  deepEqual(await refused(`[${pattern}]`), invalid)
+  deepEqual(await refused(`[${shopFront}, ${shopFront}]`), invalid)
+  let item = `{"kind": "function", "name": "a", "for": {"name": "item", "id": 2}}`
+  deepEqual(await refused(`[${item}]`), invalid)
+  let photos = `{"kind": "object", "name": "photos", "for": {"name": "item", "id": 2}}`
+  deepEqual(await refused(`[${photos}]`), beyond)
+  let ledger = `{"kind": "database", "name": "ledger", "for": {"name": "item", "id": 3}}`
+  deepEqual(await refused(`[${ledger}]`), beyond)
+  deepEqual(await describedOf(env, "generation"), Some(JSON.Number(0.)))
+})
+
+test("a listed Worker stands for its deployment, and is let go, never deleted", async () => {
+  let sqlite = migrated()
+  let env = envOf(~db=asDatabase(sqlite), ())
+  let account = Account.make(~artifacts=dict{"https://artifacts.example/hello": artifact})
+  let asked = []
+  let restore = replaced(async (url, init) => {
+    asked->Array.push(`${init.method} ${url->String.replace(Account.api, "")}`)
+    await account(url, init)
+  })
+  ignore(await manage(env, "apply", adopting(1, `[${shopFront}]`)))
+  let hash = Envelope.Hex.encode(await sha256(artifact))
+  let runs = `{"runs": {"name": "app", "id": 1}}`
+  let deploy = `{"interface": "deployments", "operation": "deploy", "input": {
+    "runs": {"name": "app", "id": 1}, "version": "${hash}", "form": "modules",
+    "isolation": ["isolate"], "artifact": {"address": "https://artifacts.example/hello",
+    "hash": "${hash}"}, "footing": "https://footing.invalid", "secrets": {},
+    "network": ["http", "tcp"]}}`
+  let deployments = (operation, input) =>
+    call(
+      env,
+      ~path=`/deployments/${operation}`,
+      ~body=`{"interface": "deployments", "operation": "${operation}", "input": ${input}}`,
+    )
+  let (_, _, deployed) = await call(env, ~path="/deployments/deploy", ~body=deploy)
+  let address =
+    deployed
+    ->member("data")
+    ->Option.flatMap(d => d->member("state"))
+    ->Option.flatMap(s => s->member("address"))
+  deepEqual(address, Some(JSON.String("shop-front.my-subdomain.workers.dev")))
+  ignore(await deployments("stop", runs))
+  ignore(await deployments("resume", runs))
+  ignore(await deployments("stop", runs))
+  let (_, _, deleted) = await deployments("delete", runs)
+  deepEqual(deleted, success("{}"))
+  deepEqual(asked->Array.some(a => a->String.includes("app-1-0a1b2c3d")), false)
+  deepEqual(asked->Array.some(a => a->String.startsWith("DELETE")), false)
+  deepEqual(await warnedOf(env), Some([("delete_by_hand", "shop-front", true)]))
+  // Deleted by hand, the Worker is gone, and its warning with it.
+  ignore(await account(`${Account.api}/workers/scripts/shop-front`, {method: "DELETE"}))
+  deepEqual(await warnedOf(env), None)
+  restore()
+  deepEqual(rows(sqlite)->String.includes("delete_by_hand"), false)
+})
+
+test("an adopted Worker the list drops is warned of until it no longer exists", async () => {
+  let env = envOf()
+  let account = Account.make(~artifacts=dict{"https://artifacts.example/hello": artifact})
+  let restore = replaced(account)
+  ignore(await manage(env, "apply", adopting(1, `[${shopFront}, ${docsPages}]`)))
+  let hash = Envelope.Hex.encode(await sha256(artifact))
+  let deploy = `{"interface": "deployments", "operation": "deploy", "input": {
+    "runs": {"name": "component", "component": "pages"}, "version": "${hash}",
+    "form": "modules", "isolation": ["isolate"], "artifact": {
+    "address": "https://artifacts.example/hello", "hash": "${hash}"},
+    "footing": "https://footing.invalid", "secrets": {}, "network": ["http", "tcp"]}}`
+  ignore(await call(env, ~path="/deployments/deploy", ~body=deploy))
+  ignore(await manage(env, "apply", adopting(2, `[${shopFront}]`)))
+  let warned = await warnedOf(env)
+  ignore(await account(`${Account.api}/workers/scripts/docs-pages`, {method: "DELETE"}))
+  let gone = await warnedOf(env)
+  restore()
+  deepEqual((warned, gone), (Some([("delete_by_hand", "docs-pages", true)]), None))
 })

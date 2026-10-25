@@ -7,6 +7,8 @@ let initial: Management.kept = {
   grace: 604800,
   items: [],
   tokens: None,
+  adopted: [],
+  warnings: [],
 }
 
 type memory = {store: Management.store, kept: ref<Management.kept>, writes: ref<int>}
@@ -61,6 +63,7 @@ let apply = (
   m,
   ~now=0.,
   ~tokens=?,
+  ~adopted=?,
   ~asked=ref(0),
   ~answer=?,
   ~databasesAsked=ref(0),
@@ -76,6 +79,7 @@ let apply = (
     ~generation,
     ~items,
     ~tokens,
+    ~adopted,
     ~objects=objects(~answer?, asked),
     ~databases=objects(~answer=databaseAnswer, databasesAsked),
   )
@@ -83,7 +87,7 @@ let apply = (
 let reasonOf = result =>
   switch result {
   | Ok(_) => None
-  | Error({Management.reason: reason}) => Some(reason)
+  | Error({reason}: Management.refused) => Some(reason)
   }
 
 test("a list naming an item twice, or one with no credential or three, is invalid", async () => {
@@ -104,7 +108,7 @@ test(
     let refusedOf = result =>
       switch result {
       | Ok(_) => None
-      | Error({Management.reason: reason, message}) => Some((reason, message))
+      | Error({reason, message}: Management.refused) => Some((reason, message))
       }
     deepEqual(
       refusedOf(await m->apply(1., [object(1.)], ~asked, ~offered)),
@@ -343,4 +347,59 @@ test("a token is held by the binding's secret until a list names the tokens", as
   deepEqual(await holds(other), true)
   ignore(await m->apply(2., [], ~tokens=[other]))
   deepEqual(await holds(hash), false)
+})
+
+/** A Worker of the organization's own adopted for app 1, by a made-up name. */
+let front: Management.adopted = {kind: #function, name: "shop-front", for_: App(1.)}
+
+let pages: Management.adopted = {kind: #function, name: "docs-pages", for_: Component("pages")}
+
+test("an adopted list is kept as given, an absent one leaving what is held", async () => {
+  let m = memory()
+  deepEqual(await m->apply(1., [], ~adopted=[front, pages]), Ok(1.))
+  deepEqual(m.kept.contents.adopted, [front, pages])
+  deepEqual(await m->apply(2., []), Ok(2.))
+  deepEqual(m.kept.contents.adopted, [front, pages])
+  deepEqual(m.kept.contents.warnings, [])
+})
+
+test(
+  "an adopted name not exact, standing for what its kind cannot, or twice is invalid",
+  async () => {
+    let m = memory()
+    let invalid = async adopted => reasonOf(await m->apply(1., [], ~adopted))
+    deepEqual(await invalid([{...front, name: ""}]), Some("invalid"))
+    deepEqual(await invalid([{...front, name: "shop-*"}]), Some("invalid"))
+    deepEqual(await invalid([{...front, name: "shop?"}]), Some("invalid"))
+    deepEqual(await invalid([{...front, for_: Item(1.)}]), Some("invalid"))
+    deepEqual(await invalid([{kind: #object, name: "photos", for_: App(1.)}]), Some("invalid"))
+    deepEqual(await invalid([front, {...pages, name: "shop-front"}]), Some("invalid"))
+    deepEqual(await invalid([front, {...pages, for_: App(1.)}]), Some("invalid"))
+    deepEqual(m.writes.contents, 0)
+  },
+)
+
+test("an adopted kind not offered, an object or a database, is beyond the host", async () => {
+  let m = memory()
+  let beyond = async (~offered=[#function, #object, #database], adopted) =>
+    reasonOf(await m->apply(1., [], ~adopted, ~offered))
+  deepEqual(await beyond([front], ~offered=[#object]), Some("beyond_host"))
+  deepEqual(await beyond([{kind: #object, name: "photos", for_: Item(2.)}]), Some("beyond_host"))
+  deepEqual(await beyond([{kind: #database, name: "ledger", for_: Item(3.)}]), Some("beyond_host"))
+  deepEqual(m.writes.contents, 0)
+  deepEqual(await beyond([front], ~offered=[#function]), None)
+})
+
+test("an adopted Worker the list drops is warned of by name until it is listed again", async () => {
+  let m = memory()
+  ignore(await m->apply(1., [], ~adopted=[front, pages]))
+  ignore(await m->apply(2., [], ~adopted=[pages]))
+  let warned = m.kept.contents.warnings
+  deepEqual(warned->Array.map(w => (w.reason, w.name)), [("delete_by_hand", "shop-front")])
+  deepEqual(warned->Array.every(w => w.message->String.includes("shop-front")), true)
+  ignore(await m->apply(3., [], ~adopted=[]))
+  let names = m.kept.contents.warnings->Array.map(w => w.name)
+  deepEqual(names, ["shop-front", "docs-pages"])
+  ignore(await m->apply(4., [], ~adopted=[front]))
+  deepEqual(m.kept.contents.warnings->Array.map(w => w.name), ["docs-pages"])
 })

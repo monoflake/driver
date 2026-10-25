@@ -52,18 +52,34 @@ let held = (name, ~id): result<string, Function.refused> =>
         message: `${name} is not in the driver's id form, so it is never acted on`,
       })
 
-/** An account's API on owned names alone, every name held to the install id before a call. */
-let api = (api: Function.api, ~id): Function.api => {
-  let through = async (name, act) =>
+/**
+ * An account's API on owned names, and on the names an organization `listed` checked against that
+ * list, never by their form; a listed Worker is never deleted, RFC nrs5v.
+ */
+let api = (
+  api: Function.api,
+  ~id,
+  ~listed: array<string>,
+  ~released: array<string>,
+): Function.api => {
+  let through = async (name, act, ~beside) =>
     switch held(name, ~id) {
-    | Ok(name) => await act(name)
+    | Ok(name) if !(listed->Array.includes(name)) => await act(name)
+    | Ok(_) | Error(_) if beside->Array.includes(name) => await act(name)
+    | Ok(_) =>
+      Error({
+        Function.reason: "fault",
+        message: `${name} is the organization's own, so it is never deleted`,
+      })
     | Error(_) as refused => refused
     }
+  // A released Worker is only read, to find whether it is gone yet.
+  let read = Array.concat(listed, released)
   {
-    upload: (name, upload) => through(name, name => api.upload(name, upload)),
-    deploy: (name, version) => through(name, name => api.deploy(name, version)),
-    running: name => through(name, name => api.running(name)),
-    delete: name => through(name, name => api.delete(name)),
-    address: name => through(name, name => api.address(name)),
+    upload: (name, upload) => through(name, name => api.upload(name, upload), ~beside=listed),
+    deploy: (name, version) => through(name, name => api.deploy(name, version), ~beside=listed),
+    running: name => through(name, name => api.running(name), ~beside=read),
+    delete: name => through(name, name => api.delete(name), ~beside=[]),
+    address: name => through(name, name => api.address(name), ~beside=listed),
   }
 }

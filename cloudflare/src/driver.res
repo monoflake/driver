@@ -53,18 +53,124 @@ let stateTo = (s: Management.state): Contracts.ManagementState.t =>
   | Unasked({since, ?address}) => Unasked({since, ?address})
   }
 
-let hex = bytes => bytes->Array.map(Envelope.Hex.encode)
+/** The account's API, every name it acts on held to the install id or to the list kept. */
+let accountOf = (env, ~id, ~listed, ~released) =>
+  Function.ofAccount(~accountId=env.accountId, ~token=env.apiToken)->Installed.api(
+    ~id,
+    ~listed,
+    ~released,
+  )
 
-/** The account's API, every name it acts on held to the install id. */
-let accountOf = (env, ~id) =>
-  Function.ofAccount(~accountId=env.accountId, ~token=env.apiToken)->Installed.api(~id)
+/** The account's API as the list kept allows, its adopted Workers and those released. */
+let accountKept = (env, kept: Management.kept, ~id) =>
+  accountOf(
+    env,
+    ~id,
+    ~listed=kept.adopted->Array.filter(entry => entry.kind == #function)->Array.map(e => e.name),
+    ~released=kept.warnings->Array.map(w => w.name),
+  )
 
 /** A Worker's address, the Workers `object` and `database` made with the Worker `driver`, nrs5v. */
 let addressOf = async (env, worker, ~id) =>
-  switch await accountOf(env, ~id).address(worker) {
+  switch await accountOf(env, ~id, ~listed=[], ~released=[]).address(worker) {
   | Ok(address) => Ok(address)
-  | Error({reason, message}) => Error({Management.reason, message})
+  | Error({reason, message}) => Error(({reason, message}: Management.refused))
   }
+
+let hex = bytes => bytes->Array.map(Envelope.Hex.encode)
+
+let warningTo = (w: Management.warning): Contracts.ManagementWarning.t => {
+  reason: w.reason,
+  message: w.message,
+  name: w.name,
+}
+
+let kindTo = (kind: Management.kind): Contracts.ManagementKind.t =>
+  switch kind {
+  | #function => Function
+  | #object => Object
+  | #database => Database
+  }
+
+let adoptableOf = (kind: Contracts.ManagementAdoptable.t) =>
+  switch kind {
+  | Function => #function
+  | Object => #object
+  | Database => #database
+  }
+
+let adoptedOf = (entry: Contracts.ManagementAdopted.t): Management.adopted => {
+  kind: adoptableOf(entry.kind),
+  name: entry.name,
+  for_: switch entry.for_ {
+  | Deployment({runs: App({id})}) => App(id)
+  | Deployment({runs: Component({component})}) => Component(component)
+  | Item({id}) => Item(id)
+  },
+}
+
+let adoptedTo = (entry: Management.adopted): Contracts.ManagementAdopted.t => {
+  kind: switch entry.kind {
+  | #function => Function
+  | #object => Object
+  | #database => Database
+  },
+  name: entry.name,
+  for_: switch entry.for_ {
+  | App(id) => Deployment({runs: App({id: id})})
+  | Component(component) => Deployment({runs: Component({component: component})})
+  | Item(id) => Item({id: id})
+  },
+}
+
+/** The Worker an organization listed for a deployment, in place of its own, RFC nrs5v. */
+let listedFor = (adopted: array<Management.adopted>, runs: Contracts.DeploymentRuns.t) =>
+  adopted->Array.findMap(entry =>
+    switch (entry.kind, entry.for_) {
+    | (#function, for_) =>
+      let stands = switch (for_, runs) {
+      | (App(id), App({id: asked})) => id == asked
+      | (Component(name), Component({component})) => name == component
+      | (App(_) | Component(_) | Item(_), App(_) | Component(_)) => false
+      }
+      stands ? Some(entry.name) : None
+    | (#object | #database, _) => None
+    }
+  )
+
+/**
+ * A listed Worker let go, named in a warning to be deleted by hand, worded as management's
+ * `released` words it, once a name.
+ */
+let release = async (store: Management.store, name) => {
+  let kept = await store.read()
+  if !(kept.warnings->Array.some(w => w.name == name)) {
+    let warning: Management.warning = {
+      reason: "delete_by_hand",
+      name,
+      message: `${name} is no longer managed, so delete it by hand in Cloudflare's dashboard`,
+    }
+    await store.write({...kept, warnings: kept.warnings->Array.concat([warning])})
+  }
+}
+
+/** The warnings standing, each whose Worker no longer exists dropped, found by a read alone. */
+let standing = async (env, store: Management.store, kept: Management.kept, ~id) => {
+  let api = accountKept(env, kept, ~id)
+  let gone = await Promise.all(
+    kept.warnings->Array.map(async w =>
+      switch await api.running(w.name) {
+      | Ok(None) => true
+      | Ok(Some(_)) | Error(_) => false
+      }
+    ),
+  )
+  let warnings = kept.warnings->Array.filterWithIndex((_, at) => gone[at] != Some(true))
+  if Array.length(warnings) != Array.length(kept.warnings) {
+    await store.write({...kept, warnings})
+  }
+  warnings
+}
 
 /** A management call on the list kept, its grace swept first. */
 let managed = async (env, store, call: Contracts.Interface.Management.call, form, ~id, ~kinds) => {
@@ -86,6 +192,7 @@ let managed = async (env, store, call: Contracts.Interface.Management.call, form
       ~generation=input.generation,
       ~items,
       ~tokens=input.tokens->Option.map(hex),
+      ~adopted=input.adopted->Option.map(adopted => adopted->Array.map(adoptedOf)),
       ~objects=() => addressOf(env, `object-${id}`, ~id),
       ~databases=() => addressOf(env, `database-${id}`, ~id),
     )
@@ -104,6 +211,7 @@ let managed = async (env, store, call: Contracts.Interface.Management.call, form
     )
   | Describe(_) =>
     let kept = await Management.describe(store, ~now)
+    let warnings = await standing(env, store, kept, ~id)
     let described: Contracts.ManagementDescribed.t = {
       generation: kept.generation,
       policy: kept.policy,
@@ -114,6 +222,9 @@ let managed = async (env, store, call: Contracts.Interface.Management.call, form
         state: stateTo(k.state),
       }),
       revision: ?env.revision,
+      kinds: kinds->Array.map(kindTo),
+      adopted: kept.adopted->Array.map(adoptedTo),
+      warnings: ?(warnings == [] ? None : Some(warnings->Array.map(warningTo))),
     }
     Contracts.Answer.Success(described)->Answer.written(
       form,
@@ -236,7 +347,7 @@ let artifact = address => fetchedFrom(address, ~left=hops)
  */
 let unoffered = (call: Contracts.Interface.Deployments.call, form) => {
   let described = (operation, reason, message) =>
-    answered(operation, Error({Management.reason, message}))->Answer.written(
+    answered(operation, Error(({reason, message}: Management.refused)))->Answer.written(
       form,
       ~toJson=Contracts.DeploymentDescribed.toJson,
       ~toCbor=Contracts.DeploymentDescribed.toCbor,
@@ -355,11 +466,14 @@ let held = async (request, env, forms: Answer.forms, ~header, ~early, ~id, ~kind
       | Ok(envelope) if !(kinds->Array.includes(#function)) =>
         unoffered(envelope.call, forms.answer)
       | Ok(envelope) =>
+        let kept = await store.read()
         let through: Function.through = {
-          api: accountOf(env, ~id),
+          api: accountKept(env, kept, ~id),
           store: Kept.deployments(env.db),
           fetch: artifact,
           installId: id,
+          listed: listedFor(kept.adopted, _),
+          released: name => release(store, name),
         }
         await deployed(through, envelope.call, forms.answer)
       | Error(error) => early(error)

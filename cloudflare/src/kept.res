@@ -23,6 +23,16 @@ type itemRow = {
 
 type tokenRow = {hash: string}
 
+type adoptedRow = {
+  name: string,
+  kind: string,
+  runs: string,
+  id: Nullable.t<float>,
+  component: Nullable.t<string>,
+}
+
+type warningRow = {name: string, reason: string, message: string}
+
 /** An item's columns, in the order `rowOf` binds them. */
 let columns = "id, kind, millicores, bytes, credentials, state, address, reason, message, since"
 
@@ -96,6 +106,47 @@ let rowOf = (k: Management.keptItem) => {
   ]
 }
 
+let adoptedOf = (row: adoptedRow): Management.adopted => {
+  let id = row.id->Nullable.toOption->Option.getOr(0.)
+  {
+    kind: switch row.kind {
+    | "function" => #function
+    | "object" => #object
+    | "database" => #database
+    | kind => throw(Unkept(`an adopted resource of no kind the driver keeps, ${kind}`))
+    },
+    name: row.name,
+    for_: switch row.runs {
+    | "app" => App(id)
+    | "component" => Component(row.component->Nullable.toOption->Option.getOr(""))
+    | "item" => Item(id)
+    | runs => throw(Unkept(`an adopted resource standing for nothing the driver keeps, ${runs}`))
+    },
+  }
+}
+
+/** An adopted resource's row, its columns in the order `migrations/` declares them. */
+let adoptedRowOf = (entry: Management.adopted) => {
+  let (runs, id, component) = switch entry.for_ {
+  | App(id) => ("app", Some(id), None)
+  | Component(name) => ("component", None, Some(name))
+  | Item(id) => ("item", Some(id), None)
+  }
+  [
+    Text(entry.name),
+    Text(
+      switch entry.kind {
+      | #function => "function"
+      | #object => "object"
+      | #database => "database"
+      },
+    ),
+    Text(runs),
+    number(id),
+    text(component),
+  ]
+}
+
 let management = (db: database): Management.store => {
   read: async () => {
     let held: option<heldRow> = (
@@ -116,12 +167,27 @@ let management = (db: database): Management.store => {
     ->prepare("SELECT hash FROM tokens ORDER BY hash")
     ->bind([])
     ->all
+    // Each list is read in the order it was written, as it was held.
+    let adopted: rows<adoptedRow> = await db
+    ->prepare("SELECT name, kind, runs, id, component FROM adopted ORDER BY rowid")
+    ->bind([])
+    ->all
+    let warnings: rows<warningRow> = await db
+    ->prepare("SELECT name, reason, message FROM warnings ORDER BY rowid")
+    ->bind([])
+    ->all
     {
       generation: held.generation,
       policy: held.policy,
       grace: held.grace->Float.toInt,
       items: items.results->Array.map(itemOf),
       tokens: held.listed == 1. ? Some(tokens.results->Array.map(t => t.hash)) : None,
+      adopted: adopted.results->Array.map(adoptedOf),
+      warnings: warnings.results->Array.map((w): Management.warning => {
+        reason: w.reason,
+        message: w.message,
+        name: w.name,
+      }),
     }
   },
   write: kept =>
@@ -140,6 +206,8 @@ let management = (db: database): Management.store => {
           ]),
           db->prepare("DELETE FROM items")->bind([]),
           db->prepare("DELETE FROM tokens")->bind([]),
+          db->prepare("DELETE FROM adopted")->bind([]),
+          db->prepare("DELETE FROM warnings")->bind([]),
         ],
         [
           kept.items->Array.map(k =>
@@ -155,6 +223,18 @@ let management = (db: database): Management.store => {
           )
           ->Array.map(hash =>
             db->prepare("INSERT INTO tokens (hash) VALUES (?)")->bind([Text(hash)])
+          ),
+          kept.adopted->Array.map(entry =>
+            db
+            ->prepare(
+              "INSERT INTO adopted (name, kind, runs, id, component) VALUES (?, ?, ?, ?, ?)",
+            )
+            ->bind(adoptedRowOf(entry))
+          ),
+          kept.warnings->Array.map(w =>
+            db
+            ->prepare("INSERT INTO warnings (name, reason, message) VALUES (?, ?, ?)")
+            ->bind([Text(w.name), Text(w.reason), Text(w.message)])
           ),
         ],
       ),

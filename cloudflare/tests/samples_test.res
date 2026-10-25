@@ -43,19 +43,29 @@ let expected = (answer: JSON.t) =>
     )
   }
 
-/** Whether a value is as a sample expects it, `$any` and `$capture` standing for any value. */
+/** Whether a sample's value says its field must be absent, an object keyed `$absent`. */
+let absent = (value: JSON.t) =>
+  value->JSON.Decode.object->Option.mapOr(false, o => o->Dict.get("$absent") != None)
+
+/**
+ * Whether a value is as a sample expects it, `$any` and `$capture` standing for any value and
+ * `$absent` for none, a field the sample does not write passed over, RFC p8e8k.
+ */
 let rec matches = (expect: JSON.t, actual: JSON.t) =>
   switch (expect->JSON.Decode.object, expect->JSON.Decode.array) {
   | (Some(e), _) if e->Dict.get("$any") != None || e->Dict.get("$capture") != None => true
   | (Some(e), _) =>
     switch actual->JSON.Decode.object {
     | Some(a) =>
-      Dict.keysToArray(e)->Array.length == Dict.keysToArray(a)->Array.length &&
-        e
-        ->Dict.toArray
-        ->Array.every(((key, value)) =>
-          a->Dict.get(key)->Option.mapOr(false, v => matches(value, v))
-        )
+      e
+      ->Dict.toArray
+      ->Array.every(((key, value)) =>
+        switch (absent(value), a->Dict.get(key)) {
+        | (true, found) => found == None
+        | (false, Some(v)) => matches(value, v)
+        | (false, None) => false
+        }
+      )
     | None => false
     }
   | (None, Some(e)) =>
@@ -157,5 +167,14 @@ test("the management samples hold through the Worker", async () => {
   for c in 0 to Array.length(cases) - 1 {
     sent := sent.contents + (await ran(cases->Array.getUnsafe(c), ~interface="management"))
   }
-  deepEqual((Array.length(cases), sent.contents), (11, 0))
+  deepEqual((Array.length(cases), sent.contents), (12, 0))
+})
+
+test("a field written $absent must be absent, and one not written is passed over", async () => {
+  let json = text => JSON.parseOrThrow(text)
+  let expect = json(`{"generation": 1, "warnings": {"$absent": null}}`)
+  deepEqual(matches(expect, json(`{"generation": 1, "kinds": ["function"]}`)), true)
+  deepEqual(matches(expect, json(`{"generation": 1, "warnings": []}`)), false)
+  deepEqual(matches(expect, json(`{"warnings": null}`)), false)
+  deepEqual(matches(expect, json(`{"kinds": []}`)), false)
 })

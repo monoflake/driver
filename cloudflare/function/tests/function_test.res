@@ -293,3 +293,46 @@ test("the stub answers every request 503 stopped, in the form the call asks", as
     (503, Some("application/cbor")),
   )
 })
+
+/** The Worker an organization listed for app 1, a made-up name of its own. */
+let listedFor = (runs: Contracts.DeploymentRuns.t) =>
+  switch runs {
+  | App({id: 1.}) => Some("shop-front")
+  | App(_) | Component(_) => None
+  }
+
+test(
+  "a listed Worker stands for its deployment, deployed, stopped and resumed in place",
+  async () => {
+    let (through, account, kept, _) = setUp(~listed=listedFor)
+    let input = await deployOf()
+    let listedRunning = Contracts.DeploymentState.Running({
+      address: "shop-front.example",
+      runtime: Workers,
+      isolation: [Isolate],
+    })
+    deepEqual(stateOf(await Function.deploy(through, input)), Some(listedRunning))
+    deepEqual(stateOf(await Function.stop(through, of_)), Some(Stopped))
+    deepEqual(stateOf(await Function.resume(through, of_)), Some(listedRunning))
+    deepEqual(stateOf(await Function.describe(through, of_)), Some(listedRunning))
+    deepEqual(
+      account.asked->Array.filter(a => a->String.startsWith("deploy")),
+      ["deploy shop-front v1", "deploy shop-front v2", "deploy shop-front v1"],
+    )
+    deepEqual((kept->Map.has("shop-front"), kept->Map.has("app-1-0a1b2c3d")), (true, false))
+  },
+)
+
+test(
+  "a listed Worker's deployment deleted lets the Worker go, released and never deleted",
+  async () => {
+    let released = []
+    let (through, account, kept, _) = setUp(~listed=listedFor, ~released)
+    ignore(await Function.deploy(through, await deployOf()))
+    ignore(await Function.stop(through, of_))
+    deepEqual(await Function.delete(through, of_), Success({}))
+    deepEqual(released, ["shop-front"])
+    deepEqual(account.asked->Array.filter(a => a->String.startsWith("delete")), [])
+    deepEqual((kept->Map.size, account.runs->Map.has("shop-front")), (0, true))
+  },
+)

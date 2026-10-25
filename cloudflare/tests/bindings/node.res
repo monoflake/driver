@@ -61,7 +61,8 @@ let database = () => asDatabase(migrated())
 
 /** Every row of every table the migrations make, as JSON, to tell a write. */
 let rows: sqlite => string = %raw(`db => JSON.stringify(
-  ["held", "items", "tokens", "deployments"].map(t => db.prepare("SELECT * FROM " + t).all())
+  ["held", "items", "tokens", "deployments", "adopted", "warnings"]
+    .map(t => db.prepare("SELECT * FROM " + t).all())
 )`)
 
 /** A database whose statements beginning with `prefix` throw as they are run. */

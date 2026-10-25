@@ -56,6 +56,8 @@ type through = {
   store: store,
   fetch: string => promise<result<Uint8Array.t, refused>>,
   installId: string,
+  listed: Contracts.DeploymentRuns.t => option<string>,
+  released: string => promise<unit>,
 }
 
 /** The most an artifact may be, a Worker's 64 MiB on every plan, RFC nrs5v. */
@@ -76,8 +78,12 @@ let workerOf = (runs: Contracts.DeploymentRuns.t, ~installId) =>
   | Component({component}) => `component-${component}-${installId}`
   }
 
-/** The Worker of a deployment on this install, by `through`'s install id. */
-let nameOf = (through, runs) => workerOf(runs, ~installId=through.installId)
+/** The Worker of a deployment, the one an organization listed for it or its own on this install. */
+let nameOf = (through, runs) =>
+  switch through.listed(runs) {
+  | Some(name) => name
+  | None => workerOf(runs, ~installId=through.installId)
+  }
 
 let tagOf = hash => `version-${Envelope.Hex.encode(hash)}`->String.slice(~start=0, ~end=tagged)
 
@@ -333,6 +339,11 @@ let deleting = async (through, runs) => {
   switch await through.store.read(worker) {
   | Some({state: #running}) =>
     Error({reason: "still_running", message: `${worker} is running; stop it first`})
+  // A listed Worker is let go untouched and named to be deleted by hand, RFC nrs5v.
+  | Some({state: #stopped | #failed}) | None if through.listed(runs) != None =>
+    await through.released(worker)
+    await through.store.forget(worker)
+    Ok(({}: Contracts.DeploymentDeleted.t))
   | Some({state: #stopped | #failed}) | None =>
     switch await through.api.delete(worker) {
     | Error(_) as refused => refused
