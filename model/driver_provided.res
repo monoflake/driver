@@ -10,10 +10,10 @@ let blocks: dict<Provided.block> = dict{
     provides: ["host", "?entry"],
     extra: [
       e(
-        "control(organization)",
+        "?roster",
         #start,
         hard,
-        "binds its host to an organization's control once, by the binding's token, RFC rxmd9",
+        "binds its host to an organization's control once, by the binding's token, a place added to the roster, RFC rxmd9",
         ~contract=["bindings"],
       ),
       e(
