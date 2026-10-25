@@ -485,3 +485,10 @@ Choices made provisionally while the thread runs, read by the author at its end.
   one bucket and one user D1 per binding made at install before any item exists, they are named by
   ids the driver draws and checks, like its own Workers and state D1; the organization's resource is
   the item, an object item named by its id where it is held, its prefix `<item id>/`, as today.
+- **A first deploy reads whether the account holds its Worker's name first**, provisional, chosen by
+  the advisor on 2026-10-24: `GET /workers/scripts/{name}` after the name is recorded, and a Worker
+  of that name the driver did not make refuses the deploy, so a foreign Worker is never overwritten.
+  That refusal, and a deployment whose id names one of the driver's own parts, answer `beyond_host`,
+  each with a message saying which.
+- **A listed Worker the account no longer holds is described with the warning `missing`**,
+  provisional, chosen by the advisor on 2026-10-24.
