@@ -77,7 +77,7 @@ impl Started {
 			.args(["--crun".as_ref(), at("crun").as_os_str()])
 			.args(["--youki".as_ref(), at("youki").as_os_str()])
 			.args(["--plugins".as_ref(), at("plugins").as_os_str()])
-			.args(["--bridge", "tested", "--subnet", "unused"])
+			.args(["--bridge", "tested", "--subnet", "unused", "--entry", "4321"])
 			.args(["--mount".as_ref(), at("data").as_os_str()])
 			.args(["--btrfs".as_ref(), at("btrfs").as_os_str()])
 			.args(["--secrets".as_ref(), at("secrets").as_os_str()])

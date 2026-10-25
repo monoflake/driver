@@ -1,6 +1,5 @@
-//! The command `bind`, a host bound to its control once by its binding's token, and what the
-//! control answers written under the driver's state for the machine's tunnel and address, RFC
-//! rxmd9.
+//! The command `bind`, a host bound to its control once by its binding's token, reached by a
+//! tunnel, and what the control answers written under the driver's state, RFCs rxmd9 and 8j7b0.
 
 use std::fmt;
 use std::fs::{self, DirBuilder, OpenOptions, Permissions};
@@ -12,7 +11,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use envelope::contracts::interface::bindings;
-use envelope::contracts::{BindingBind, BindingBound, Error};
+use envelope::contracts::{BindingBind, BindingBound, BindingReach, BindingReached, Error};
 use envelope::{Answer, Encoded as _, Envelope};
 use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use serde_json::Value;
@@ -33,7 +32,7 @@ const ADDRESS: &str = "address";
 /// What a bind is given, the control, the token's file and where the answer is written.
 #[derive(Debug, Clone, clap::Args)]
 pub(crate) struct Arguments {
-	/// The control's address, `https://` and its host, the call's path added to it.
+	/// The control's base, an `https` URL that may carry a path, the call's path added after it.
 	#[arg(value_name = "control")]
 	control: String,
 	/// A file holding the binding's token, `<id>.<secret>`, read from stdin without it.
@@ -60,6 +59,8 @@ struct Bound {
 enum Unbound {
 	/// The control's address is not HTTPS, nor HTTP where `--insecure` allows it.
 	Address,
+	/// The control's base holds a query, a fragment or a user, or no host.
+	Base,
 	/// The token not read, or not one line of a token's characters.
 	Token(String),
 	/// The control not reached, or its answer not read whole.
@@ -68,6 +69,8 @@ enum Unbound {
 	Refused(Error),
 	/// The answer not as the call's is written.
 	Malformed(String),
+	/// The control answered an origin, which a machine is never reached by.
+	Origin,
 	/// A file not written.
 	Unwritten(PathBuf, std::io::Error),
 }
@@ -76,10 +79,17 @@ impl fmt::Display for Unbound {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self {
 			Self::Address => write!(f, "the control's address is https://, or http:// with --insecure"),
+			Self::Base => {
+				write!(
+					f,
+					"the control's base is a host, a port and a path, with no query, fragment or user"
+				)
+			}
 			Self::Token(why) => write!(f, "the token {why}"),
 			Self::Unreached(why) => write!(f, "the control was not reached, {why}"),
 			Self::Refused(e) => write!(f, "the control refused it, {}: {}", e.reason, e.message),
 			Self::Malformed(why) => write!(f, "the control's answer was not read, {why}"),
+			Self::Origin => write!(f, "the control answered an origin, and a machine binds by a tunnel"),
 			Self::Unwritten(path, e) => write!(f, "{} not written, {e}", path.display()),
 		}
 	}
@@ -96,12 +106,24 @@ fn chained(error: &dyn std::error::Error) -> String {
 	text
 }
 
-/// The call's address, the control's with the operation's path.
+/// The call's address, the control's base with the operation's path after it, a base holding
+/// what would carry the call elsewhere or a credential refused before any call.
 fn endpoint(control: &str, insecure: bool) -> Result<String, Unbound> {
 	let allowed = control.starts_with("https://") || (insecure && control.starts_with("http://"));
-	allowed
-		.then(|| format!("{}/bindings/bind", control.trim_end_matches('/')))
-		.ok_or(Unbound::Address)
+	if !allowed {
+		return Err(Unbound::Address);
+	}
+	let base = reqwest::Url::parse(control).map_err(|_| Unbound::Base)?;
+	let bare = base.query().is_none()
+		&& base.fragment().is_none()
+		&& base.username().is_empty()
+		&& base.password().is_none()
+		&& base.host_str().is_some_and(|h| !h.is_empty())
+		&& !control.contains(['?', '#', '@']);
+	match bare {
+		true => Ok(format!("{}/bindings/bind", control.trim_end_matches('/'))),
+		false => Err(Unbound::Base),
+	}
 }
 
 /// One line of a token's characters, none empty.
@@ -125,17 +147,17 @@ fn token(file: Option<&Path>) -> Result<String, Unbound> {
 		.ok_or_else(|| Unbound::Token("is not one line, `<id>.<secret>`".into()))
 }
 
-/// What a success holds as the host takes it, the binding the token's own, the address one a host
-/// may hold as its own and the tunnel's token one line of UTF-8.
-fn held(bound: BindingBound, token: &str) -> Option<Bound> {
-	let ours = token.split_once('.').is_some_and(|(id, _)| id == bound.binding.to_string());
-	let address: Ipv4Addr = bound.address.parse().ok()?;
+/// What a tunnel's success holds as the host takes it, the binding the token's own, the address
+/// one a host may hold as its own and the tunnel's token one line of UTF-8.
+fn held(binding: u32, address: &str, tunnel: Option<Vec<u8>>, token: &str) -> Option<Bound> {
+	let ours = token.split_once('.').is_some_and(|(id, _)| id == binding.to_string());
+	let address: Ipv4Addr = address.parse().ok()?;
 	let own = !(address.is_loopback() || address.is_unspecified() || address.is_multicast());
-	let tunnel = match bound.tunnel {
+	let tunnel = match tunnel {
 		Some(bytes) => Some(String::from_utf8(bytes).ok().filter(|t| line(t))?),
 		None => None,
 	};
-	(ours && own).then_some(Bound { binding: bound.binding, address, tunnel })
+	(ours && own).then_some(Bound { binding, address, tunnel })
 }
 
 /// What the control answered, its status said where the body is not an envelope.
@@ -145,8 +167,14 @@ fn answered(status: u16, bytes: &[u8], token: &str) -> Result<Bound, Unbound> {
 	let answer = Answer::<BindingBound>::from_json(&json)
 		.map_err(|m| malformed(&format!("expected {}", m.expected)))?;
 	match answer {
-		Answer::Success(bound) => held(bound, token)
+		Answer::Success(BindingBound {
+			binding,
+			reached: BindingReached::Tunnel { address, tunnel },
+		}) => held(binding, &address, tunnel, token)
 			.ok_or_else(|| malformed("its binding not the token's, or its address or tunnel unusable")),
+		Answer::Success(BindingBound { reached: BindingReached::Origin { .. }, .. }) => {
+			Err(Unbound::Origin)
+		}
 		Answer::Error(e) => Err(Unbound::Refused(e)),
 	}
 }
@@ -168,9 +196,13 @@ async fn called(endpoint: &str, token: &str, insecure: bool) -> Result<Bound, Un
 		.header(CONTENT_TYPE, "application/json")
 		.header(ACCEPT, "application/json")
 		.body(
-			Envelope { call: bindings::Call::Bind(BindingBind {}), capabilities: Vec::new() }
-				.to_json()
-				.to_string(),
+			// A machine is always reached by a tunnel the control makes.
+			Envelope {
+				call: bindings::Call::Bind(BindingBind { reach: BindingReach::Tunnel }),
+				capabilities: Vec::new(),
+			}
+			.to_json()
+			.to_string(),
 		)
 		.send()
 		.await
@@ -258,11 +290,11 @@ mod tests {
 	use axum::Router;
 	use axum::http::{HeaderMap, StatusCode, header};
 	use driver_machine_management::{Hold as _, Tokens};
-	use envelope::contracts::BindingBound;
+	use envelope::contracts::{BindingBound, BindingReached};
 	use envelope::{Answer, Encoded as _};
 	use serde_json::{Value, json};
 
-	use super::{ADDRESS, Arguments, BINDING, BOUND, TUNNEL, Unbound, bound};
+	use super::{ADDRESS, Arguments, BINDING, BOUND, TUNNEL, Unbound, bound, endpoint};
 
 	/// A control that answers each bind with `answer` and counts the calls it was given.
 	struct Control {
@@ -285,7 +317,8 @@ mod tests {
 			let call: Value = serde_json::from_str(&body).unwrap();
 			assert_eq!(call["interface"], "bindings");
 			assert_eq!(call["operation"], "bind");
-			assert_eq!(call["input"], json!({}));
+			// Version 2's input, the reach a tunnel.
+			assert_eq!(call["input"], json!({"reach": {"name": "tunnel"}}));
 			if given != Some(format!("Bearer {expected}").as_str()) {
 				let denied = json!({"status": "error", "failure": "rejected", "reason": "denied",
 					"message": "the token is not one this control made"});
@@ -320,9 +353,9 @@ mod tests {
 
 	/// A success as the control writes it, the tunnel's token its text's UTF-8.
 	fn success(binding: u32, address: &str, tunnel: Option<&[u8]>) -> Value {
-		let bound =
-			BindingBound { binding, address: address.to_owned(), tunnel: tunnel.map(<[u8]>::to_vec) };
-		Answer::Success(bound).to_json()
+		let reached =
+			BindingReached::Tunnel { address: address.to_owned(), tunnel: tunnel.map(<[u8]>::to_vec) };
+		Answer::Success(BindingBound { binding, reached }).to_json()
 	}
 
 	fn mode(path: &Path) -> u32 {
@@ -431,7 +464,9 @@ mod tests {
 			success(2, "10.200.0.7", Some(b"tunnel-1")),
 			success(1, "fd00::1", None),
 			json!({"status": "success", "data": {"binding": 1, "tunnel": "dHVubmVs"}}),
-			json!({"status": "success", "data": {"binding": 1, "address": "10.200.0.1", "tunnel": "!!"}}),
+			json!({"status": "success", "data": {"binding": 1, "address": "10.200.0.1"}}),
+			json!({"status": "success", "data": {"binding": 1,
+				"reached": {"name": "tunnel", "address": "10.200.0.1", "tunnel": "!!"}}}),
 			json!({"bound": true}),
 		] {
 			let control = control(token.clone(), StatusCode::OK, answer).await;
@@ -448,6 +483,85 @@ mod tests {
 		let control = control(token, StatusCode::OK, success(1, "10.200.0.7", Some(b"tunnel-1"))).await;
 		let plain = Arguments { insecure: false, ..arguments(&control, &directory) };
 		assert!(matches!(bound(&plain).await, Err(Unbound::Address)));
+		assert_eq!(control.calls.load(Ordering::SeqCst), 0);
+		assert!(!directory.join("state").exists());
+	}
+
+	#[tokio::test]
+	async fn a_bind_answered_an_origin_is_refused_and_writes_nothing() {
+		let token = token(1, 'A');
+		let directory = directory("origin", &token);
+		let reached = BindingReached::Origin { origin: "https://driver.example".into() };
+		let answer = Answer::Success(BindingBound { binding: 1, reached }).to_json();
+		let control = control(token, StatusCode::OK, answer).await;
+		let refused = bound(&arguments(&control, &directory)).await.unwrap_err();
+		assert!(matches!(refused, Unbound::Origin), "{refused}");
+		assert_eq!(
+			refused.to_string(),
+			"the control answered an origin, and a machine binds by a tunnel"
+		);
+		assert!(!directory.join("state").exists());
+	}
+
+	#[tokio::test]
+	async fn each_reason_bind_declares_is_reported_by_its_reason_and_writes_nothing() {
+		let token = token(1, 'A');
+		let directory = directory("reasons", &token);
+		for (status, failure, reason) in [
+			(StatusCode::BAD_REQUEST, "rejected", "invalid"),
+			(StatusCode::BAD_REQUEST, "rejected", "not_proven"),
+			(StatusCode::SERVICE_UNAVAILABLE, "unavailable", "unreachable"),
+			(StatusCode::BAD_REQUEST, "rejected", "malformed"),
+		] {
+			let error = json!({"status": "error", "failure": failure, "reason": reason,
+				"message": "made up for the test"});
+			let control = control(token.clone(), status, error).await;
+			let refused = bound(&arguments(&control, &directory)).await.unwrap_err();
+			assert!(matches!(&refused, Unbound::Refused(e) if e.reason == reason), "{refused}");
+			assert!(refused.to_string().contains(reason), "{refused}");
+		}
+		assert!(!directory.join("state").exists());
+	}
+
+	#[test]
+	fn the_calls_path_follows_the_base_after_exactly_one_slash() {
+		for base in ["https://control.example/v1/app-1", "https://control.example/v1/app-1/"] {
+			let joined = endpoint(base, false).unwrap();
+			assert_eq!(joined, "https://control.example/v1/app-1/bindings/bind", "{base}");
+		}
+		let bare = endpoint("https://control.example", false).unwrap();
+		assert_eq!(bare, "https://control.example/bindings/bind");
+		assert!(matches!(endpoint("http://control.example/v1", false), Err(Unbound::Address)));
+	}
+
+	#[test]
+	fn a_base_with_a_query_a_fragment_or_a_user_is_refused_and_a_port_and_path_kept() {
+		for base in [
+			"https://control.example/v1?x=1",
+			"https://control.example/v1?",
+			"https://control.example/v1#part",
+			"https://user@control.example/v1",
+			"https://user:secret@control.example/v1",
+			"https://:secret@control.example",
+		] {
+			assert!(matches!(endpoint(base, false), Err(Unbound::Base)), "{base}");
+		}
+		let local = endpoint("http://127.0.0.1:8787/v1/app-1/", true).unwrap();
+		assert_eq!(local, "http://127.0.0.1:8787/v1/app-1/bindings/bind");
+		let ported = endpoint("https://control.example:8443/v1", false).unwrap();
+		assert_eq!(ported, "https://control.example:8443/v1/bindings/bind");
+	}
+
+	#[tokio::test]
+	async fn a_base_refused_makes_no_call() {
+		let token = token(1, 'A');
+		let directory = directory("base", &token);
+		let control = control(token, StatusCode::OK, success(1, "10.200.0.7", None)).await;
+		let queried = Arguments {
+			control: format!("{}/v1?x=1", control.address),
+			..arguments(&control, &directory)
+		};
+		assert!(matches!(bound(&queried).await, Err(Unbound::Base)));
 		assert_eq!(control.calls.load(Ordering::SeqCst), 0);
 		assert!(!directory.join("state").exists());
 	}

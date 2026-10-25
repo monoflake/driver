@@ -99,6 +99,9 @@ struct Arguments {
 	/// The subnet each container's address is given from, in CIDR notation.
 	#[arg(long, value_name = "subnet")]
 	subnet: String,
+	/// The port the machine's entry listens on, which a reacher's hosts lines and fence name.
+	#[arg(long, value_name = "port")]
+	entry: u16,
 	/// The mount the workloads' btrfs lies on.
 	#[arg(long, value_name = "directory", default_value = "/data")]
 	mount: PathBuf,

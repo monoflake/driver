@@ -21,7 +21,7 @@ fn status(at: SocketAddr, host: &str) -> u16 {
 fn the_entry_runs_alone_and_a_deployment_containerd_cannot_say_is_unavailable() {
 	let missing = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("no-containerd.sock");
 	let mut child = Command::new(env!("CARGO_BIN_EXE_driver-machine"))
-		.args(["entry", "--listen", "127.0.0.1:0", "--containerd"])
+		.args(["entry", "--listen", "127.0.0.1:0", "--subnet", "192.0.2.0/24", "--containerd"])
 		.arg(&missing)
 		.stderr(Stdio::piped())
 		.spawn()

@@ -115,6 +115,9 @@ pub struct Worker {
 	pub port: u16,
 	/// Whether it may reach the internet, as its deployment's `http` or `tcp` network allows.
 	pub outbound: bool,
+	/// Whether it reaches deployments of its binding, the private network opened to it and its
+	/// namespace's fence narrowing that to the deployments it lists.
+	pub reaches: bool,
 }
 
 /// A bundle read from its artifact's bytes, RFC dg903; implemented for [`Bundle`].

@@ -310,6 +310,9 @@ pub struct Attachment {
 	pub netns: PathBuf,
 	/// Its address, at the port the image is called on.
 	pub address: SocketAddr,
+	/// The machine's entry as a container reaches it, the host's own address on the bridge as the
+	/// plugin answered it, at the entry's port.
+	pub entry: SocketAddr,
 }
 
 /// A container's network made and unmade; implemented for [`Bridge`]. What making it answered is
@@ -321,6 +324,12 @@ pub trait Network: Send + Sync {
 	fn detach(&self, id: &str) -> impl Future<Output = Result<(), Fault>> + Send;
 	/// Whether its address accepts a connection now, so what runs there is reached.
 	fn reached(&self, address: SocketAddr) -> impl Future<Output = bool> + Send;
+	/// Its namespace let reach the addresses given alone, the rules written again whole.
+	fn fence(
+		&self,
+		id: &str,
+		reached: &[SocketAddr],
+	) -> impl Future<Output = Result<(), Fault>> + Send;
 }
 
 /// A bridge, made by the CNI plugins `bridge`, `host-local` and `loopback`, run by their binaries
@@ -335,6 +344,8 @@ pub struct Bridge {
 	pub subnet: String,
 	/// Where what each plugin answered is kept, and the namespaces made.
 	pub state: PathBuf,
+	/// The port the machine's entry listens on, which a reacher's hosts and fence name.
+	pub entry: u16,
 }
 
 /// A binding's share of btrfs, RFC vr5lw; implemented for [`Btrfs`].

@@ -29,6 +29,8 @@ use envelope::contracts::{
 };
 use envelope::{Called, Encoded, Operation};
 
+mod fence;
+
 use crate::answer::{self, Form, Forms};
 use crate::{Arguments, Driver, Listed, Machine, Make, Manage, kept};
 
@@ -240,7 +242,7 @@ impl Turns {
 fn deployment(binding: Binding, runs: &DeploymentRuns) -> Deployment {
 	let runs = match runs {
 		DeploymentRuns::App { id } => format!("app/{id}"),
-		DeploymentRuns::Component { component } => format!("component/{component}"),
+		DeploymentRuns::Component { id, .. } => format!("component/{id:08x}"),
 	};
 	(binding, runs)
 }
@@ -386,6 +388,13 @@ fn early(forms: Forms, error: Error) -> Served {
 	Served::of::<DeploymentDeleted>(Err(error), forms.answer)
 }
 
+/// A body refused before it is read, read and dropped up to a call's bound, so the connection is
+/// closed with nothing left unread and its caller reads the refusal rather than a reset.
+async fn drained(body: Body) {
+	// A body past the bound is the caller's to have sent, and its connection may then be reset.
+	let _ = axum::body::to_bytes(body, LARGEST).await;
+}
+
 /// One call, authenticated first, so a call denied learns nothing of what it named.
 async fn serve(
 	driver: Arc<Driver>,
@@ -398,13 +407,16 @@ async fn serve(
 	let authorization = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok());
 	let checked = driver.tokens.read().unwrap_or_else(PoisonError::into_inner).check(authorization);
 	let Ok(binding) = checked else {
+		drained(body).await;
 		return early(forms, answer::error(&[], "denied", None));
 	};
 	let parts = path.strip_prefix('/').and_then(|p| p.split_once('/'));
 	let (Some((interface, operation)), Method::POST) = (parts, method) else {
+		drained(body).await;
 		return early(forms, answer::malformed("a call is POST /{interface}/{operation}"));
 	};
 	let Some(form) = forms.body else {
+		drained(body).await;
 		return early(
 			forms,
 			answer::malformed("a call's body is application/json or application/cbor"),
@@ -493,6 +505,7 @@ fn started(arguments: Arguments) -> Driver {
 					name: arguments.bridge,
 					subnet: arguments.subnet,
 					state: state.join("network"),
+					entry: arguments.entry,
 				},
 				quota: volumes,
 				fetch: Https { local: arguments.local, plain: arguments.plain },
@@ -552,6 +565,7 @@ pub(crate) async fn run(arguments: Arguments) -> ExitCode {
 		return ExitCode::FAILURE;
 	}
 	tokio::spawn(restarted(Arc::clone(&driver)));
+	tokio::spawn(fence::kept(Arc::clone(&driver)));
 	let listener = match tokio::net::TcpListener::bind(listen).await {
 		Ok(listener) => listener,
 		Err(e) => {
@@ -599,6 +613,7 @@ mod tests {
 			plugins: nowhere.clone(),
 			bridge: "bridge".into(),
 			subnet: "10.88.0.0/16".into(),
+			entry: 4321,
 			mount: nowhere.clone(),
 			btrfs: nowhere.clone(),
 			local: None,
@@ -627,5 +642,34 @@ mod tests {
 		assert!(matches!(apart, Poll::Ready(_)));
 		drop(held);
 		assert_eq!(waiting.await.outcome, "error rejected not_found");
+	}
+
+	#[test]
+	fn the_bridge_names_the_entry_at_the_port_the_driver_is_given() {
+		use clap::Parser as _;
+		let given = |entry: Option<&str>| {
+			let mut args =
+				vec!["driver-machine", "--state", "/nonexistent", "--containerd", "/nonexistent"];
+			args.extend(["--runc", "/r", "--crun", "/c", "--youki", "/y", "--plugins", "/p"]);
+			args.extend(["--bridge", "bridge", "--subnet", "192.0.2.0/24", "--mount", "/nonexistent"]);
+			args.extend(["--btrfs", "/b", "--secrets", "/nonexistent", "--largest", "1"]);
+			args.extend(["--workerd", "/nonexistent"]);
+			args.extend(entry.map(|e| ["--entry", e]).into_iter().flatten());
+			crate::Program::try_parse_from(args)
+		};
+		// The flag reaches the bridge, whatever port it names, and none is assumed without it.
+		for port in [4321u16, 4999] {
+			let program = given(Some(&port.to_string())).unwrap();
+			let arguments = program.driver.unwrap();
+			assert_eq!(started(arguments).functions.containers.network.entry, port);
+		}
+		assert!(given(None).is_err());
+	}
+
+	#[test]
+	fn a_component_takes_its_turn_by_its_id() {
+		let component = |name: &str, id| DeploymentRuns::Component { component: name.into(), id };
+		assert_eq!(deployment(7, &component("issuer", 3)), deployment(7, &component("renamed", 3)));
+		assert_ne!(deployment(7, &component("issuer", 3)), deployment(7, &component("issuer", 4)));
 	}
 }

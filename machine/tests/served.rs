@@ -191,3 +191,16 @@ fn a_list_and_the_tokens_an_apply_forgot_are_kept_across_a_restart() {
 	assert!(matches(&held, &answer["data"]), "{}", answer["data"]);
 	assert_eq!(driver.call(2, "management", "describe", &json!({})).0, 403);
 }
+
+#[test]
+fn a_caller_denied_with_a_large_body_reads_its_denial_whole() {
+	let driver = Started::with("denied-large", 1);
+	// Far past what a socket holds unread, so it is read whole or the connection is reset.
+	let body = vec![b' '; 1024 * 1024];
+	let headers = [("Content-Type", "application/json"), ("Accept", "application/json")];
+	for _ in 0..3 {
+		let reply = driver.request("POST", "/management/describe", &headers, &body);
+		assert_eq!(reply.status, 403);
+		assert_eq!(reply.json()["reason"], "denied");
+	}
+}

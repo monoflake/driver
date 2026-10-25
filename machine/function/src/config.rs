@@ -2,7 +2,7 @@
 //! reads it, against workerd's own schema.
 //! https://github.com/cloudflare/workerd/blob/main/src/workerd/server/workerd.capnp
 
-use envelope::contracts::{DeploymentDeploy, DeploymentNetwork};
+use envelope::contracts::{DeploymentDeploy, DeploymentHanded, DeploymentNetwork};
 
 use crate::{Bound, Bundle, Configure, FOOTING, Kind, MODULES, PORT, Worker};
 
@@ -12,8 +12,28 @@ const OPENING: &str = concat!(
 	"using Workerd = import \"/workerd/workerd.capnp\";\n",
 );
 
-/// The service a worker reaches out through, the internet where it may and nothing where not.
+/// What names the origins of what a worker reaches, each by its id, RFC y2xd3.
+const REACHING: &str = "MONOFLAKE_REACHING";
+
+/// The service a worker reaches out through, the internet where it may, the private network where
+/// it reaches deployments, and nothing where neither.
 const OUTBOUND: &str = "outbound";
+
+/// A value handed bound under its reserved name as hex text, a secret as a secret whose file the
+/// container kind writes in hex, RFC y2xd3.
+fn handed(value: &DeploymentHanded) -> Bound {
+	let text = |name: &str, bytes: &[u8]| Bound::Text {
+		name: name.to_owned(),
+		text: bytes.iter().map(|b| format!("{b:02x}")).collect(),
+	};
+	let secret = |name: &str| Bound::Secret { name: name.to_owned() };
+	match value {
+		DeploymentHanded::Root { value } => text("MONOFLAKE_ROOT", value),
+		DeploymentHanded::Key { .. } => secret("MONOFLAKE_KEY"),
+		DeploymentHanded::Certificate { value } => text("MONOFLAKE_CERTIFICATE", value),
+		DeploymentHanded::SigningKey { .. } => secret("MONOFLAKE_SIGNING_KEY"),
+	}
+}
 
 /// A text as a Cap'n Proto string, quoted, its quotes, backslashes and control characters escaped.
 fn quoted(text: &str) -> String {
@@ -70,16 +90,25 @@ impl Configure for Worker {
 			modules: bundle.modules.iter().map(|m| (m.name.clone(), m.kind)).collect(),
 			compatibility_date: bundle.compatibility_date.clone(),
 			compatibility_flags: bundle.compatibility_flags.clone(),
-			bindings: std::iter::once(footing).chain(secrets).collect(),
+			bindings: std::iter::once(footing)
+				.chain(input.handed.iter().flatten().map(handed))
+				.chain(secrets)
+				.collect(),
 			port: PORT,
 			outbound,
+			reaches: input.reaching.as_deref().is_some_and(|r| !r.is_empty()),
 		}
 	}
 
 	fn capnp(&self) -> String {
+		// The fence of its namespace narrows the private network to the deployments it reaches.
+		let allowed: Vec<&str> = [(self.outbound, "\"public\""), (self.reaches, "\"private\"")]
+			.into_iter()
+			.filter_map(|(open, name)| open.then_some(name))
+			.collect();
 		let network = match self.outbound {
-			true => "(allow = [\"public\"], tlsOptions = (trustBrowserCas = true))",
-			false => "(allow = [])",
+			true => format!("(allow = [{}], tlsOptions = (trustBrowserCas = true))", allowed.join(", ")),
+			false => format!("(allow = [{}])", allowed.join(", ")),
 		};
 		let services = [
 			"(name = \"main\", worker = .worker)".to_owned(),
@@ -99,7 +128,7 @@ impl Configure for Worker {
 			.collect();
 		let flags: Vec<String> = self.compatibility_flags.iter().map(|f| quoted(f)).collect();
 		// A secret is embedded by its name alone, found where `--import-path` names its directory.
-		let bindings: Vec<String> = self
+		let mut bindings: Vec<String> = self
 			.bindings
 			.iter()
 			.map(|b| match b {
@@ -109,6 +138,16 @@ impl Configure for Worker {
 				}
 			})
 			.collect();
+		// What it reaches is read from workerd's environment, which the container kind sets as it
+		// sets an image's, beside the values handed.
+		if self.reaches {
+			let platform = |b: &Bound| match b {
+				Bound::Text { name, .. } | Bound::Secret { name } => name.starts_with("MONOFLAKE_"),
+			};
+			let at = self.bindings.iter().take_while(|b| platform(b)).count();
+			let reaching = quoted(REACHING);
+			bindings.insert(at, format!("(name = {reaching}, fromEnvironment = {reaching})"));
+		}
 		format!(
 			"{OPENING}
 const config :Workerd.Config = (
