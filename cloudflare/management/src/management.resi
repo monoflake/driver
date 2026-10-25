@@ -29,13 +29,30 @@ type state =
 /** An item of the list as it is kept, with where it stands. */
 type keptItem = {item: item, state: state}
 
-/** What the management keeps, its generations, its grace in seconds, its items and its tokens. */
+/** What an adopted resource stands for, a deployment by its app or component, or an item. */
+type adoptedFor = App(float) | Component(string) | Item(float)
+
+/**
+ * A resource of the organization's own the driver manages by its exact name, only ever updated and
+ * never deleted, RFCs nrs5v and vbg0u.
+ */
+type adopted = {kind: [#function | #object | #database], name: string, for_: adoptedFor}
+
+/** What a person should act on, `delete_by_hand` naming an adopted resource the driver let go. */
+type warning = {reason: string, message: string, name: string}
+
+/**
+ * What the management keeps, its generations, its grace in seconds, its items, its tokens, the
+ * resources adopted and the warnings standing.
+ */
 type kept = {
   generation: float,
   policy: float,
   grace: int,
   items: array<keptItem>,
   tokens: option<array<string>>,
+  adopted: array<adopted>,
+  warnings: array<warning>,
 }
 
 /** Where it is kept, read and written whole, the driver's D1 `held`, `items` and `tokens`. */
@@ -52,6 +69,7 @@ let apply: (
   ~generation: float,
   ~items: array<item>,
   ~tokens: option<array<string>>,
+  ~adopted: option<array<adopted>>,
   ~objects: unit => promise<result<string, refused>>,
   ~databases: unit => promise<result<string, refused>>,
 ) => promise<result<float, refused>>

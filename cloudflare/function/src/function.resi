@@ -79,6 +79,10 @@ type through = {
   store: store,
   fetch: string => promise<result<Uint8Array.t, refused>>,
   installId: string,
+  /** The Worker an organization listed for a deployment, which it runs as in place of its own. */
+  listed: Contracts.DeploymentRuns.t => option<string>,
+  /** A listed Worker let go, never deleted, so a person is told to delete it by hand. */
+  released: string => promise<unit>,
 }
 
 /** The Worker a deployment runs as, `app-<id>-<install id>` or `component-<name>-<install id>`. */

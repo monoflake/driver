@@ -474,3 +474,14 @@ Choices made provisionally while the thread runs, read by the author at its end.
   one bucket and one user D1 per binding made at install before any item exists, they are named by
   ids the driver draws and checks, like its own Workers and state D1; the organization's resource is
   the item, an object item named by its id where it is held, its prefix `<item id>/`, as today.
+- **This wave adopts `function` alone**, provisional, chosen by the advisor on 2026-10-24. A
+  non-empty `adopted` entry of kind `object` or `database` answers `beyond_host`: the host cannot
+  hold it yet, which is true. `database` is not offered on an organization's free account at all,
+  `object` only where R2 is enabled, and the author's one D1 per item, the deferred item
+  `d1-per-item`, will change how the database Worker reaches its databases anyway, so how a listed
+  bucket or D1 is wired in is decided with that, not now.
+- **Pending**, waits on the author, with `d1-per-item`: how a listed bucket or D1 is wired in, since
+  each is reached through a binding the Worker `object-…` or `database-…` was given at install. a.
+  The driver uploads that Worker again at run time with the binding changed, holding its bundle and
+  a token that may change bindings. b. install wires it, reading the list then, and `apply`'s
+  `adopted` only checks it, refusing what differs as `beyond_host`.
