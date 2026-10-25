@@ -77,14 +77,13 @@ let databaseOf = (w, ~dry, ~root, ~marker=?, database) => {
       Ok(id)
     | Ok(None) =>
       w.run(create)
+      ->Result.map(_ => w.say(`the database ${database} made`))
       ->then(_ => marked())
       ->then(_ => w.run(list))
       ->then(body => listedDatabase(body, database))
       ->then(found =>
         switch found {
-        | Some(id) =>
-          w.say(`the database ${database} made`)
-          Ok(id)
+        | Some(id) => Ok(id)
         | None => Error(`${database} made but not listed`)
         }
       )

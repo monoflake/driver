@@ -426,3 +426,9 @@ Choices made provisionally while the thread runs, read by the author at its end.
   from the binding's answer.
 - **A tick carries only its row's id**, provisional, chosen by the advisor on 2026-10-24, as
   `?clock`'s contract says.
+- **Settled by the first install on an empty test account, 2026-10-24**: `d1 execute --remote`
+  finds a database by its name with no configuration, and the marker's two statements, apart by
+  `;`, run in one `--command`; the migrations apply; the free plan deploys the Worker `driver-…`,
+  the account's Workers subdomain enabled first by hand. Still to try: List Workers paging, the
+  not-found code, a query of `sqlite_master` on an account holding a foreign database, and the free
+  plan's 10 ms of CPU under a deploy.
