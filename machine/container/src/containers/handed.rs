@@ -54,7 +54,7 @@ pub(super) fn bound(handed: &[DeploymentHanded]) -> Result<Bound, Refused> {
 const REACHING: &str = "MONOFLAKE_REACHING";
 
 /// A deployment's name as the entry routes by it, its id in 8 hex digits whatever its kind and its
-/// binding's namespace, `b<binding>`.
+/// binding's namespace, `b<8 hex>`, or an old binding's `b<decimal>`.
 pub(super) fn name(namespace: &str, runs: &DeploymentRuns) -> (u32, String) {
 	match runs {
 		DeploymentRuns::App { id } | DeploymentRuns::Component { id, .. } => {

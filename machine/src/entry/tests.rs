@@ -171,6 +171,92 @@ impl Containerd for Held {
 	}
 }
 
+/// containerd holding each namespace's containers, none in a namespace not given.
+struct Spaces(BTreeMap<String, Vec<Listed>>);
+
+impl Containerd for Spaces {
+	async fn import(
+		&self,
+		_: &str,
+		_: &std::path::Path,
+	) -> Result<driver_machine_container::Image, Fault> {
+		Err(Fault("not here".into()))
+	}
+	async fn prepare(
+		&self,
+		_: &str,
+		_: &str,
+		_: &driver_machine_container::Image,
+	) -> Result<Vec<driver_machine_container::Mount>, Fault> {
+		Err(Fault("not here".into()))
+	}
+	async fn snapshot_path(&self, _: &str, _: &str) -> Result<std::path::PathBuf, Fault> {
+		Err(Fault("not here".into()))
+	}
+	async fn create(
+		&self,
+		_: &str,
+		_: &driver_machine_container::Spec,
+		_: &[driver_machine_container::Mount],
+		_: &std::path::Path,
+	) -> Result<(), Fault> {
+		Err(Fault("not here".into()))
+	}
+	async fn start(&self, _: &str, _: &str) -> Result<u32, Fault> {
+		Err(Fault("not here".into()))
+	}
+	async fn stop(&self, _: &str, _: &str, _: u64) -> Result<(), Fault> {
+		Err(Fault("not here".into()))
+	}
+	async fn remove(&self, _: &str, _: &str) -> Result<(), Fault> {
+		Err(Fault("not here".into()))
+	}
+	async fn list(&self, namespace: &str) -> Result<Vec<Listed>, Fault> {
+		Ok(self.0.get(namespace).cloned().unwrap_or_default())
+	}
+}
+
+/// The entry over the namespaces given, one container in each.
+fn spaced(spaces: &[(&str, Listed)]) -> Labels<Spaces> {
+	let spaces = spaces.iter().map(|(n, l)| ((*n).to_owned(), vec![l.clone()])).collect();
+	Labels { containerd: Spaces(spaces), last: Last::default(), subnet: containers() }
+}
+
+#[tokio::test]
+async fn a_binding_is_found_in_its_namespace_in_hex_or_as_before_in_decimal() {
+	// Binding 1 made before hex ids, with no list file anywhere, and 0a1b2c3d made now.
+	let found = spaced(&[
+		("b1", container("00000002", "192.0.2.5:8080", "")),
+		("b0a1b2c3d", container("00000002", "192.0.2.6:8080", "")),
+		("b9999999", container("00000002", "192.0.2.8:8080", "")),
+	]);
+	let (old, new) = ("192.0.2.5:8080".parse().unwrap(), "192.0.2.6:8080".parse().unwrap());
+	for (host, at) in [
+		("00000002.b1", old),
+		("00000002.b00000001", old),
+		("00000002.b0a1b2c3d", new),
+		("00000002.b169552957", new),
+		("00000002.b9999999", "192.0.2.8:8080".parse().unwrap()),
+	] {
+		let named = named(host).unwrap();
+		assert_eq!(found.find(named, peer("127.0.0.1")).await, Found::Running(at), "{host}");
+	}
+	assert_eq!(found.find(of(2, 2), peer("127.0.0.1")).await, Found::Absent);
+}
+
+#[tokio::test]
+async fn a_binding_of_8_decimal_digits_never_reaches_the_binding_its_digits_name_in_hex() {
+	// Binding 12345678, 00bc614e in hex, holds nothing, and binding 12345678 in hex runs in
+	// `b12345678`, which is the first's decimal name too.
+	let found = spaced(&[("b12345678", container("00000002", "192.0.2.7:8080", ""))]);
+	let ours = named("00000002.b00bc614e").unwrap();
+	assert_eq!(ours.binding, 12_345_678);
+	assert_eq!(found.find(ours, peer("127.0.0.1")).await, Found::Absent);
+	let theirs = named("00000002.b12345678").unwrap();
+	let at = "192.0.2.7:8080".parse().unwrap();
+	assert_eq!(found.find(theirs, peer("127.0.0.1")).await, Found::Running(at));
+}
+
 fn labels(held: Option<Vec<Listed>>) -> Labels<Held> {
 	Labels { containerd: Held(held), last: Last::default(), subnet: containers() }
 }
@@ -223,13 +309,30 @@ async fn a_request_refused_by_reaching_is_forbidden() {
 }
 
 #[test]
+fn a_binding_named_in_decimal_as_before_is_the_binding_named_in_hex() {
+	for (old, new) in [
+		("0a1b2c3d.b1", "0a1b2c3d.b00000001"),
+		("app-2.b7", "app-2.b00000007"),
+		("00000002.b169552957", "00000002.b0a1b2c3d"),
+	] {
+		assert_eq!(named(old), named(new), "{old}");
+		assert!(named(old).is_some(), "{old}");
+	}
+}
+
+#[test]
 fn a_host_names_its_deployment_by_its_leftmost_two_labels() {
 	assert_eq!(named("0a1b2c3d.b1.local"), Some(of(1, 0x0a1b_2c3d)));
 	assert_eq!(named("00000001.b1"), Some(of(1, 1)));
 	assert_eq!(named("1a2b3c4d.B7.example.com:8080"), Some(of(7, 0x1a2b_3c4d)));
 	assert_eq!(named("00000000.b0.x"), Some(of(0, 0)));
 	assert_eq!(named(&of(3, 0x0a1b_2c3d).name()), Some(of(3, 0x0a1b_2c3d)));
-	assert_eq!(of(3, 0x0a1b_2c3d).name(), "0a1b2c3d.b3");
+	assert_eq!(of(3, 0x0a1b_2c3d).name(), "0a1b2c3d.b00000003");
+	// A binding by its id in hex, as every binding made from now on is named.
+	assert_eq!(named("0a1b2c3d.b0a1b2c3d.local"), Some(of(0x0a1b_2c3d, 0x0a1b_2c3d)));
+	assert_eq!(named("00000001.B00000001.example.com:8080"), Some(of(1, 1)));
+	assert_eq!(named("app-1.b0a1b2c3d"), Some(decimal(0x0a1b_2c3d, 1)));
+	assert_eq!(named(&decimal(0x0a1b_2c3d, 1).name()), Some(decimal(0x0a1b_2c3d, 1)));
 	// An app named as before, by its id in decimal.
 	assert_eq!(named("app-1.b1.local"), Some(decimal(1, 1)));
 	assert_eq!(named("APP-42.B7.example.com:8080"), Some(decimal(7, 42)));
@@ -248,6 +351,10 @@ fn a_host_names_its_deployment_by_its_leftmost_two_labels() {
 		"0a1b2c3d.c1.x",
 		"www.0a1b2c3d.b1.x",
 		"0a1b2c3d.b99999999999.x",
+		"0a1b2c3d.b0A1B2C3D.x",
+		"0a1b2c3d.b0a1b2c3.x",
+		"0a1b2c3d.b0a1b2c3d0.x",
+		"0a1b2c3d.b0a1b2c3g.x",
 		"app-1",
 		"app-.b1.x",
 		"app-01.b1.x",

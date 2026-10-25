@@ -1,6 +1,6 @@
 //! Each binding's list kept in a file of its own, `<state>/lists/<binding>.json`, written whole on
 //! every change and read at start, as RFC 4elqc proposes and RFC n0o4l takes provisionally, what
-//! was made of it found again on the disk.
+//! was made of it found again on the disk under the namespace kept with it.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -12,7 +12,7 @@ use envelope::contracts::{ManagementItem, ManagementState};
 use envelope::{Encoded as _, Malformed};
 use serde_json::{Value, json};
 
-use crate::listed::found;
+use crate::listed::{decimal, found, namespace};
 use crate::{Item, Listed};
 
 /// A hash in lowercase hex.
@@ -47,13 +47,33 @@ pub(crate) fn written(listed: &Listed) -> Value {
 		})
 		.collect();
 	let forgotten: Vec<String> = listed.forgotten.iter().map(hex).collect();
-	json!({
+	let mut written = json!({
 		"generation": listed.generation,
 		"policy": listed.policy,
 		"grace": listed.grace,
 		"items": items,
 		"forgotten": forgotten,
-	})
+	});
+	// Written whatever was made, so a list kept now is never taken for one kept before hex ids.
+	let named =
+		listed.made.as_ref().map_or_else(|| namespace(listed.binding), |m| m.namespace.clone());
+	if let Some(fields) = written.as_object_mut() {
+		fields.insert("namespace".to_owned(), named.into());
+	}
+	written
+}
+
+/// The namespace a list's containers are in, the one kept with it, one of its binding's two.
+fn namespaced(binding: Binding, json: &Value) -> Result<String, String> {
+	let Some(kept) = json.get("namespace") else {
+		// A scaffold for bindings made before hex ids, retired once none of them is on the machine.
+		return Ok(decimal(binding));
+	};
+	let kept = kept.as_str().ok_or("a namespace is a text")?;
+	match [namespace(binding), decimal(binding)].into_iter().find(|n| n == kept) {
+		Some(namespace) => Ok(namespace),
+		None => Err(format!("the namespace {kept} is not binding {binding}'s")),
+	}
 }
 
 fn number(json: &Value, name: &str) -> Result<u64, String> {
@@ -81,7 +101,7 @@ fn read_one(binding: Binding, json: &Value, mount: &Path) -> Result<Listed, Stri
 		let hash = text.as_str().and_then(unhex).ok_or("a hash forgotten is 64 hex digits")?;
 		listed.forgotten.insert(hash);
 	}
-	found(&mut listed, mount);
+	found(&mut listed, mount, namespaced(binding, json)?);
 	Ok(listed)
 }
 
@@ -184,9 +204,75 @@ mod tests {
 		assert_eq!(back.items, listed.items);
 		assert_eq!(back.items[&2].unasked, Some(2000));
 		let made = back.made.as_ref().unwrap();
-		assert_eq!((made.namespace.as_str(), made.qgroup.as_str()), ("b7", "1/7"));
+		assert_eq!((made.namespace.as_str(), made.qgroup.as_str()), ("b00000007", "1/7"));
 		assert_eq!(back.made, listed.made);
 		assert_eq!(made.capacities.keys().copied().collect::<Vec<_>>(), vec![1, 2]);
+	}
+
+	/// A list written as a driver wrote it before hex ids, with no namespace kept beside it.
+	fn written_before(directory: &Directory, listed: &Listed) {
+		let mut json = written(listed);
+		json.as_object_mut().unwrap().remove("namespace").unwrap();
+		std::fs::create_dir_all(&directory.0).unwrap();
+		let file = directory.0.join(format!("{}.json", listed.binding));
+		std::fs::write(file, serde_json::to_vec(&json).unwrap()).unwrap();
+	}
+
+	#[test]
+	fn a_list_kept_before_hex_ids_keeps_its_decimal_namespace_beside_a_new_one_in_hex() {
+		let directory = Directory::new("decimal");
+		let mount = Mount::new("kept-decimal");
+		let mut old = Listed::new(1);
+		applied(&mut old, &mount, 1, vec![container(1, 500)], 0);
+		written_before(&directory, &old);
+		let mut new = Listed::new(0x0a1b_2c3d);
+		applied(&mut new, &mount, 1, vec![container(1, 250)], 0);
+		write(&directory.0, &new).unwrap();
+		let names = |lists: &std::collections::BTreeMap<u32, Listed>| -> Vec<(String, String)> {
+			let made = lists.values().map(|l| l.made.clone().unwrap());
+			made.map(|m| (m.namespace, m.qgroup)).collect()
+		};
+		let (lists, unread) = read(&directory.0, &mount.path);
+		assert_eq!(unread, Vec::<String>::new());
+		let both =
+			vec![("b1".to_owned(), "1/1".to_owned()), ("b0a1b2c3d".to_owned(), "1/169552957".to_owned())];
+		assert_eq!(names(&lists), both);
+		// Kept again by a later list, it keeps its decimal name through every start after.
+		let mut old = lists[&1].clone();
+		applied(&mut old, &mount, 2, vec![container(1, 500), container(2, 100)], 0);
+		write(&directory.0, &old).unwrap();
+		let (lists, _) = read(&directory.0, &mount.path);
+		assert_eq!(names(&lists), both);
+		assert_eq!(lists[&1].made.as_ref().unwrap().capacities.len(), 2);
+	}
+
+	#[test]
+	fn a_list_kept_now_names_its_hex_namespace_even_holding_no_container() {
+		let directory = Directory::new("named");
+		let mount = Mount::new("kept-named");
+		let listed = Listed::new(12_345_678);
+		assert_eq!(written(&listed)["namespace"], "b00bc614e");
+		// A container item made later still takes the hex name, never the decimal one.
+		write(&directory.0, &listed).unwrap();
+		let (lists, _) = read(&directory.0, &mount.path);
+		let mut back = lists[&12_345_678].clone();
+		applied(&mut back, &mount, 1, vec![container(1, 100)], 0);
+		assert_eq!(back.made.unwrap().namespace, "b00bc614e");
+	}
+
+	#[test]
+	fn a_namespace_kept_that_is_not_its_bindings_is_told() {
+		let directory = Directory::new("foreign");
+		let mount = Mount::new("kept-foreign");
+		let mut listed = Listed::new(2);
+		applied(&mut listed, &mount, 1, vec![container(1, 100)], 0);
+		let mut json = written(&listed);
+		json["namespace"] = "b1".into();
+		std::fs::create_dir_all(&directory.0).unwrap();
+		std::fs::write(directory.0.join("2.json"), serde_json::to_vec(&json).unwrap()).unwrap();
+		let (lists, unread) = read(&directory.0, &mount.path);
+		assert!(lists.is_empty());
+		assert!(matches!(&unread[..], [why] if why.contains("not binding 2's")), "{unread:?}");
 	}
 
 	#[test]

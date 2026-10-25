@@ -50,16 +50,23 @@ impl Listed {
 	}
 }
 
-/// A binding's containerd namespace, `b<binding>`, as RFC 4elqc proposes, which the entry reads.
+/// A binding's containerd namespace, `b<binding>` in 8 hex digits as RFC b8f35 writes an id,
+/// which the entry reads.
 pub(crate) fn namespace(binding: Binding) -> String {
+	format!("b{binding:08x}")
+}
+
+/// A binding's namespace as a driver named it before, `b<binding>` in decimal, kept with its list.
+/// A scaffold for bindings made before hex ids, retired once none of them is on the machine.
+pub(crate) fn decimal(binding: Binding) -> String {
 	format!("b{binding}")
 }
 
 /// What the machine makes of a binding, its namespace and its qgroup `1/<binding>`, as RFC 4elqc
 /// proposes.
-fn named(binding: Binding) -> driver_machine_container::Binding {
+fn named(binding: Binding, namespace: String) -> driver_machine_container::Binding {
 	driver_machine_container::Binding {
-		namespace: namespace(binding),
+		namespace,
 		qgroup: driver_machine_volume::qgroup(binding),
 		capacities: BTreeMap::new(),
 	}
@@ -76,11 +83,11 @@ fn failed(reason: &str, message: impl Into<String>) -> ManagementState {
 }
 
 /// What the machine made of a list kept, found again from the disk at start, each `container` item
-/// a container of capacity and the `object` item's bucket opened; an item made that is not found is
-/// failed, so the next list makes it again.
-pub(crate) fn found(listed: &mut Listed, mount: &Path) {
+/// a container of capacity in the namespace its list was kept with and the `object` item's bucket
+/// opened; an item made that is not found is failed, so the next list makes it again.
+pub(crate) fn found(listed: &mut Listed, mount: &Path, namespace: String) {
 	let binding = listed.binding;
-	let mut made = named(binding);
+	let mut made = named(binding, namespace);
 	for (id, item) in &mut listed.items {
 		if !matches!(item.state, ManagementState::Made { .. }) {
 			continue;
@@ -219,7 +226,7 @@ impl Listed {
 		match &item.capacity {
 			// The container kind applies the share as it creates each container.
 			ManagementCapacity::Container { millicores, memory } => {
-				let made = self.made.get_or_insert_with(|| named(binding));
+				let made = self.made.get_or_insert_with(|| named(binding, namespace(binding)));
 				made.capacities.insert(item.id, Capacity { millicores: *millicores, memory: memory.get() });
 				ManagementState::Made { address: machine.address.clone() }
 			}
@@ -609,10 +616,23 @@ pub(crate) mod tests {
 		listed.describe(&mount, 11_000).unwrap();
 		assert_eq!(
 			asked(&mount),
-			["unvolume volumes 1", "unvolume buckets 2", "emptied b7 3", "released 7"]
+			["unvolume volumes 1", "unvolume buckets 2", "emptied b00000007 3", "released 7"]
 		);
 		assert!(listed.items.is_empty() && listed.bucket.is_none() && listed.made.is_none());
 		assert!(!bucket.exists());
+	}
+
+	#[test]
+	fn a_binding_made_now_names_its_namespace_in_hex_and_its_qgroup_by_its_number() {
+		let mount = Mount::new("hex");
+		let mut listed = Listed::new(0x0a1b_2c3d);
+		apply(&mut listed, &mount, 1, vec![container(1, 100)], 0).unwrap();
+		let made = listed.made.as_ref().unwrap();
+		assert_eq!((made.namespace.as_str(), made.qgroup.as_str()), ("b0a1b2c3d", "1/169552957"));
+		let mut one = Listed::new(1);
+		apply(&mut one, &mount, 1, vec![container(1, 100)], 0).unwrap();
+		let made = one.made.as_ref().unwrap();
+		assert_eq!((made.namespace.as_str(), made.qgroup.as_str()), ("b00000001", "1/1"));
 	}
 
 	#[test]
@@ -633,7 +653,7 @@ pub(crate) mod tests {
 		let mut listed = Listed::new(7);
 		apply(&mut listed, &mount, 1, vec![container(1, 100)], 0).unwrap();
 		apply(&mut listed, &mount, 2, vec![volume(1, 64)], 0).unwrap();
-		assert_eq!(asked(&mount), ["emptied b7 1", "volume volumes 1 64"]);
+		assert_eq!(asked(&mount), ["emptied b00000007 1", "volume volumes 1 64"]);
 		assert!(listed.made.is_none());
 	}
 
@@ -649,7 +669,7 @@ pub(crate) mod tests {
 		again.items = listed.items.clone();
 		drop(listed);
 		std::fs::remove_dir_all(place(&mount.path, VOLUMES, Volume { binding: 7, item: 2 })).unwrap();
-		super::found(&mut again, &mount.path);
+		super::found(&mut again, &mount.path, super::namespace(7));
 		let (_, bucket) = again.bucket.clone().unwrap();
 		let read = bucket.read(&ObjectRead { name: "a".into(), range: None }).unwrap();
 		assert_eq!(read.content, b"kept");

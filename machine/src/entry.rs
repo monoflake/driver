@@ -148,11 +148,11 @@ pub(crate) struct Named {
 }
 
 impl Named {
-	/// Its name, as a host gives it.
+	/// Its name, as a host gives it, its binding in 8 hex digits however the host wrote it.
 	fn name(self) -> String {
 		match self.written {
-			Written::Hex => format!("{:08x}.b{}", self.id, self.binding),
-			Written::App => format!("app-{}.b{}", self.id, self.binding),
+			Written::Hex => format!("{:08x}.b{:08x}", self.id, self.binding),
+			Written::App => format!("app-{}.b{:08x}", self.id, self.binding),
 		}
 	}
 }
@@ -172,8 +172,8 @@ fn hex(text: &str) -> Option<u32> {
 	written.then(|| u32::from_str_radix(text, 16).ok()).flatten()
 }
 
-/// The deployment a host names by its leftmost two labels, `<id in 8 hex digits>.b<binding>`,
-/// the rest passed over, none where those two are not so.
+/// The deployment a host names by its leftmost two labels, `<id in 8 hex digits>.b<binding in 8 hex
+/// digits>`, the rest passed over, none where those two are not so.
 pub(crate) fn named(host: &str) -> Option<Named> {
 	// A name is its deployment's address with no table, provisional for RFC n0o4l.
 	let host = host.split(':').next().unwrap_or_default();
@@ -193,7 +193,9 @@ pub(crate) fn named(host: &str) -> Option<Named> {
 	if !letter.eq_ignore_ascii_case("b") {
 		return None;
 	}
-	Some(Named { binding: number(binding)?, written, id })
+	// A scaffold for bindings made before hex ids, retired once none of them is on the machine.
+	let binding = hex(binding).or_else(|| number(binding))?;
+	Some(Named { binding, written, id })
 }
 
 /// The labels the container kind writes on each container, read here as it writes them.
@@ -315,12 +317,33 @@ struct Labels<C> {
 	subnet: Subnet,
 }
 
+/// The first binding past 7 decimal digits, whose decimal name could be another binding's in hex.
+/// Below 8 digits no decimal name is a hex one, kept until no binding made before hex ids remains.
+const DECIMAL: Binding = 10_000_000;
+
+impl<C: Containerd> Labels<C> {
+	/// The containers of a binding and their namespace, the one named in hex, or where that holds
+	/// none and the binding is below [`DECIMAL`], the one named in decimal.
+	async fn held(&self, binding: Binding) -> (String, Result<Vec<Listed>, Fault>) {
+		let namespace = crate::listed::namespace(binding);
+		match self.containerd.list(&namespace).await {
+			// A scaffold for bindings made before hex ids, retired once none of them is on the machine.
+			Ok(listed) if listed.is_empty() && binding < DECIMAL => {
+				let decimal = crate::listed::decimal(binding);
+				let listed = self.containerd.list(&decimal).await;
+				(decimal, listed)
+			}
+			listed => (namespace, listed),
+		}
+	}
+}
+
 impl<C: Containerd + 'static> Find for Labels<C> {
 	/// Read at each request, as the container kind reads them at a start; while containerd cannot
 	/// be reached, the address last found, never once containerd has said it is gone.
 	async fn find(&self, named: Named, peer: IpAddr) -> Found {
-		let namespace = crate::listed::namespace(named.binding);
-		match self.containerd.list(&namespace).await {
+		let (namespace, listed) = self.held(named.binding).await;
+		match listed {
 			Ok(listed) => {
 				let kind = kind(&listed, named.id);
 				// The decimal name is an app's alone, retired with platform RFC 8yl4b.

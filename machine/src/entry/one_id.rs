@@ -145,9 +145,11 @@ async fn a_components_id_is_one_spelling_in_its_container_its_route_and_its_key(
 		secrets: state.join("tmpfs"),
 		largest: 1 << 20,
 	};
+	// A binding whose decimal and hex differ, as an id drawn from now on.
+	let bound = 0x0a1b_2c3d;
 	let binding = Binding {
-		namespace: crate::listed::namespace(1),
-		qgroup: "1/1".into(),
+		namespace: crate::listed::namespace(bound),
+		qgroup: driver_machine_volume::qgroup(bound),
 		capacities: BTreeMap::from([(1, Capacity { millicores: 100, memory: 1 << 26 })]),
 	};
 	// An id whose decimal and hex differ.
@@ -165,12 +167,14 @@ async fn a_components_id_is_one_spelling_in_its_container_its_route_and_its_key(
 		.find(|(n, _)| *n == "MONOFLAKE_REACHING");
 	let origins: serde_json::Value = serde_json::from_str(reaching.unwrap().1).unwrap();
 	let (key, origin) = origins.as_object().unwrap().iter().next().unwrap();
-	let route = Named { binding: 1, written: Written::Hex, id }.name();
+	let route = Named { binding: bound, written: Written::Hex, id }.name();
 	// The origin's host is the route the entry takes back to the same component.
 	let host = origin.as_str().unwrap().trim_start_matches("http://");
-	assert_eq!(named(host), Some(Named { binding: 1, written: Written::Hex, id }));
+	assert_eq!(named(host), Some(Named { binding: bound, written: Written::Hex, id }));
 	// At the port the attachment answered.
 	assert_eq!(host.rsplit_once(':').map(|(_, port)| port), Some("4321"));
+	// The name handed is the name the entry gives the route, its binding in hex too.
+	assert_eq!(host, format!("{route}:4321"));
 	let of_container = container.split('-').next().unwrap();
 	let of_route = route.split('.').next().unwrap();
 	assert_eq!((of_container, of_route), (key.as_str(), key.as_str()));
