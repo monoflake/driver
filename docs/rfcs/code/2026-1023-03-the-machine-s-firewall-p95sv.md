@@ -123,3 +123,7 @@ Choices made provisionally while the thread runs, read by the author at its end.
   the machine's module sets `net.ipv4.ip_local_reserved_ports` to them, read from the options that
   set them, never new literals, and the local test machine reserves conform's two as well. It
   touches no rule and needs no trial; the rehearsal checks it is in place.
+- **A machine may name more ports to reserve, by `machine.reservedPorts`**, a small matter,
+  provisional, chosen by the advisor on 2026-10-24: the sysctl is one string set in one place, so an
+  option adding to the list is the only way the local test machine adds conform's two ports without
+  writing the entry's and the driver's a second time. The entry's and the driver's are always kept.
