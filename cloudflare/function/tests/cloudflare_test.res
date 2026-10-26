@@ -178,6 +178,19 @@ test("a Worker's address is its name on the account's workers.dev subdomain", as
   deepEqual(requested(sent), [("GET", `${accountPath}/workers/subdomain`)])
 })
 
+test("an account of the runtime calls its fetch as workerd allows, never as a method", async () => {
+  let asked = []
+  let restore = fetchAnswering(async (url, _) => {
+    asked->Array.push(url)
+    response(Documented.subdomainGot, {status: 200})
+  })
+  let api = Function.ofAccount(~accountId="023e105f4ecef8ad9ca31a8372d0c353", ~token="t0ken")
+  let address = await api.address("app-1")
+  restore()
+  deepEqual(address, Ok("app-1.my-subdomain.workers.dev"))
+  deepEqual(asked, [`${accountPath}/workers/subdomain`])
+})
+
 test(
   "a failure is a fault saying what Cloudflare answered, and one unreached says so",
   async () => {

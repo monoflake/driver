@@ -36,7 +36,9 @@ type api = Script.api = {
   address: string => promise<result<string, refused>>,
 }
 
-let ofAccount = (~accountId, ~token) => Cloudflare.api(~send=Web.fetch, ~accountId, ~token)
+// The runtime's `fetch` is called directly, since workerd refuses one called as a record's method.
+let ofAccount = (~accountId, ~token) =>
+  Cloudflare.api(~send=(url, init) => Web.fetch(url, init), ~accountId, ~token)
 
 type kept = {
   version: string,

@@ -60,3 +60,19 @@ type url
 /** A file's JSON by its path from the repository's root, four directories above this file. */
 let fromRoot = path =>
   JSON.parseOrThrow(readText(pathOf(urlIn(`../../../../${path}`, importMetaUrl))))
+
+/**
+ * The global `fetch` answered by `answer` until the second is called, throwing as workerd does
+ * when it is called with a `this` other than the global object.
+ */
+let fetchAnswering: (
+  (string, Web.init) => promise<Web.response>
+) => unit => unit = %raw(`answer => {
+  const kept = globalThis.fetch
+  globalThis.fetch = function (url, init) {
+    if (this !== undefined && this !== globalThis)
+      throw new TypeError("Illegal invocation: function called with incorrect this reference")
+    return answer(url, init)
+  }
+  return () => { globalThis.fetch = kept }
+}`)
