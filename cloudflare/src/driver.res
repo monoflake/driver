@@ -5,6 +5,7 @@
 module Contracts = Envelope.Contracts
 module Management = DriverCloudflareManagement.Management
 module Function = DriverCloudflareFunction.Function
+module Thrown = DriverCloudflareFunction.Thrown
 
 type database = Stores.database
 
@@ -508,7 +509,7 @@ let rec fetchedFrom = async (address, ~left) =>
           }
         }
       }
-    | exception JsExn(_) => unfetchable("the artifact's address was not reached")
+    | exception JsExn(e) => unfetchable(Thrown.told("the artifact's address was not reached", e))
     }
   | _ => unfetchable("an artifact's address is https:")
   | exception JsExn(_) => unfetchable("an artifact's address is no URL")

@@ -609,3 +609,42 @@ test("a statement's first keyword is read past space and comments", async () => 
     [true, true, true, false, false],
   )
 })
+
+/** Every request the Worker sends out throwing `thrown`, as a fetch that reached nothing. */
+let throwing = thrown => answering([], async (_, _) => JsExn.throw(thrown))
+
+test("a get or a restore never answered names the throw, its secrets replaced", async () => {
+  let (accountId, databaseId, token) = (Served.accountId, Served.databaseId, Served.apiToken)
+  let said = `Illegal invocation at https://api.cloudflare.com for ${accountId}, Bearer ${token}`
+  throwing(JsError.TypeError.make(said))
+  let detail = "TypeError: Illegal invocation at <address> for <account>, Bearer <token>"
+  let unreached = Error(`Cloudflare's API was not reached, ${detail}`)
+  deepEqual(await Restored.nameOf(~accountId, ~databaseId, ~token), unreached)
+  deepEqual(await Restored.restore(~accountId, ~databaseId, ~token, ~to=0.), unreached)
+})
+
+test("a throw never answered is cut to 200, and one that is no Error is not told", async () => {
+  let (accountId, databaseId, token) = (Served.accountId, Served.databaseId, Served.apiToken)
+  throwing(JsError.TypeError.make(String.repeat("a", 300)))
+  deepEqual(
+    await Restored.nameOf(~accountId, ~databaseId, ~token),
+    Error(`Cloudflare's API was not reached, TypeError: ${String.repeat("a", 189)}`),
+  )
+  throwing({"name": "TypeError", "message": "Illegal invocation"})
+  deepEqual(
+    await Restored.restore(~accountId, ~databaseId, ~token, ~to=0.),
+    Error("Cloudflare's API was not reached"),
+  )
+})
+
+test("a token echoed trimmed is replaced, and an address of any case or no slashes", async () => {
+  let (accountId, databaseId) = (Served.accountId, Served.databaseId)
+  let token = `${Served.apiToken}\n`
+  let said = `Bearer ${Served.apiToken} is invalid at HTTPS://API.CLOUDFLARE.COM and https:x`
+  throwing(JsError.TypeError.make(said))
+  let detail = "TypeError: Bearer <token> is invalid at <address> and <address>"
+  deepEqual(
+    await Restored.nameOf(~accountId, ~databaseId, ~token),
+    Error(`Cloudflare's API was not reached, ${detail}`),
+  )
+})

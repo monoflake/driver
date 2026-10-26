@@ -62,7 +62,8 @@ let nameOf = async (~accountId, ~databaseId, ~token) => {
       }
     | (false, _, failed) => failed("D1's get")
     }
-  | exception JsExn(_) => Error("Cloudflare's API was not reached")
+  | exception JsExn(e) =>
+    Error(Thrown.told("Cloudflare's API was not reached", e, ~account=accountId, ~token))
   }
 }
 
@@ -84,6 +85,7 @@ let restore = async (~accountId, ~databaseId, ~token, ~to) => {
     | (true, _, _) => Ok()
     | (false, _, failed) => failed("Time Travel's restore")
     }
-  | exception JsExn(_) => Error("Cloudflare's API was not reached")
+  | exception JsExn(e) =>
+    Error(Thrown.told("Cloudflare's API was not reached", e, ~account=accountId, ~token))
   }
 }

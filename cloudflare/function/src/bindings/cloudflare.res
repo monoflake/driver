@@ -65,7 +65,9 @@ let call = async (account, ~method, path, ~form=?, ~json=?) => {
   let url = `${origin}/accounts/${Web.encodeURIComponent(account.accountId)}${path}`
   switch await account.send(url, {method, headers, ?body}) {
   | response => outcomeOf(response->Web.status, await response->Web.text)
-  | exception JsExn(_) => Failed("Cloudflare's API was not reached")
+  | exception JsExn(e) =>
+    let {accountId, token} = account
+    Failed(Thrown.told("Cloudflare's API was not reached", e, ~account=accountId, ~token))
   }
 }
 

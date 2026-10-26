@@ -390,6 +390,49 @@ test(
 )
 
 test(
+  "an existence read Cloudflare's API never answered names the throw, secrets replaced",
+  async () => {
+    let env = envOf()
+    let id = "023e105f4ecef8ad9ca31a8372d0c353"
+    let said = `Illegal invocation at https://api.cloudflare.com for ${id} with Bearer t0ken`
+    let restore = replaced(async (url, init) =>
+      url->String.endsWith("/workers/scripts/00000001") && init.method == "GET"
+        ? JsError.TypeError.make(said)->JsError.throw
+        : answerText(Documented.notFound, {status: 404})
+    )
+    let answered = await deploying(env, "deploy", await deployInput(app(1)))
+    restore()
+    let detail = "TypeError: Illegal invocation at <address> for <account> with Bearer <token>"
+    deepEqual(
+      (reasonOf(answered), messageOf(answered)),
+      (
+        (500, Some(JSON.String("fault"))),
+        Some(JSON.String(`Cloudflare's API was not reached, ${detail}`)),
+      ),
+    )
+  },
+)
+
+test("an artifact's address never reached names the throw, its address replaced", async () => {
+  let (answered, _) = await deployedFrom("https://artifacts.example/hello", ~served=url =>
+    url->String.startsWith("https://artifacts.example")
+      ? JsError.TypeError.make("fetch failed for https://artifacts.example/hello")->JsError.throw
+      : None
+  )
+  deepEqual(
+    (reasonOf(answered), messageOf(answered)),
+    (
+      (503, Some(JSON.String("unfetchable"))),
+      Some(
+        JSON.String(
+          "the artifact's address was not reached, TypeError: fetch failed for <address>",
+        ),
+      ),
+    ),
+  )
+})
+
+test(
   "a delete whose forget fails is healed by the next, the Worker gone and the claim with it",
   async () => {
     let sqlite = installed()

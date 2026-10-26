@@ -211,3 +211,45 @@ test(
     )
   },
 )
+
+/** An account whose every request throws `thrown`, as a fetch that never reached Cloudflare. */
+let throwing = (~token="t0ken", thrown) =>
+  Cloudflare.api(
+    ~send=async (_, _) => JsExn.throw(thrown),
+    ~accountId="023e105f4ecef8ad9ca31a8372d0c353",
+    ~token,
+  )
+
+test("one unreached names the throw, its addresses, account id and token replaced", async () => {
+  let id = "023e105f4ecef8ad9ca31a8372d0c353"
+  let said = `Illegal invocation at ${accountPath}/workers/subdomain for ${id} with Bearer t0ken`
+  let api = throwing(JsError.TypeError.make(said))
+  let detail = "TypeError: Illegal invocation at <address> for <account> with Bearer <token>"
+  deepEqual(
+    await api.address("app-1"),
+    Error({reason: "fault", message: `Cloudflare's API was not reached, ${detail}`}),
+  )
+})
+
+test("an unreached throw is cut to 200, and one that is no Error is not told", async () => {
+  let long = throwing(JsError.TypeError.make(String.repeat("a", 300)))
+  let message = `Cloudflare's API was not reached, TypeError: ${String.repeat("a", 189)}`
+  deepEqual(await long.address("app-1"), Error({reason: "fault", message}))
+  let plain = throwing({"name": "TypeError", "message": "Illegal invocation"})
+  deepEqual(
+    await plain.address("app-1"),
+    Error({reason: "fault", message: "Cloudflare's API was not reached"}),
+  )
+})
+
+test("a token echoed trimmed is replaced, and an address of any case or no slashes", async () => {
+  let said = "Headers.append: \"Bearer t0ken\" is an invalid header value"
+  let trimmed = throwing(~token="t0ken\n", JsError.TypeError.make(said))
+  let detail = "TypeError: Headers.append: \"Bearer <token>\" is an invalid header value"
+  let message = `Cloudflare's API was not reached, ${detail}`
+  deepEqual(await trimmed.address("app-1"), Error({reason: "fault", message}))
+  let said = "failed at HTTPS://API.CLOUDFLARE.COM and https:x/y"
+  let upper = throwing(JsError.TypeError.make(said))
+  let message = "Cloudflare's API was not reached, TypeError: failed at <address> and <address>"
+  deepEqual(await upper.address("app-1"), Error({reason: "fault", message}))
+})

@@ -4,6 +4,7 @@
  * https://developers.cloudflare.com/api/resources/workers/subresources/scripts/methods/get/
  */
 module Function = DriverCloudflareFunction.Function
+module Thrown = DriverCloudflareFunction.Thrown
 
 let origin = "https://api.cloudflare.com/client/v4"
 
@@ -51,6 +52,7 @@ let exists = async (~accountId, ~token, name) => {
     | _ => fault(`${unknown}, Cloudflare's API answered ${status}`)
     | exception JsExn(_) => fault(`${unknown}, its answer of ${status} was not read`)
     }
-  | exception JsExn(_) => fault("Cloudflare's API was not reached")
+  | exception JsExn(e) =>
+    fault(Thrown.told("Cloudflare's API was not reached", e, ~account=accountId, ~token))
   }
 }
