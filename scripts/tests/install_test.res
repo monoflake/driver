@@ -439,46 +439,80 @@ test("a configuration that cannot be read or written is answered, and nothing is
   ok(faked.scratched->Array.every(path => !Host.existsSync(path)))
 })
 
-test("the databases and the bucket are placed by DRIVER_LOCATION, or by Cloudflare", () => {
+test("each database and the bucket are made in the place DRIVER_LOCATION names", () => {
   let creates = faked =>
     plain(faked)->Array.filter(l =>
       l->String.includes(" create ") && l->String.startsWith("wrangler")
     )
-  let placed = [...credentials, ("DRIVER_LOCATION", "weur")]
-  let (faked, result) = installed(~env=placed, empty(), fixture())
-  deepEqual(result, Ok())
-  deepEqual(
-    creates(faked),
-    [
-      "wrangler d1 create 0a1b2c3d --location weur",
-      "wrangler d1 create 5f6a7b8c --location weur",
-      "wrangler r2 bucket create 3d4e5f6a --location weur",
-    ],
-  )
-  let (faked, result) = installed(empty(), fixture())
-  deepEqual(result, Ok())
-  deepEqual(
-    creates(faked),
-    [
-      "wrangler d1 create 0a1b2c3d",
-      "wrangler d1 create 5f6a7b8c",
-      "wrangler r2 bucket create 3d4e5f6a",
-    ],
-  )
-  let dry = env => {
+  ["wnam", "apac"]->Array.forEach(place => {
+    let env = [...credentials, ("DRIVER_LOCATION", place)]
+    let (faked, result) = installed(~env, empty(), fixture())
+    deepEqual(result, Ok())
+    deepEqual(
+      creates(faked),
+      [
+        `wrangler d1 create 0a1b2c3d --location ${place}`,
+        `wrangler d1 create 5f6a7b8c --location ${place}`,
+        `wrangler r2 bucket create 3d4e5f6a --location ${place}`,
+      ],
+    )
+    ok(
+      faked.said->Array.includes(
+        `each database and bucket made is placed in ${place}, DRIVER_LOCATION`,
+      ),
+    )
+    let (faked, result) = dryOn(~env, empty(), fixture())
+    deepEqual(result, Ok())
+    let includes = text => faked.said->Array.some(l => l->String.includes(text))
+    ok(includes(`wrangler d1 create <state's name> --location ${place}`))
+    ok(includes(`wrangler d1 create <user_database's name> --location ${place}`))
+    ok(includes(`wrangler r2 bucket create <bucket's name> --location ${place}`))
+  })
+})
+
+test("DRIVER_LOCATION unset, empty or unknown is refused before anything runs", () => {
+  let places = "where each database and bucket made is placed, wnam or apac alone"
+  let unset = `DRIVER_LOCATION unset in the environment, which names ${places}`
+  let given = credentials->Array.filter(((name, _)) => name != "DRIVER_LOCATION")
+  [
+    (given, unset),
+    ([...given, ("DRIVER_LOCATION", "")], unset),
+    ([...given, ("DRIVER_LOCATION", "enam")], `DRIVER_LOCATION is "enam", which names ${places}`),
+  ]->Array.forEach(((env, why)) => {
     let faked = make(~env, ~answer=command => Error(`ran ${line(command)}`))
-    deepEqual(Install.install(faked.world, ~dry=true, ~root=fixture()), Ok())
-    faked.said
-  }
-  let said = dry(placed)
-  ok(said->Array.includes("the databases and the bucket placed by the hint weur, DRIVER_LOCATION"))
-  let includes = text => said->Array.some(l => l->String.includes(text))
-  ok(includes("wrangler d1 create <state's name> --location weur"))
-  ok(includes("wrangler d1 create <user_database's name> --location weur"))
-  ok(includes("wrangler r2 bucket create <bucket's name> --location weur"))
-  let said = dry(credentials)
-  ok(said->Array.includes("no DRIVER_LOCATION, so Cloudflare places the databases and the bucket"))
-  ok(said->Array.every(l => !(l->String.includes("--location"))), ~message=said->Array.join("\n"))
+    deepEqual(
+      Install.install(faked.world, ~dry=false, ~root=fixture()),
+      Error(`${why}; one there already is never moved`),
+    )
+    deepEqual(faked.ran, [])
+    // A dry run says it, and names the place by the variable in each create.
+    let (faked, result) = dryOn(~env, empty(), fixture())
+    deepEqual(result, Ok())
+    ok(
+      faked.said->Array.includes(`${why}, so a run not dry refuses`),
+      ~message=faked.said->Array.join("\n"),
+    )
+    let includes = text => faked.said->Array.some(l => l->String.includes(text))
+    ok(includes("wrangler d1 create <state's name> --location <DRIVER_LOCATION>"))
+    ok(includes("wrangler r2 bucket create <bucket's name> --location <DRIVER_LOCATION>"))
+    ok(!includes("--location enam"))
+  })
+})
+
+test("an install whose parts are all there still refuses an unplaced run", () => {
+  let account = empty()
+  let root = fixture()
+  let (_, result) = installed(account, root)
+  deepEqual(result, Ok())
+  let env = credentials->Array.filter(((name, _)) => name != "DRIVER_LOCATION")
+  let (faked, result) = installed(~env, account, root)
+  deepEqual(
+    result,
+    Error(
+      "DRIVER_LOCATION unset in the environment, which names where each database and bucket made is placed, wnam or apac alone; one there already is never moved",
+    ),
+  )
+  deepEqual(faked.ran, [])
 })
 
 after(() => fixtures->Array.forEach(root => Host.rmSync(root, {recursive: true, force: true})))

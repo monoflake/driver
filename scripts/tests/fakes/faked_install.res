@@ -33,7 +33,7 @@ let hashed = "e528e95798037df410543d9f31e396ecdd458d71b157d6014398bae32fb56c65"
 let accountId = "023e105f4ecef8ad9ca31a8372d0c353"
 let anotherAccount = "699d98642c564d2e855e9661899b7252"
 
-/** Install's own inputs, every kind offered. */
+/** Install's own inputs, every kind offered, its parts placed in Western North America. */
 let credentials = [
   ("DRIVER_ACCOUNT_ID", accountId),
   ("DRIVER_INSTALL_TOKEN", "the-install-token"),
@@ -41,6 +41,7 @@ let credentials = [
   ("DATABASE_API_TOKEN", "the-database-token"),
   ("DRIVER_KINDS", "function,object,database"),
   ("DRIVER_CONTROL_BASE", base),
+  ("DRIVER_LOCATION", "wnam"),
 ]
 
 /** What the environment holds besides, which install never reads. */
@@ -158,16 +159,16 @@ let first = [
   workersListed,
   "wrangler r2 bucket list",
   "wrangler d1 list --json",
-  "wrangler d1 create 0a1b2c3d",
+  "wrangler d1 create 0a1b2c3d --location wnam",
   markerWritten("0a1b2c3d"),
   "wrangler d1 list --json",
   "wrangler d1 migrations apply 0a1b2c3d --remote --config <driver>",
   recordsWritten("0a1b2c3d", drawnRecords),
   "wrangler d1 list --json",
-  "wrangler d1 create 5f6a7b8c",
+  "wrangler d1 create 5f6a7b8c --location wnam",
   "wrangler d1 list --json",
   "wrangler r2 bucket list",
-  "wrangler r2 bucket create 3d4e5f6a",
+  "wrangler r2 bucket create 3d4e5f6a --location wnam",
   "rescript build in <driver>",
   "wrangler deploy --dry-run --outdir <out> --config <driver>",
   "wrangler versions list --json --config <driver>",

@@ -87,11 +87,12 @@ let kindsOf = env =>
   }
 
 /**
- * What install reads before anything runs, the kinds offered and every input it needs, one unset
- * refused, or said where the run is dry, since a dry run acts on nothing.
+ * What install reads before anything runs, the kinds, every input and the place, one unset or
+ * unknown refused, or said where the run is dry, since a dry run acts on nothing.
  */
 let inputsOf = (w, ~dry) =>
-  kindsOf(w.env)->then(offered => {
+  kindsOf(w.env)
+  ->then(offered => {
     let needed = [
       account,
       installToken,
@@ -105,6 +106,24 @@ let inputsOf = (w, ~dry) =>
       Ok(offered)
     | missing =>
       Error(`${missing->Array.join(", ")} unset in the environment, which alone gives them`)
+    }
+  })
+  ->then(offered => {
+    let named = locations->Array.join(" or ")
+    let places = `where each database and bucket made is placed, ${named} alone`
+    let unplaced = switch (value(w.env, location), placeOf(w.env)) {
+    | (_, Some(_)) => None
+    | (Some(other), None) => Some(`${location} is "${other}", which names ${places}`)
+    | (None, None) => Some(`${location} unset in the environment, which names ${places}`)
+    }
+    switch unplaced {
+    | None => Ok(offered)
+    | Some(why) if dry =>
+      w.say(`${why}, so a run not dry refuses`)
+      Ok(offered)
+    // What is made is known only after the reads, and a rerun may add a kind's part,
+    // so the place is asked first.
+    | Some(why) => Error(`${why}; one there already is never moved`)
     }
   })
 
@@ -242,10 +261,9 @@ let install = (w, ~dry, ~root=root) =>
         w.say(`nothing on stdin, so ${binding} is passed over on each Worker`)
       }
       w.say(`the kinds offered are ${offered->Array.join(", ")}, ${kindsInput}`)
-      switch value(w.env, location) {
-      | Some(hint) => w.say(`the databases and the bucket placed by the hint ${hint}, ${location}`)
-      | None => w.say(`no ${location}, so Cloudflare places the databases and the bucket`)
-      }
+      placeOf(w.env)->Option.forEach(
+        hint => w.say(`each database and bucket made is placed in ${hint}, ${location}`),
+      )
       recovered(w, ~dry, ~root)->then(
         found =>
           found.state

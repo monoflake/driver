@@ -296,8 +296,7 @@ let answered = (account, command: Install_world.command) => {
       account.marks->Dict.set(name, query->String.slice(~start=-10, ~end=-2))
       Ok("")
     }
-  | ("wrangler", list{"d1", "create", name})
-  | ("wrangler", list{"d1", "create", name, "--location", _}) =>
+  | ("wrangler", list{"d1", "create", name, "--location", "wnam" | "apac"}) =>
     account.databases->Array.push(name)
     Ok("")
   | ("wrangler", list{"d1", "migrations", "apply", name, "--remote", "--config", config})
@@ -319,8 +318,7 @@ let answered = (account, command: Install_world.command) => {
       ->Array.map(name => `name:           ${name}\ncreation_date:  2026-10-23T00:00:00.000Z`)
       ->Array.join("\n\n"),
     )
-  | ("wrangler", list{"r2", "bucket", "create", name})
-  | ("wrangler", list{"r2", "bucket", "create", name, "--location", _}) =>
+  | ("wrangler", list{"r2", "bucket", "create", name, "--location", "wnam" | "apac"}) =>
     account.buckets->Array.push(name)
     Ok("")
   | ("wrangler", list{"deploy", "--dry-run", "--outdir", out, "--config", config}) =>

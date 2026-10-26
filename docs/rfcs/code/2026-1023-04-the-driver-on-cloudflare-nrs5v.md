@@ -309,10 +309,13 @@ Decided by the author on 2026-10-23, from the research the Options below record.
     and put as `BINDING` by its BLAKE3, and with `DRIVER_CONTROL_BASE` install binds once every
     Worker is deployed, monoflake/platform's RFC 8j7b0; the token and the base go both or neither,
     and with neither both steps are passed over.
-  - **Where the parts are placed is `DRIVER_LOCATION`**, a location hint given to the database and
-    the bucket, `wnam` on the test account; with none given no hint is passed and Cloudflare places
-    them, so a user binding an account of their own chooses. `install` builds each Worker's package
-    before it bundles it.
+  - **Where the parts are placed is `DRIVER_LOCATION`**, required since 2026-10-26, `wnam` or
+    `apac` alone, the `--location` of every `d1 create` and `r2 bucket create`, chosen as the author
+    asks, the workspace's `cloudflare-placed`. Unset, empty or any other value is refused before
+    anything runs, and a dry run says so, since Cloudflare places a resource given none near its
+    caller and never moves it after: a test account's databases and bucket made so read ENAM on
+    2026-10-26. A database or the bucket there already is never moved. `install` builds each
+    Worker's package before it bundles it.
 
 Out of date in this repository's neighbors, to be corrected when one is decided: a Worker's size is
 64 MiB uncompressed on every plan, where RFC vr5lw and `monoflake/platform`'s

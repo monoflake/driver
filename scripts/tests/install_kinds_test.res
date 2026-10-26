@@ -26,7 +26,7 @@ test(
         "wrangler d1 list --json",
         workersListed,
         "wrangler d1 list --json",
-        "wrangler d1 create 0a1b2c3d",
+        "wrangler d1 create 0a1b2c3d --location wnam",
         markerWritten("0a1b2c3d"),
         "wrangler d1 list --json",
         "wrangler d1 migrations apply 0a1b2c3d --remote --config <driver>",
@@ -64,7 +64,7 @@ test("a kind listed on a rerun is added, and one dropped is named and left as it
       l->String.includes(" create ") || l->String.startsWith("wrangler deploy --config")
     ),
     [
-      "wrangler r2 bucket create 3d4e5f6a",
+      "wrangler r2 bucket create 3d4e5f6a --location wnam",
       "wrangler deploy --config <driver> --tag <tag>",
       "wrangler deploy --config <object> --tag <tag>",
     ],

@@ -22,12 +22,8 @@ let compiled = (w, ~dry, ~root, ~directory, worker) => {
   }
 }
 
-/** The arguments placing a part by the hint `DRIVER_LOCATION` gives, none where it gives none. */
-let placed = w =>
-  switch value(w.env, location) {
-  | Some(hint) => ["--location", hint]
-  | None => []
-  }
+/** The arguments placing a part where `DRIVER_LOCATION` names, said by its name in a dry run. */
+let placed = w => ["--location", placeOf(w.env)->Option.getOr(`<${location}>`)]
 
 /** The buckets `r2 bucket list` prints, each on a line of its own beginning `name`. */
 let listedBuckets = body =>
@@ -41,8 +37,8 @@ let listedBuckets = body =>
   )
 
 /**
- * A database made with its hint where the account lists none by its name, and its id, marked with
- * `marker` by its first statement where one is given, so it must be made here, as one `drawn` must.
+ * A database made where `DRIVER_LOCATION` places it and the account lists none by its name, and its
+ * id, marked with `marker` first where one is given, so it must be made here, as one `drawn` must.
  */
 let databaseOf = (w, ~dry, ~root, ~marker=?, ~drawn=false, database) => {
   let list = commanded(w, ~root, ~cwd=root, ["d1", "list", "--json"])
@@ -91,7 +87,10 @@ let databaseOf = (w, ~dry, ~root, ~marker=?, ~drawn=false, database) => {
   }
 }
 
-/** The bucket made with its hint where the account lists none by its name, as one `drawn` is. */
+/**
+ * The bucket made where `DRIVER_LOCATION` places it, where the account lists none by its name, as
+ * one `drawn` is.
+ */
 let bucketOf = (w, ~dry, ~root, ~drawn=false, ~bucket) => {
   let list = commanded(w, ~root, ~cwd=root, ["r2", "bucket", "list"])
   let create = commanded(w, ~root, ~cwd=root, ["r2", "bucket", "create", bucket, ...placed(w)])

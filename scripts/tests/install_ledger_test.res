@@ -130,7 +130,7 @@ test("the marker is written right after the D1 is made, and the records before a
   deepEqual(result, Ok())
   let lines = plain(faked)
   let at = line => lines->Array.indexOf(line)
-  let created = at("wrangler d1 create 0a1b2c3d")
+  let created = at("wrangler d1 create 0a1b2c3d --location wnam")
   deepEqual(
     (at(markerWritten("0a1b2c3d")) - created, created >= 0),
     (1, true),
@@ -142,8 +142,8 @@ test("the marker is written right after the D1 is made, and the records before a
   let records = at(recordsWritten("0a1b2c3d", drawnRecords))
   deepEqual(records - migrated, 1, ~message=lines->Array.join("\n"))
   ok(
-    records < at("wrangler d1 create 5f6a7b8c") &&
-      records < at("wrangler r2 bucket create 3d4e5f6a"),
+    records < at("wrangler d1 create 5f6a7b8c --location wnam") &&
+      records < at("wrangler r2 bucket create 3d4e5f6a --location wnam"),
   )
   // A reused D1 is never marked again, and one listed though its name was drawn is refused.
   let (again, _) = installed(account, fixture())

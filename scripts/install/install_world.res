@@ -34,8 +34,12 @@ let noEnvFile = ["--env-file", "/dev/null"]
 let kinds = ["function", "object", "database"]
 let defaultKinds = ["function"]
 
-/** The hint the database and the bucket are placed by, none given letting Cloudflare place them. */
+/**
+ * Where each database and bucket install makes is placed, one of `locations` alone and never left
+ * to Cloudflare, the workspace's `cloudflare-placed`; one there already is never moved.
+ */
 let location = "DRIVER_LOCATION"
+let locations = ["wnam", "apac"]
 
 /** Where a secret's value comes from, a variable of the environment or the binding's hash. */
 type source = Environment(string) | Bound
@@ -96,6 +100,9 @@ type world = {
 let then = (result, next) => result->Result.flatMap(next)
 
 let value = (env, name) => env->Dict.get(name)->Option.filter(v => v != "")
+
+/** The place `DRIVER_LOCATION` names, where it names one of `locations`. */
+let placeOf = env => value(env, location)->Option.filter(hint => locations->Array.includes(hint))
 
 /** A command as a dry run prints it, its program's name and arguments, stdin said, never shown. */
 let shown = command => {
