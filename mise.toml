@@ -101,6 +101,11 @@ flag "-n --dry-run" help="List what would go and remove nothing"
 depends = ["//:build"]
 run = "node {{env.WORKSPACE}}/scripts/clean.res.mjs"
 
+[tasks.bump]
+description = "Raise driver-machine's source version by RFC 8c0rg and synchronize Cargo.lock"
+usage = 'flag "-n --dry-run" help="Say which version would be written and write nothing"'
+run = 'rescript build > /dev/null && node .github/release/bump.res.mjs ${usage_dry_run:+--dry-run}'
+
 [tasks.verify]
-description = "What a commit has to pass: everything formatted, the check, every block alone, the scripts' tests, and the crates' dependencies"
-run = ["mise run formatted", "mise run check", "mise run blocks", "mise run test", "cargo deny check"]
+description = "What a commit has to pass: everything formatted, the check, every block alone, the scripts' and the release's tests, the version guard refusing changed inputs without a raised version, and the crates' dependencies"
+run = ["mise run formatted", "mise run check", "mise run blocks", "mise run test && node .github/release/verify.res.mjs", "cargo deny check"]

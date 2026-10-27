@@ -1,9 +1,13 @@
-# By hand only, builds driver-machine for both machines and releases it here by the workspace's
-# scripts/release, unless both archives are the last release's, RFC 8c0rg.
+# Releases driver-machine at the version machine/Cargo.toml names, once, by the workspace's
+# scripts/release, on a push to main, by hand, and each day for a push's run that failed, RFC 8c0rg.
 name: release
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
+  schedule:
+    - cron: "31 6 * * *"
 
 # A run started while another builds waits behind it in order, up to a hundred deep, and none is
 # canceled, so two never race to release one day, as runtime's publish queues.
@@ -32,20 +36,39 @@ jobs:
           ref: 0ae9cea166b8849d61ccaccfc5c73d330d4e38b9 # monoflake/platform@main
           path: repos/monoflake/platform
           persist-credentials: false
+      # The packages are installed and the scripts compiled in a step that holds no token.
+      - name: install
+        working-directory: repos/monoflake/driver
+        run: |
+          (cd ../platform && pnpm install --frozen-lockfile)
+          pnpm install --frozen-lockfile
+          mise exec -- rescript build
+      # Nothing is built where a release's manifest.json lists machine/Cargo.toml's version already.
+      # The token is held only by a step that calls gh, and the public releases are read without it.
+      - name: source version
+        id: source
+        working-directory: repos/monoflake/driver
+        run: mise exec -- node .github/release/ready.res.mjs
       - name: build
+        if: steps.source.outputs.ready == 'true'
         working-directory: repos/monoflake/driver
         run: |
           rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
-          (cd ../platform && pnpm install --frozen-lockfile)
-          pnpm install --frozen-lockfile
           mise run archive
       - name: version
+        if: steps.source.outputs.ready == 'true'
         working-directory: repos/monoflake/driver
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: mise exec -- node .github/release/versioned.res.mjs
       - name: release
+        if: steps.source.outputs.ready == 'true'
         working-directory: repos/monoflake/driver
         env:
           GH_TOKEN: ${{ github.token }}
         run: mise run release
+      # With nothing to release, each day's notes are still rendered again from its manifest.json.
+      - name: notes
+        if: steps.source.outputs.ready != 'true'
+        working-directory: repos/monoflake/driver
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: mise exec -- node "$GITHUB_WORKSPACE/scripts/release/release.res.mjs" notes

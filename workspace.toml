@@ -27,7 +27,7 @@ test_data = [
 # notes' columns, RFC 8c0rg.
 [release]
 built = "target/archives/built.json"
-columns = ["Program", "Version", "Commit", "Download"]
+columns = ["Driver", "Version", "Commit", "Architecture"]
 
 # Where the project's own name is a variable a user's code reads beside other vendors', the
 # workspace's docs/naming.md.

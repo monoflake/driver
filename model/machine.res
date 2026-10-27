@@ -107,6 +107,6 @@ let driver: Made.driver = {
       "../platform/tests/kinds/objects/ranges.json",
       "../platform/tests/kinds/objects/writes.json",
     ],
-    released: false,
+    released: true,
   },
 }

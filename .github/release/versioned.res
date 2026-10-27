@@ -1,8 +1,8 @@
 /***
  * `node .github/release/versioned.res.mjs [--dry-run]`, after `mise run archive`, names both
- * archives in target/archives/built.json at RFC 8c0rg's version, or none if the last release's.
+ * archives in target/archives/built.json at machine/Cargo.toml's version, or none if released.
  */
-type captured = {status: Nullable.t<int>, stdout: Nullable.t<string>}
+type captured = {status: Nullable.t<int>, stdout: Nullable.t<string>, stderr: Nullable.t<string>}
 type capturing = {cwd: string, encoding: string, maxBuffer: int}
 @module("node:child_process")
 external capture: (string, array<string>, capturing) => captured = "spawnSync"
@@ -24,16 +24,20 @@ let list = (json, key) => json->field(key)->Option.flatMap(JSON.Decode.array)->O
 
 /** A version's three numbers, or none where it is not plain `MAJOR.MINOR.PATCH`. */
 let numbers = version =>
-  switch version->String.split(".")->Array.map(part => Int.fromString(part)) {
-  | [Some(major), Some(minor), Some(patch)] => Some((major, minor, patch))
-  | _ => None
+  if !RegExp.test(/^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$/, version) {
+    None
+  } else {
+    switch version->String.split(".")->Array.map(part => Int.fromString(part)) {
+    | [Some(major), Some(minor), Some(patch)] => Some((major, minor, patch))
+    | _ => None
+    }
   }
 
 let later = ((a, b, c), (x, y, z)) => a != x ? a > x : b != y ? b > y : c > z
 
-/** The version this build takes, RFC 8c0rg, the manifest's own where the major is new, the minor
- * raised where an interface it serves is, and the patch raised otherwise. */
-let next = (~manifest, ~last: option<(string, dict<int>)>, ~serves: dict<int>) =>
+/** The version `mise run bump` writes, RFC 8c0rg, the manifest's own where the major is new, the
+ * minor raised where an interface it serves is or a change is breaking, and the patch otherwise. */
+let incremented = (~manifest, ~last: option<(string, dict<int>)>, ~serves: dict<int>, ~breaking) =>
   switch (numbers(manifest), last->Option.flatMap(((version, _)) => numbers(version))) {
   | (None, _) => None
   | (Some(_), None) => Some(manifest)
@@ -44,9 +48,47 @@ let next = (~manifest, ~last: option<(string, dict<int>)>, ~serves: dict<int>) =
       serves
       ->Dict.toArray
       ->Array.some(((name, version)) => version > recorded->Dict.get(name)->Option.getOr(0))
-    let (minor, patch) = raised ? (minor + 1, 0) : (minor, patch + 1)
+    let (minor, patch) = raised || breaking ? (minor + 1, 0) : (minor, patch + 1)
     Some(`${major->Int.toString}.${minor->Int.toString}.${patch->Int.toString}`)
   }
+
+let next = (~manifest, ~last, ~serves) => incremented(~manifest, ~last, ~serves, ~breaking=false)
+
+let breaking = message =>
+  RegExp.test(/^[a-z]+(?:\([^\n)]+\))?!:/, message) ||
+  RegExp.test(/(?:^|\n)BREAKING CHANGE: /, message)
+
+/** The version `mise run bump` writes, the manifest's own where no input changed since the last
+ * release, and otherwise the higher of it and the incremented one, so a raise by hand is kept. */
+let bumped = (~manifest, ~last, ~serves, ~messages, ~changed) =>
+  switch numbers(manifest) {
+  | None => None
+  | Some(_) if !changed => Some(manifest)
+  | Some(now) =>
+    incremented(
+      ~manifest,
+      ~last,
+      ~serves,
+      ~breaking=messages->Array.some(breaking),
+    )->Option.map(next =>
+      numbers(next)->Option.mapOr(false, next => later(next, now)) ? next : manifest
+    )
+  }
+
+let checked = (~manifest, ~last, ~changed) =>
+  switch (numbers(manifest), last->Option.flatMap(numbers)) {
+  | (None, _) => Error("machine/Cargo.toml needs MAJOR.MINOR.PATCH")
+  | (Some(now), Some(was)) if changed && !later(now, was) =>
+    Error(
+      "driver-machine inputs changed without a version above the last release; run mise run bump",
+    )
+  | _ => Ok()
+  }
+
+let already = (entries, version) =>
+  entries->Array.some(entry =>
+    entry->text("name") == Some(Archive.package) && entry->text("version") == Some(version)
+  )
 
 /** The interfaces the program serves, as served.rs names them, each at the version
  * monoflake/platform's contracts give it. */
@@ -115,6 +157,12 @@ let lastOf = entries =>
 
 let environment = name => Archive.env->Dict.get(name)
 
+let warn = why => Console.error(`built: warning: ${why}`)
+
+/** A comparison or release lookup that failed, warned of and passed, so an offline or rate limited
+ * machine is not held from committing, RFC 8c0rg; `undone` says what was left undone. */
+let unread = (why, ~undone) => warn(`${why}; ${undone}`)
+
 let commit = switch environment("GITHUB_SHA") {
 | Some(sha) => sha
 | None =>
@@ -161,18 +209,6 @@ let main = () =>
       ))
     let missing = archives->Array.filter(((_, path)) => !existsSync(path))
     let last = lastOf(entries)
-    let recorded = last->Option.map(entry => (
-      entry->text("version")->Option.getOr(""),
-      entry
-      ->field("interfaces")
-      ->Option.flatMap(JSON.Decode.object)
-      ->Option.getOr(Dict.make())
-      ->Dict.toArray
-      ->Array.filterMap(((name, v)) =>
-        v->JSON.Decode.float->Option.map(v => (name, v->Float.toInt))
-      )
-      ->Dict.fromArray,
-    ))
     let serves = served()
     Console.log(
       `serves ${serves
@@ -187,27 +223,15 @@ let main = () =>
           ->Option.getOr("")}`
       ),
     )
-    let unchanged =
-      missing == [] &&
-        last->Option.mapOr(false, entry =>
-          archives->Array.every(((target, path)) =>
-            entry
-            ->list("assets")
-            ->Array.some(
-              asset =>
-                asset->text("target") == Some(target) &&
-                  asset->text("sha256") == Some(sha256(path)),
-            )
-          )
-        )
-    switch next(~manifest, ~last=recorded, ~serves) {
+    switch numbers(manifest) {
+    | _ if already(entries, manifest) =>
+      Console.log(`${manifest} is released already, so nothing is released`)
+      write(JSON.Encode.object(dict{"artifacts": JSON.Encode.array([])}))
     | _ if missing != [] && !dry =>
       refuse(`not built: ${missing->Array.map(((_, path)) => path)->Array.join(", ")}`)
-    | _ if unchanged =>
-      Console.log("both archives are the last release's, so nothing is released")
-      write(JSON.Encode.object(dict{"artifacts": JSON.Encode.array([])}))
     | None => refuse(`machine/Cargo.toml's version ${manifest} is not MAJOR.MINOR.PATCH`)
-    | Some(version) =>
+    | Some(_) =>
+      let version = manifest
       Console.log(`releases ${version}`)
       let directory = Archive.join([root, "target", "archives", "release"])
       let assets = archives->Array.map(((target, path)) => {
@@ -221,14 +245,16 @@ let main = () =>
       }
       let link = file => `https://github.com/${repository}/releases/download/{release}/${file}`
       let row = [
-        Archive.package,
+        "machine",
         version,
         `[\`${commit->String.slice(
             ~start=0,
             ~end=7,
           )}\`](https://github.com/${repository}/commit/${commit})`,
         assets
-        ->Array.map(((target, _, _, file)) => `[${target}](${link(file)})`)
+        ->Array.map(((target, _, _, file)) =>
+          `[${target->String.replace("linux-", "")}](${link(file)})`
+        )
         ->Array.join(" "),
       ]
       write(
@@ -262,4 +288,6 @@ let main = () =>
     }
   }
 
-main()
+if Archive.isMain {
+  main()
+}

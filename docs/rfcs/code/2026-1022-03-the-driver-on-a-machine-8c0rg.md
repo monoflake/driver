@@ -58,3 +58,61 @@ Decided by the author on 2026-10-22.
   to it when the driver's release is first pushed.
 - **A machine takes a released driver as it takes the runtimes' images**, locked in
   `monoflake/machine`'s manifest beside them and run there as a service.
+
+### Source versions and open releases
+
+Decided by the author on 2026-10-27, refining the accepted decision above.
+
+- Releases open at `0.1.0`, only for the Rust program `driver-machine` and only on GitHub
+  Releases. Every other crate and package stays `0.0.0`; nothing is published to the Rust or npm registries.
+- The version lives in `machine/Cargo.toml` and is raised in the commit that changes what the
+  driver is built from. `mise run bump` writes it and synchronizes `Cargo.lock`, reusing
+  `.github/release/versioned.res`. Release time takes that version unchanged. The major remains
+  the author's alone. A served interface's integer version raised since the last release, or a
+  Conventional Commit affecting the program's inputs marked with `!` or a `BREAKING CHANGE:`
+  footer, raises the minor and resets the patch. Otherwise the patch rises.
+- A release runs on a push to main, by manual dispatch, and daily as a fallback for a failed push
+  run. Before building, each run reads the source version and every published release's manifest.
+  A version any manifest lists is neither rebuilt nor released again. A source change without a
+  raised version releases nothing.
+- Runtime's UTC date naming applies, RFC m7rkq. The tag and name are the dotted date alone, and
+  the body is a table with Driver, Version, Commit and Architecture columns. The Driver cell is
+  `machine`, and each architecture's short name links to its full archive name, separated by one
+  plain space. Another version on the same day appends a row, assets and a manifest entry through
+  the workspace's existing `scripts/release`.
+- A machine locks the driver beside the runtimes' images and takes the released package by
+  default, through the same intake: one GitHub Releases URL and one SHA-256 per architecture,
+  fetched by whichever builder builds the system, by its fixed output, like any other source. The
+  package travels by the cache's own rules, monoflake/machine's RFC mgzfp, so a release needs no
+  bucket of its own. Its test override remains available.
+
+### Provisional choices
+
+Chosen on 2026-10-27, provisional.
+
+- Verify compares the program's crate, shared crates and `Cargo.lock` with the last released
+  commit and refuses changed inputs without a source version above the released one. The
+  workspace's dependency update calls the bump task when `cargo update` changes the driver's lock;
+  runtime's update path is unchanged. Chosen by the advisor.
+- The platform commit a release builds from is the one the working copy's `release.yml` pins.
+  Verify and bump compare the platform's shared Rust crates, generator and contracts, and read the
+  platform's commit messages, from the commit the last release pinned to that one, never the local
+  checkout's own; the local monoflake/platform supplies that history. The workspace's update runs
+  the bump after its actions mover moves a workflow, as it does after a `Cargo.lock` change. Chosen
+  by the advisor on 2026-10-27.
+- The bump never lowers a version. It writes the higher of the manifest's version and the one
+  incremented from the last release, never moves the major, and leaves the version as it is where
+  no input changed since the last release. Chosen by the advisor on 2026-10-27.
+- A platform commit a release or the working copy pins that the local monoflake/platform lacks is
+  fetched there once, by `jj git fetch`, and the comparison is tried again. Where it is still
+  missing, the bump raises the patch anyway and warns that a minor raise could not be inferred,
+  since an unneeded patch release is harmless and a missed one strands a platform change, and
+  verify warns that the platform was not checked and passes; a change of the driver's own inputs
+  without a raise is still refused. Any other comparison or release lookup that fails, offline or
+  rate limited, warns and passes, the bump writing nothing. Nothing runs verify in CI, so no rule
+  depends on CI. Chosen by the advisor on 2026-10-27, replacing a refusal everywhere and then a
+  refusal in CI.
+- The skip a release made where both archives equal the last release's is removed. The source
+  version is the release's authority, so equal archives must not suppress a version the source
+  raised, and a version a release's manifest lists is never built again. Chosen by the
+  implementer, to whom the author's brief left it.
