@@ -6,18 +6,25 @@ open Asserted
 open Faked_account
 open Faked_install
 
-test("a base keeps its path, drops a trailing slash, and a call joins it by one slash", () => {
+test("a control at its own name drops a trailing slash and joins the call path", () => {
   let based = text => Install_bind.baseOf(text)
-  deepEqual(based(base), Ok(base))
-  deepEqual(based(`${base}/`), Ok(base))
-  deepEqual(based("https://control.example.com"), Ok("https://control.example.com"))
-  deepEqual(based("https://control.example.com/"), Ok("https://control.example.com"))
+  deepEqual(based(base), Ok("https://control.example.com"))
+  deepEqual(based(`${base}/`), Ok("https://control.example.com"))
   deepEqual(
     based(`${base}/`)->Result.map(b =>
       Install_bind.callTo(b, ~interface="bindings", ~operation="bind")
     ),
-    Ok(`${base}/bindings/bind`),
+    Ok("https://control.example.com/bindings/bind"),
   )
+  ["https://control.example.com/base", "https://control.example.com/base/"]->Array.forEach(text => {
+    deepEqual(based(text), Ok("https://control.example.com/base"))
+    deepEqual(
+      based(text)->Result.map(
+        b => Install_bind.callTo(b, ~interface="bindings", ~operation="bind"),
+      ),
+      Ok("https://control.example.com/base/bindings/bind"),
+    )
+  })
 })
 
 test("a base not https, on no DNS host, a port, a user, a query or a fragment is refused", () => {

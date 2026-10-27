@@ -42,7 +42,7 @@ type account = {
 }
 
 /** The faked control's base, a reserved name, RFC 2606. */
-let base = "https://control.example.com/v1/app-2"
+let base = "https://control.example.com"
 
 /** What the control answers where it recorded the origin sent, binding 7 a made-up one. */
 let recorded = origin =>
