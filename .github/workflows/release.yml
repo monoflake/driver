@@ -33,7 +33,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: monoflake/platform
-          ref: 0ae9cea166b8849d61ccaccfc5c73d330d4e38b9 # monoflake/platform@main
+          ref: 1f37b5cb7cf42ca3bd63788f05e4a3231b042906 # monoflake/platform@main
           path: repos/monoflake/platform
           persist-credentials: false
       # The packages are installed and the scripts compiled in a step that holds no token.
