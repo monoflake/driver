@@ -26,9 +26,11 @@ Decided by the author on 2026-10-22.
   the machine gives in one process.
 - **It serves plain HTTP, `POST /{interface}/{operation}`**, each call carrying a binding's token
   as `Authorization: Bearer`, RFC 3d3nt, and TLS a reverse proxy's, RFC vr5lw. Its server is axum
-  0.8. It listens on port 37483, DRIVE on a keypad, and a machine's firewall opens that port on the
-  tailnet's interface alone. It runs as root, since containerd and btrfs quota groups ask it, with
-  every systemd hardening that leaves those two working.
+  0.8. It listens on port 37483, DRIVE on a keypad, and a machine's firewall opens that port on no
+  interface, decided by the author on 2026-10-26. The control reaches it through the Cloudflare
+  tunnel to the machine itself, and the author through SSH then `localhost`. It runs as root,
+  since containerd and btrfs quota groups ask it, with every systemd hardening that leaves those
+  two working.
 - **It is built static against musl, for `linux-x86_64` and `linux-aarch64`**: a machine runs
   NixOS, which has no `/lib64` loader a glibc binary built elsewhere looks for. Each architecture is
   one archive, `driver-machine-<version>-linux-<machine>.tar.gz`, the workspace's
