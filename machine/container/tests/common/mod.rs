@@ -389,6 +389,7 @@ pub fn deploy(address: &str, bytes: &[u8]) -> DeploymentDeploy {
 		network: vec![DeploymentNetwork::Http],
 		into: Some(3),
 		port: Some(8080),
+		ingress: None,
 		handed: None,
 		reaching: None,
 	}

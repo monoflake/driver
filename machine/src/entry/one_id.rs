@@ -126,6 +126,7 @@ fn deploy(runs: DeploymentRuns, reaching: Option<Vec<DeploymentRuns>>) -> Deploy
 		network: Vec::new(),
 		into: None,
 		port: Some(8080),
+		ingress: None,
 		handed: None,
 		reaching,
 	}

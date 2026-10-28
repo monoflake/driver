@@ -35,6 +35,7 @@ fn echo() -> DeploymentDeploy {
 		network: vec![DeploymentNetwork::Http],
 		into: None,
 		port: None,
+		ingress: None,
 		handed: None,
 		reaching: None,
 	}
