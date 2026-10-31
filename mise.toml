@@ -107,8 +107,8 @@ usage = 'flag "-n --dry-run" help="Say which version would be written and write 
 run = 'rescript build > /dev/null && node .github/release/bump.res.mjs ${usage_dry_run:+--dry-run}'
 
 [tasks.prepare]
-description = "Install platform's packages beside it, then the driver's, as a fresh clone needs before it builds"
-run = ["pnpm --dir ../platform install --frozen-lockfile", "pnpm install --frozen-lockfile"]
+description = "Make platform beside it ready by its own prepare, then install the driver's packages, as a fresh clone needs"
+run = ["mise -C ../platform run prepare", "pnpm install --frozen-lockfile"]
 
 [tasks.ready]
 description = "Report whether driver-machine's source version needs a release"
