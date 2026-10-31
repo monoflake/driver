@@ -199,7 +199,7 @@ async fn a_start_roots_what_was_made_before_and_removes_every_root_of_a_containe
 
 #[tokio::test]
 async fn a_live_root_in_a_namespace_not_named_is_kept() {
-	let (mut driver, _) = driver("unnamed", shell(), false);
+	let (mut driver, _) = driver("root-unnamed", shell(), false);
 	let binary = in_store(&driver, "runc");
 	driver.runtimes.runc = binary.clone();
 	driver.deploy(&binding(), echo()).await.unwrap();
@@ -286,7 +286,7 @@ async fn a_root_nix_store_refuses_refuses_the_deploy_with_what_it_said() {
 
 #[tokio::test]
 async fn a_binary_named_in_the_store_is_rooted_by_that_name_wherever_it_resolves() {
-	let (mut driver, _) = driver("named", shell(), false);
+	let (mut driver, _) = driver("root-named", shell(), false);
 	let outside = driver.state.join("runc");
 	std::fs::write(&outside, b"").unwrap();
 	let named = store_path(&driver, "wrapped").join("bin").join("runc");

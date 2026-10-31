@@ -36,19 +36,18 @@ jobs:
           ref: 1f37b5cb7cf42ca3bd63788f05e4a3231b042906 # monoflake/platform@main
           path: repos/monoflake/platform
           persist-credentials: false
-      # The packages are installed and the scripts compiled in a step that holds no token.
-      - name: install
+      - name: install platform
+        working-directory: repos/monoflake/platform
+        run: pnpm install --frozen-lockfile
+      - name: install driver
         working-directory: repos/monoflake/driver
-        run: |
-          (cd ../platform && pnpm install --frozen-lockfile)
-          pnpm install --frozen-lockfile
-          mise exec -- rescript build
+        run: pnpm install --frozen-lockfile
       # Nothing is built where a release's manifest.json lists machine/Cargo.toml's version already.
       # The token is held only by a step that calls gh, and the public releases are read without it.
       - name: source version
         id: source
         working-directory: repos/monoflake/driver
-        run: mise exec -- node .github/release/ready.res.mjs
+        run: mise run ready
       # The target directory and cargo's registry, kept between runs in the repository's cache and
       # shared with build.yml, the workspace's docs/ci.md.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -59,13 +58,11 @@ jobs:
       - name: build
         if: steps.source.outputs.ready == 'true'
         working-directory: repos/monoflake/driver
-        run: |
-          rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
-          mise run archive
+        run: mise run archive
       - name: version
         if: steps.source.outputs.ready == 'true'
         working-directory: repos/monoflake/driver
-        run: mise exec -- node .github/release/versioned.res.mjs
+        run: mise run versioned
       - name: release
         if: steps.source.outputs.ready == 'true'
         working-directory: repos/monoflake/driver

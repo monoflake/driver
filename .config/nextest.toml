@@ -1,3 +1,10 @@
 # A test running past a minute is reported slow and killed at two, the workspace's docs/code.md.
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 2 }
+
+# The roots tests that give a freshly written nix-store 500 ms run alone and again, as macOS can
+# hold a new script's first run past that while every binary runs; nextest names a retry flaky.
+[[profile.default.overrides]]
+filter = "binary(roots) & test(/nix_store/)"
+threads-required = "num-test-threads"
+retries = 2

@@ -135,7 +135,11 @@ let built = ((target, _, named)) => {
     }
     given
   }
-  if (
+
+  // The target's standard library is added here, so a runner needs no step of its own for it.
+  if !ran("rustup", ["target", "add", target], ~environment) {
+    Error(`${target}: rustup target add failed`)
+  } else if (
     !ran(
       "cargo",
       ["zigbuild", "--release", "--locked", "-p", package, "--target", target],
@@ -194,6 +198,7 @@ if isMain {
     Base.process->Base.setExitCode(1)
   | Some(version) if dry =>
     targets->Array.forEach(((target, machine, _)) => {
+      Console.log(`would run rustup target add ${target}`)
       Console.log(`would run cargo zigbuild --release --locked -p ${package} --target ${target}`)
       Console.log(`would write target/archives/${package}-${version}-linux-${machine}.tar.gz`)
     })

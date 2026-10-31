@@ -106,6 +106,15 @@ description = "Raise driver-machine's source version by RFC 8c0rg and synchroniz
 usage = 'flag "-n --dry-run" help="Say which version would be written and write nothing"'
 run = 'rescript build > /dev/null && node .github/release/bump.res.mjs ${usage_dry_run:+--dry-run}'
 
+[tasks.ready]
+description = "Report whether driver-machine's source version needs a release"
+run = "rescript build > /dev/null && node .github/release/ready.res.mjs"
+
+[tasks.versioned]
+description = "List the built archives at driver-machine's source version: `versioned [--dry-run]`"
+usage = 'flag "-n --dry-run" help="Say what would be written and write nothing"'
+run = 'rescript build > /dev/null && node .github/release/versioned.res.mjs ${usage_dry_run:+--dry-run}'
+
 [tasks.verify]
 description = "What a commit has to pass: everything formatted, the check, every block alone, the scripts' and the release's tests, the version guard refusing changed inputs without a raised version, and the crates' dependencies"
 run = ["mise run formatted", "mise run check", "mise run blocks", "mise run test && node .github/release/verify.res.mjs", "cargo deny check"]
