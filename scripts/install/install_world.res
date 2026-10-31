@@ -2,7 +2,6 @@
  * What install is given and how it speaks to the world, its names, its inputs, its commands and
  * the environments they run in, every command a test fakes.
  */
-open Host
 
 /** The names each Worker's own configuration gives the driver's D1, the database kind's and the
  * bucket, which install replaces by the names it records. */
@@ -26,9 +25,6 @@ let controlBase = "DRIVER_CONTROL_BASE"
 /** The names wrangler reads, set in its own environment alone and never read from install's. */
 let wranglerToken = "CLOUDFLARE_API_TOKEN"
 let wranglerAccount = "CLOUDFLARE_ACCOUNT_ID"
-
-/** The file wrangler loads in place of `.env` and `.env.local`, which holds nothing. */
-let noEnvFile = ["--env-file", "/dev/null"]
 
 /** The kinds the driver may offer, `function` alone where `DRIVER_KINDS` names none. */
 let kinds = ["function", "object", "database"]
@@ -75,57 +71,24 @@ let databaseWorker = {
 /** The configuration of the moment, written beside a Worker's own and removed after. */
 let moment = "wrangler.install.json"
 
-/** A command, what is written to its stdin, the one way a secret is ever handed to it. */
-type command = {
-  program: string,
-  args: array<string>,
-  cwd: string,
-  input?: string,
-  env: Dict.t<string>,
-}
-
-/** Everything install does outside itself, so a test answers it. */
+// Shared installation primitives belong to Worker_install.
+include Worker_install.World
+let noEnvFile = Worker_install.noEnvFile
 type world = {
-  run: command => result<string, string>,
-  env: Dict.t<string>,
-  say: string => unit,
-  /** What stdin holds, empty where it is a terminal, `Install.Unread` raised where a read fails. */
+  ...Worker_install.context,
   stdin: unit => string,
-  /** A directory of its own, made empty. */
-  scratch: unit => string,
-  /** A new install id drawn at random. */
   draw: unit => string,
 }
-
-let then = (result, next) => result->Result.flatMap(next)
-
-let value = (env, name) => env->Dict.get(name)->Option.filter(v => v != "")
+let then = Worker_install.then
+let shown = Worker_install.shown
+let value = Worker_install.value
+let quiet = Worker_install.quiet
+let member = Worker_install.member
+let text = Worker_install.text
+let parsed = Worker_install.parsed
 
 /** The place `DRIVER_LOCATION` names, where it names one of `locations`. */
 let placeOf = env => value(env, location)->Option.filter(hint => locations->Array.includes(hint))
-
-/** A command as a dry run prints it, its program's name and arguments, stdin said, never shown. */
-let shown = command => {
-  let line = [basename(command.program), ...command.args]->Array.join(" ")
-  command.input->Option.isSome ? `${line}, its value on stdin` : line
-}
-
-/**
- * The names a spawned command is given from install's own environment, and nothing else, since
- * install runs in a person's shell holding secrets of every kind a deny list would miss.
- */
-let allowed = ["PATH", "HOME", "TMPDIR", "USER", "LANG"]
-
-/** The environment the commands run in, the allowed names alone, quiet and unasking. */
-let quiet = env => {
-  let given = Dict.make()
-  allowed->Array.forEach(name =>
-    env->Dict.get(name)->Option.forEach(value => given->Dict.set(name, value))
-  )
-  given->Dict.set("WRANGLER_SEND_METRICS", "false")
-  given->Dict.set("CI", "1")
-  given
-}
 
 /** The environment wrangler runs in, its account and token set from install's own inputs. */
 let accounted = env => {
@@ -136,24 +99,14 @@ let accounted = env => {
 }
 
 /** A wrangler command run in `cwd` reading no `.env`, wrangler being the cloudflare block's. */
-let wrangler = (~root, ~cwd, ~env, arguments) => {
-  program: join([root, "cloudflare", "node_modules", ".bin", "wrangler"]),
-  args: [...arguments, ...noEnvFile],
-  cwd,
-  env,
-}
+let wrangler = (~root, ~cwd, ~env, arguments) =>
+  Worker_install.command(
+    ~program=Host.join([root, "cloudflare", "node_modules", ".bin", "wrangler"]),
+    ~cwd,
+    ~env,
+    arguments,
+  )
 
 /** A command of the account's, given install's own account and token alone. */
 let commanded = (w, ~root, ~cwd, arguments) =>
   wrangler(~root, ~cwd, ~env=accounted(w.env), arguments)
-
-/** A JSON object's member, or null. */
-let member = (json, name) =>
-  json->JSON.Decode.object->Option.flatMap(o => o->Dict.get(name))->Option.getOr(JSON.Null)
-let text = (json, name) => json->member(name)->JSON.Decode.string
-
-let parsed = body =>
-  switch JSON.parseOrThrow(body) {
-  | json => Some(json)
-  | exception JsExn(_) => None
-  }

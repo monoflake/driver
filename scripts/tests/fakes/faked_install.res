@@ -69,17 +69,13 @@ type faked = {
 }
 
 let make = (~env=credentials, ~stdin=token, ~drawn=id, ~draws=drawnNames, ~answer) => {
-  let ran = []
+  let (ran, said, run, say) = Worker_install.recording(~answer)
   let queued = draws->Array.copy
-  let said = []
   let scratched = []
   let world: Install_world.world = {
-    run: command => {
-      ran->Array.push(command)
-      answer(command)
-    },
+    run,
+    say,
     env: Dict.fromArray(env),
-    say: line => said->Array.push(line),
     stdin: () => stdin,
     scratch: () => {
       let made = Host.mkdtempSync(Host.join([Host.tmpdir(), "install-scratch-"]))
@@ -95,12 +91,14 @@ let make = (~env=credentials, ~stdin=token, ~drawn=id, ~draws=drawnNames, ~answe
 let plain = faked =>
   faked.ran->Array.map(command => {
     let within = switch Host.basename(command.program) {
-    | "rescript" if command.cwd->String.endsWith("/cloudflare/object") => " in <object>"
-    | "rescript" if command.cwd->String.endsWith("/cloudflare/database") => " in <database>"
-    | "rescript" if command.cwd->String.endsWith("/cloudflare") => " in <driver>"
+    | "rescript"
+      if command.cwd->Option.getOrThrow->String.endsWith("/cloudflare/object") => " in <object>"
+    | "rescript"
+      if command.cwd->Option.getOrThrow->String.endsWith("/cloudflare/database") => " in <database>"
+    | "rescript" if command.cwd->Option.getOrThrow->String.endsWith("/cloudflare") => " in <driver>"
     | _ => ""
     }
-    let words = line(command)->String.split(" ")
+    let words = Worker_install.line(command)->String.split(" ")
     words
     ->Array.mapWithIndex((word, i) =>
       if word->String.endsWith("/cloudflare/wrangler.install.json") {
@@ -121,11 +119,7 @@ let plain = faked =>
   })
 
 /** Whether any argument run or any line said holds a secret. */
-let shows = faked =>
-  secrets->Array.some(s =>
-    faked.ran->Array.some(c => c.args->Array.some(a => a->String.includes(s))) ||
-      faked.said->Array.some(l => l->String.includes(s))
-  )
+let shows = faked => Worker_install.shows(~ran=faked.ran, ~said=faked.said, secrets)
 
 let installed = (~env=?, ~stdin=?, ~drawn=?, ~draws=?, account, root) => {
   let faked = make(~env?, ~stdin?, ~drawn?, ~draws?, ~answer=command => answered(account, command))

@@ -376,9 +376,17 @@ test("DRIVER_API_TOKEN and DATABASE_API_TOKEN are in no command's environment", 
   deepEqual(result, Ok())
   ok(faked.ran->Array.length > 0)
   faked.ran->Array.forEach(command => {
-    deepEqual(command.env->Dict.get("DRIVER_API_TOKEN"), None, ~message=line(command))
-    deepEqual(command.env->Dict.get("DATABASE_API_TOKEN"), None, ~message=line(command))
-    let values = command.env->Dict.valuesToArray
+    deepEqual(
+      command.env->Option.getOrThrow->Dict.get("DRIVER_API_TOKEN"),
+      None,
+      ~message=line(command),
+    )
+    deepEqual(
+      command.env->Option.getOrThrow->Dict.get("DATABASE_API_TOKEN"),
+      None,
+      ~message=line(command),
+    )
+    let values = command.env->Option.getOrThrow->Dict.valuesToArray
     ok(
       !(values->Array.includes("the-driver-token") || values->Array.includes("the-database-token")),
       ~message=line(command),
@@ -387,8 +395,8 @@ test("DRIVER_API_TOKEN and DATABASE_API_TOKEN are in no command's environment", 
       Host.basename(command.program) == "wrangler" && !(command.args->Array.includes("--dry-run"))
     deepEqual(
       (
-        command.env->Dict.get("CLOUDFLARE_API_TOKEN"),
-        command.env->Dict.get("CLOUDFLARE_ACCOUNT_ID"),
+        command.env->Option.getOrThrow->Dict.get("CLOUDFLARE_API_TOKEN"),
+        command.env->Option.getOrThrow->Dict.get("CLOUDFLARE_ACCOUNT_ID"),
       ),
       wrangler ? (Some("the-install-token"), Some(accountId)) : (None, None),
       ~message=line(command),
@@ -516,3 +524,11 @@ test("an install whose parts are all there still refuses an unplaced run", () =>
 })
 
 after(() => fixtures->Array.forEach(root => Host.rmSync(root, {recursive: true, force: true})))
+
+test("an unset placeholder is refused as a missing driver input", () => {
+  let env =
+    credentials->Array.map(((name, value)) => (name, name == "DRIVER_API_TOKEN" ? "unset" : value))
+  let faked = make(~env, ~answer=_ => Error("no command expected"))
+  ok(Install.install(faked.world, ~dry=false, ~root=fixture())->Result.isError)
+  deepEqual(faked.ran, [])
+})

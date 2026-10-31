@@ -384,15 +384,15 @@ let install = (w, ~dry, ~root=root) =>
   )
 
 /** The world as it is, each command run to its end with its output kept. */
-let real = {
+let real: world = {
   run: command => {
     let done = spawnSync(
       command.program,
       command.args,
       {
-        cwd: command.cwd,
+        cwd: command.cwd->Option.getOrThrow,
         input: ?command.input,
-        env: command.env,
+        env: command.env->Option.getOrThrow,
         stdio: ["pipe", "pipe", "pipe"],
         encoding: "utf8",
       },

@@ -97,17 +97,17 @@ test("no ambient CLOUDFLARE_ name reaches a command, wrangler given install's ow
   deepEqual(result, Ok())
   ok(!shows(faked))
   faked.ran->Array.forEach(command => {
-    let values = command.env->Dict.valuesToArray
+    let values = command.env->Option.getOrThrow->Dict.valuesToArray
     ok(
       !(values->Array.includes("the-ambient-token") || values->Array.includes(anotherAccount)),
       ~message=line(command),
     )
-    deepEqual(command.env->Dict.get("CLOUDFLARE_EMAIL"), None)
-    deepEqual(command.env->Dict.get("DRIVER_INSTALL_TOKEN"), None)
+    deepEqual(command.env->Option.getOrThrow->Dict.get("CLOUDFLARE_EMAIL"), None)
+    deepEqual(command.env->Option.getOrThrow->Dict.get("DRIVER_INSTALL_TOKEN"), None)
   })
   ok(
     faked.ran->Array.some(c =>
-      c.env->Dict.get("CLOUDFLARE_API_TOKEN") == Some("the-install-token")
+      c.env->Option.getOrThrow->Dict.get("CLOUDFLARE_API_TOKEN") == Some("the-install-token")
     ),
   )
 })
@@ -127,16 +127,20 @@ test("no CF_ name reaches a command, and wrangler is pointed at an empty env fil
   let (faked, result) = installed(~env=[...legacy, ...credentials], empty(), root)
   deepEqual(result, Ok())
   faked.ran->Array.forEach(command => {
-    let names = command.env->Dict.keysToArray
+    let names = command.env->Option.getOrThrow->Dict.keysToArray
     deepEqual(
       names->Array.filter(name => name->String.startsWith("CF_")),
       [],
       ~message=line(command),
     )
-    let values = command.env->Dict.valuesToArray
+    let values = command.env->Option.getOrThrow->Dict.valuesToArray
     ok(legacy->Array.every(((_, v)) => !(values->Array.includes(v))), ~message=line(command))
     if Host.basename(command.program) == "wrangler" {
       deepEqual(command.args->Array.slice(~start=-2), ["--env-file", "/dev/null"])
+      deepEqual(
+        command.env->Option.getOrThrow->Dict.get("CLOUDFLARE_CF_FETCH_ENABLED"),
+        Some("false"),
+      )
     }
   })
 })
@@ -149,8 +153,8 @@ test("the bundle is written in the quiet environment, given no account and no to
   bundles->Array.forEach(command =>
     deepEqual(
       (
-        command.env->Dict.get("CLOUDFLARE_API_TOKEN"),
-        command.env->Dict.get("CLOUDFLARE_ACCOUNT_ID"),
+        command.env->Option.getOrThrow->Dict.get("CLOUDFLARE_API_TOKEN"),
+        command.env->Option.getOrThrow->Dict.get("CLOUDFLARE_ACCOUNT_ID"),
       ),
       (None, None),
     )
@@ -206,7 +210,7 @@ test("a command is given the allowed names alone from install's environment, not
   deepEqual(result, Ok())
   ok(faked.ran->Array.length > 0)
   faked.ran->Array.forEach(command => {
-    let env = command.env
+    let env = command.env->Option.getOrThrow
     let wrangler =
       Host.basename(command.program) == "wrangler" && !(command.args->Array.includes("--dry-run"))
     deepEqual(env->Dict.get("CONTROL_SECRET"), None, ~message=line(command))
@@ -227,6 +231,7 @@ test("a command is given the allowed names alone from install's environment, not
         "HOME",
         "PATH",
         "WRANGLER_SEND_METRICS",
+        "CLOUDFLARE_CF_FETCH_ENABLED",
         ...wrangler ? ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"] : [],
       ]->Array.toSorted(String.compare)
     deepEqual(names, expected, ~message=line(command))
