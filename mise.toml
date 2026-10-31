@@ -106,6 +106,10 @@ description = "Raise driver-machine's source version by RFC 8c0rg and synchroniz
 usage = 'flag "-n --dry-run" help="Say which version would be written and write nothing"'
 run = 'rescript build > /dev/null && node .github/release/bump.res.mjs ${usage_dry_run:+--dry-run}'
 
+[tasks.prepare]
+description = "Install platform's packages beside it, then the driver's, as a fresh clone needs before it builds"
+run = ["pnpm --dir ../platform install --frozen-lockfile", "pnpm install --frozen-lockfile"]
+
 [tasks.ready]
 description = "Report whether driver-machine's source version needs a release"
 run = "rescript build > /dev/null && node .github/release/ready.res.mjs"

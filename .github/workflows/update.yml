@@ -19,3 +19,4 @@ jobs:
     with:
       path: monoflake/driver
       beside: monoflake/platform
+      prepare: mise run prepare
