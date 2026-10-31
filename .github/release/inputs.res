@@ -1,6 +1,8 @@
 /** The source inputs compared with the last release, a lock moved alone not one, RFC 8c0rg. */
 let own = ["machine", "Cargo.toml"]
 let sibling = Archive.join([Archive.root, "..", "platform"])
+let setup = ".github/actions/setup/action.yml"
+/** Where the pin lived before the setup action held it, read at a release older than the action. */
 let workflow = ".github/workflows/release.yml"
 
 let disk = path => Ok(Archive.readFileSync(path))
@@ -89,18 +91,25 @@ let platform = source =>
   ->RegExp.exec(source)
   ->Option.flatMap(found => found->RegExp.Result.matches->Array.get(0)->Option.flatMap(x => x))
 
-let current = () => Archive.readFileSync(Archive.join([Archive.root, workflow]))
+let current = () => Archive.readFileSync(Archive.join([Archive.root, setup]))
 
-/** The platform commit the last release pinned and the one the working copy's release.yml pins,
+/** The file pinning the platform at `from`, the setup action, or release.yml where it is absent. */
+let pinned = (~read, ~from) =>
+  switch read(~cwd=Archive.root, ~from, setup) {
+  | Ok(text) => Ok(text)
+  | Error(_) => read(~cwd=Archive.root, ~from, workflow)
+  }
+
+/** The platform commit the last release pinned and the one the working copy's setup action pins,
  * which the next release builds, read from the local monoflake/platform where it holds both. */
 let pins = (~read, ~current, entry) =>
   switch entry->Versioned.text("commit") {
   | None => Error("the last release names no source commit")
   | Some(from) =>
-    read(~cwd=Archive.root, ~from, workflow)->Result.flatMap(last =>
+    pinned(~read, ~from)->Result.flatMap(last =>
       switch (platform(last), platform(current())) {
       | (None, _) => Error("the last release pins no platform commit")
-      | (_, None) => Error(`${workflow} pins no platform commit`)
+      | (_, None) => Error(`${setup} pins no platform commit`)
       | (Some(last), Some(now)) => Ok((from, last, now))
       }
     )

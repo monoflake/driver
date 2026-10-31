@@ -1,0 +1,36 @@
+# What build.yml and release.yml run after the workspace action, the platform at its pin, both
+# installs, and cargo's cache unless `cache` turns it off.
+name: setup
+description: The platform checked out at its pin, both packages installed, and cargo's cache.
+
+inputs:
+  cache:
+    description: Whether the target directory and cargo's registry are restored and saved here.
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    # The platform's crates and contracts the driver is built on, reached as ../platform at the
+    # commit update last moved it to.
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: monoflake/platform
+        ref: 1f37b5cb7cf42ca3bd63788f05e4a3231b042906 # monoflake/platform@main
+        path: repos/monoflake/platform
+        persist-credentials: false
+    - name: install platform
+      shell: bash
+      working-directory: repos/monoflake/platform
+      run: pnpm install --frozen-lockfile
+    - name: install driver
+      shell: bash
+      working-directory: repos/monoflake/driver
+      run: pnpm install --frozen-lockfile
+    # The target directory and cargo's registry, kept between runs in the repository's cache under
+    # the key release.yml shares, the workspace's docs/ci.md.
+    - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      if: inputs.cache == 'true'
+      with:
+        workspaces: repos/monoflake/driver -> target
+        shared-key: driver-machine

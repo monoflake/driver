@@ -28,28 +28,19 @@ jobs:
         with:
           path: monoflake/driver
           scripts: true
-      # The platform's crates and contracts the driver is built on, reached as ../platform at the
-      # commit update last moved it to.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The platform at its pin and both installs, as .github/actions/setup holds them, its cache
+      # left to the step below that runs only where something is built.
+      - uses: ./repos/monoflake/driver/.github/actions/setup
         with:
-          repository: monoflake/platform
-          ref: 1f37b5cb7cf42ca3bd63788f05e4a3231b042906 # monoflake/platform@main
-          path: repos/monoflake/platform
-          persist-credentials: false
-      - name: install platform
-        working-directory: repos/monoflake/platform
-        run: pnpm install --frozen-lockfile
-      - name: install driver
-        working-directory: repos/monoflake/driver
-        run: pnpm install --frozen-lockfile
+          cache: "false"
       # Nothing is built where a release's manifest.json lists machine/Cargo.toml's version already.
       # The token is held only by a step that calls gh, and the public releases are read without it.
       - name: source version
         id: source
         working-directory: repos/monoflake/driver
         run: mise run ready
-      # The target directory and cargo's registry, kept between runs in the repository's cache and
-      # shared with build.yml, the workspace's docs/ci.md.
+      # The target directory and cargo's registry, kept between runs in the repository's cache under
+      # the key .github/actions/setup gives build.yml, the workspace's docs/ci.md.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         if: steps.source.outputs.ready == 'true'
         with:

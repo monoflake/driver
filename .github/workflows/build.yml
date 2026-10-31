@@ -15,30 +15,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      # The workspace above the repository, as release.yml checks it out.
+      # The workspace above the repository, its scripts compiled.
       - uses: canmi21/canmi/.github/actions/workspace@main
         with:
           path: monoflake/driver
           scripts: true
-      # The platform's crates and contracts at the commit release.yml builds on.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: monoflake/platform
-          ref: 1f37b5cb7cf42ca3bd63788f05e4a3231b042906 # monoflake/platform@main
-          path: repos/monoflake/platform
-          persist-credentials: false
-      - name: install platform
-        working-directory: repos/monoflake/platform
-        run: pnpm install --frozen-lockfile
-      - name: install driver
-        working-directory: repos/monoflake/driver
-        run: pnpm install --frozen-lockfile
-      # The target directory and cargo's registry, kept between runs in the repository's cache and
-      # shared with release.yml, the workspace's docs/ci.md.
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          workspaces: repos/monoflake/driver -> target
-          shared-key: driver-machine
+      # The platform at its pin, both installs and cargo's cache, held by .github/actions/setup.
+      - uses: ./repos/monoflake/driver/.github/actions/setup
       - name: build
         working-directory: repos/monoflake/driver
         run: mise run archive

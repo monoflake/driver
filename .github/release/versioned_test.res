@@ -67,11 +67,11 @@ let pinning = commit => `ref: ${commit} # monoflake/platform@main`
 let present = _ => Ok()
 let unchanged = {Inputs.own: false, shared: false, unknown: []}
 
-/** A reader of the last release's workflow, and of each platform crate at the working copy's pin
- * from the disk, as the local monoflake/platform would show it. */
+/** A reader of the last release's setup action, and of each platform crate at the working copy's
+ * pin from the disk, as the local monoflake/platform would show it. */
 let read = (~cwd, ~from, path) =>
   if cwd == Archive.root {
-    ok(from == "released" && path == Inputs.workflow)
+    ok(from == "released" && path == Inputs.setup)
     Ok(pinning(last))
   } else {
     ok(cwd == Inputs.sibling && from == now)
@@ -134,6 +134,45 @@ test("the platform is compared from the last release's pin to the working copy's
   }
   ignore(Inputs.breakingSince(~log, ~read, ~current=() => pinning(now), ~reach=present, release))
   deepEqual(logged, [(false, "released", None), (true, last, Some(now))])
+})
+
+test("a release older than the setup action has its pin read from release.yml", () => {
+  let asked = []
+  let older = (~cwd, ~from, path) =>
+    if cwd == Archive.root {
+      ok(from == "released")
+      asked->Array.push(path)
+      path == Inputs.workflow ? Ok(pinning(last)) : Error(`${path} is absent at released`)
+    } else {
+      read(~cwd, ~from, path)
+    }
+  deepEqual(
+    Inputs.pins(~read=older, ~current=() => pinning(now), release),
+    Ok(("released", last, now)),
+  )
+  deepEqual(asked, [Inputs.setup, Inputs.workflow])
+  let compared = []
+  let diff = (~cwd, ~from, ~to=?, _) => {
+    if cwd == Inputs.sibling {
+      compared->Array.push((from, to))
+    }
+    Ok("")
+  }
+  ignore(Inputs.changed(~diff, ~read=older, ~current=() => pinning(now), ~reach=present, release))
+  deepEqual(compared, [(last, Some(now))])
+  let neither = (~cwd as _, ~from as _, path) => Error(`${path} is absent at released`)
+  ok(Inputs.pins(~read=neither, ~current=() => pinning(now), release)->Result.isError)
+  let unpinned = (~cwd as _, ~from as _, path) =>
+    path == Inputs.setup ? Ok("name: setup\n") : Ok(pinning(last))
+  deepEqual(
+    Inputs.pins(~read=unpinned, ~current=() => pinning(now), release),
+    Error("the last release pins no platform commit"),
+  )
+  deepEqual(
+    Inputs.pins(~read, ~current=() => "name: setup\n", release),
+    Error(`${Inputs.setup} pins no platform commit`),
+  )
+  ok(Inputs.platform(Inputs.current())->Option.isSome)
 })
 
 test("inputs unchanged since the last release compare as unchanged", () => {
