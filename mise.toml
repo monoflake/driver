@@ -53,7 +53,7 @@ description = "Build, format, lint and test one block alone, as accept and verif
 usage = 'arg "<package>" help="The block, by its package name"'
 run = """
 d=$(node model/tasks.res.mjs brief "$usage_package" --path) && p="$usage_package" || exit 1
-[ ! -f "$d/Cargo.toml" ] || { cargo fmt --check -p "$p" && cargo clippy -p "$p" --all-targets -- -D warnings && cargo test -p "$p"; } || exit 1
+[ ! -f "$d/Cargo.toml" ] || { cargo fmt --check -p "$p" && cargo clippy -p "$p" --all-targets -- -D warnings && cargo nextest run -p "$p" && { [ ! -f "$d/src/lib.rs" ] || cargo test --doc -p "$p"; }; } || exit 1
 [ ! -f "$d/rescript.json" ] || { rescript build "$d" && cd "$d" && rescript format --check && node --test 'tests/**/*.mjs'; }
 """
 

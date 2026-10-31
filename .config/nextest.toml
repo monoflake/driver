@@ -1,0 +1,3 @@
+# A test running past a minute is reported slow and killed at two, the workspace's docs/code.md.
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 2 }
