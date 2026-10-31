@@ -20,7 +20,6 @@ let refuse = why => {
 
 let field = (json, key) => json->JSON.Decode.object->Option.flatMap(o => o->Dict.get(key))
 let text = (json, key) => json->field(key)->Option.flatMap(JSON.Decode.string)
-let list = (json, key) => json->field(key)->Option.flatMap(JSON.Decode.array)->Option.getOr([])
 
 /** A version's three numbers, or none where it is not plain `MAJOR.MINOR.PATCH`. */
 let numbers = version =>
@@ -89,6 +88,23 @@ let already = (entries, version) =>
   entries->Array.some(entry =>
     entry->text("name") == Some(Archive.package) && entry->text("version") == Some(version)
   )
+
+/** Release membership belongs to the workspace's scripts/release/release.res. */
+let holds = version =>
+  switch Archive.env->Dict.get("WORKSPACE") {
+  | None => Error("no WORKSPACE, which mise sets from the workspace's mise.toml")
+  | Some(workspace) =>
+    let script = Archive.join([workspace, "scripts", "release", "release.res.mjs"])
+    switch capture(
+      "node",
+      [script, "holds", Archive.package, version, ...dry ? ["--dry-run"] : []],
+      {cwd: root, encoding: "utf8", maxBuffer: 67108864},
+    ).status->Nullable.toOption {
+    | Some(0) => Ok(true)
+    | Some(2) => Ok(false)
+    | _ => Error(`${script} holds failed`)
+    }
+  }
 
 /** The interfaces the program serves, as served.rs names them, each at the version
  * monoflake/platform's contracts give it. */
@@ -223,14 +239,15 @@ let main = () =>
           ->Option.getOr("")}`
       ),
     )
-    switch numbers(manifest) {
-    | _ if already(entries, manifest) =>
+    switch (holds(manifest), numbers(manifest)) {
+    | (Error(why), _) => refuse(why)
+    | (Ok(true), _) =>
       Console.log(`${manifest} is released already, so nothing is released`)
       write(JSON.Encode.object(dict{"artifacts": JSON.Encode.array([])}))
     | _ if missing != [] && !dry =>
       refuse(`not built: ${missing->Array.map(((_, path)) => path)->Array.join(", ")}`)
-    | None => refuse(`machine/Cargo.toml's version ${manifest} is not MAJOR.MINOR.PATCH`)
-    | Some(_) =>
+    | (_, None) => refuse(`machine/Cargo.toml's version ${manifest} is not MAJOR.MINOR.PATCH`)
+    | (Ok(false), Some(_)) =>
       let version = manifest
       Console.log(`releases ${version}`)
       let directory = Archive.join([root, "target", "archives", "release"])

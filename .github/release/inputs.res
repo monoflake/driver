@@ -1,5 +1,5 @@
-/** The source inputs compared with the last release, RFC 8c0rg. */
-let own = ["machine", "Cargo.toml", "Cargo.lock"]
+/** The source inputs compared with the last release, a lock moved alone not one, RFC 8c0rg. */
+let own = ["machine", "Cargo.toml"]
 let sibling = Archive.join([Archive.root, "..", "platform"])
 let workflow = ".github/workflows/release.yml"
 

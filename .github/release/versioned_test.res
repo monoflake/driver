@@ -91,7 +91,8 @@ test(
     [true, false]->Array.forEach(own => {
       let diff = (~cwd, ~from, ~to=?, paths) => {
         if cwd == Archive.root {
-          ok(from == "released" && to == None && paths->Array.includes("Cargo.lock"))
+          ok(from == "released" && to == None && paths->Array.includes("machine"))
+          ok(!(paths->Array.includes("Cargo.lock")))
           Ok(own ? "M machine/src/served.rs" : "")
         } else {
           ok(paths->Array.includes("code/libs/envelope"))
@@ -371,4 +372,27 @@ test("bump stops at a refusal and says nothing after it", () => {
     lines->Array.length == 1 &&
       lines->Array.getUnsafe(0)->String.startsWith(`driver-machine ${version} -> `),
   )
+})
+
+test("release membership delegates the name and version and keeps lookup errors", () => {
+  let before = Archive.env->Dict.get("WORKSPACE")
+  let workspace = mkdtempSync(Archive.join([tmpdir(), "holds-"]))
+  after(() => rmSync(workspace, {recursive: true, force: true}))
+  Archive.mkdirSync(Archive.join([workspace, "scripts", "release"]), {recursive: true})
+  let script = Archive.join([workspace, "scripts", "release", "release.res.mjs"])
+  Archive.env->Dict.set("WORKSPACE", workspace)
+  [(0, Ok(true)), (2, Ok(false)), (1, Error(`${script} holds failed`))]->Array.forEach(((
+    code,
+    expected,
+  )) => {
+    Versioned.writeFileSync(
+      script,
+      `if (process.argv.slice(2, 5).join(' ') !== 'holds driver-machine 0.3.7') process.exit(99); process.exit(${code->Int.toString});`,
+    )
+    deepEqual(Versioned.holds("0.3.7"), expected)
+  })
+  switch before {
+  | Some(value) => Archive.env->Dict.set("WORKSPACE", value)
+  | None => Archive.env->Dict.delete("WORKSPACE")
+  }
 })

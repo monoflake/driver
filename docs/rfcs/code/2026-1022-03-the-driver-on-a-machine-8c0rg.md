@@ -112,6 +112,10 @@ Chosen on 2026-10-27, provisional.
   rate limited, warns and passes, the bump writing nothing. Nothing runs verify in CI, so no rule
   depends on CI. Chosen by the advisor on 2026-10-27, replacing a refusal everywhere and then a
   refusal in CI.
+- A change confined to `Cargo.lock` is no input change. Verify and bump compare the program's
+  crate and `Cargo.toml` alone, so only the driver's own code asks for a raise and a release, and
+  a dependency moved by the scheduled update rides the next real release. Chosen by the author on
+  2026-10-31, replacing the lock's place among the compared inputs above.
 - The skip a release made where both archives equal the last release's is removed. The source
   version is the release's authority, so equal archives must not suppress a version the source
   raised, and a version a release's manifest lists is never built again. Chosen by the
