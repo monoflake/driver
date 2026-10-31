@@ -71,7 +71,7 @@ let remote = (host, command) => {
     : None
 }
 
-/** A phase run and its time printed, beside what `said` makes of its value or why it failed. */
+/** Builder in monoflake/machine owns the duration format used here. */
 let timed = (name, run, said) => {
   let started = Date.now()
   let result = run()
