@@ -49,6 +49,13 @@ jobs:
         id: source
         working-directory: repos/monoflake/driver
         run: mise exec -- node .github/release/ready.res.mjs
+      # The target directory and cargo's registry, kept between runs in the repository's cache and
+      # shared with build.yml, the workspace's docs/ci.md.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: steps.source.outputs.ready == 'true'
+        with:
+          workspaces: repos/monoflake/driver -> target
+          shared-key: driver-machine
       - name: build
         if: steps.source.outputs.ready == 'true'
         working-directory: repos/monoflake/driver

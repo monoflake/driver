@@ -33,6 +33,12 @@ jobs:
           (cd ../platform && pnpm install --frozen-lockfile)
           pnpm install --frozen-lockfile
           mise exec -- rescript build
+      # The target directory and cargo's registry, kept between runs in the repository's cache and
+      # shared with release.yml, the workspace's docs/ci.md.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: repos/monoflake/driver -> target
+          shared-key: driver-machine
       - name: build
         working-directory: repos/monoflake/driver
         run: |
