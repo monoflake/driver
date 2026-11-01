@@ -8,17 +8,17 @@ mod marks;
 mod roots;
 mod secrets;
 mod spec;
+mod wanted;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use envelope::contracts::{
-	Architecture, DeploymentArtifact, DeploymentDeleted, DeploymentDeploy, DeploymentDescribed,
-	DeploymentForm, DeploymentIsolation, DeploymentOf, DeploymentRuns, DeploymentRuntime,
-	DeploymentState,
+	DeploymentArtifact, DeploymentDeleted, DeploymentDeploy, DeploymentDescribed, DeploymentOf,
+	DeploymentRuns, DeploymentRuntime, DeploymentState,
 };
 
 use crate::{
@@ -29,6 +29,7 @@ use labels::Kept;
 use roots::Rooted;
 use secrets::{KeyFile, Places};
 use sha2::{Digest as _, Sha256};
+use wanted::Wanted;
 
 /// How long a task is given to stop on its signal before it is killed, in milliseconds.
 const GRACE: u64 = 10_000;
@@ -42,9 +43,6 @@ const ASKED: u64 = 100;
 
 /// How many fetches this process began, so each is written to a file of its own.
 static FETCHES: AtomicU64 = AtomicU64::new(0);
-
-/// The isolation every container of an image stands on.
-const ISOLATION: DeploymentIsolation = DeploymentIsolation::Kernel;
 
 impl Refused {
 	pub(crate) fn new(reason: &'static str, message: impl Into<String>) -> Self {
@@ -75,138 +73,6 @@ impl Chosen for Runtimes {
 			)
 			| None => &self.runc,
 		}
-	}
-}
-
-/// The architecture this driver was built for, as OCI names it, or none where those names lack it.
-fn own() -> Option<Architecture> {
-	match std::env::consts::ARCH {
-		"x86_64" => Some(Architecture::Amd64),
-		"aarch64" => Some(Architecture::Arm64),
-		_ => None,
-	}
-}
-
-/// What a deploy asks, checked against what the host gives.
-struct Wanted<'a> {
-	runs: String,
-	kind: &'static str,
-	version: String,
-	runtime: DeploymentRuntime,
-	isolation: Vec<DeploymentIsolation>,
-	port: u16,
-	/// The container of capacity it runs in, by its item's id, and that capacity.
-	into: u32,
-	capacity: &'a crate::Capacity,
-	env: Vec<String>,
-	/// Its own secrets and the secrets it is handed, by their names.
-	secrets: BTreeMap<String, Vec<u8>>,
-	/// What a hosted runtime is given, its files and where they are bound.
-	files: Option<(&'a BTreeMap<String, Vec<u8>>, &'a str)>,
-	/// The deployments it reaches, each as its label names it.
-	reaching: Vec<String>,
-	/// The deployments it reaches, each named in its hosts and its origins.
-	targets: Vec<DeploymentRuns>,
-}
-
-impl<'a> Wanted<'a> {
-	fn of(binding: &'a Binding, input: &'a DeploymentDeploy) -> Result<Self, Refused> {
-		match input.form {
-			DeploymentForm::Image => {}
-			DeploymentForm::Modules | DeploymentForm::Component => {
-				return Err(Refused::new("beyond_host", "a container runs an image alone"));
-			}
-		}
-		// An artifact naming another architecture than the machine's is beyond the host, RFC ge55b.
-		if let Some(named) = input.artifact.architecture
-			&& own() != Some(named)
-		{
-			return Err(Refused::new(
-				"beyond_host",
-				"an image runs on the architecture it was built for",
-			));
-		}
-		for isolation in &input.isolation {
-			match isolation {
-				DeploymentIsolation::Kernel => {}
-				DeploymentIsolation::Isolate | DeploymentIsolation::Userspace | DeploymentIsolation::Vm => {
-					return Err(Refused::new(
-						"beyond_host",
-						"a container stands on the kernel's isolation alone",
-					));
-				}
-			}
-		}
-		let runtime = match input.runtime {
-			None => DeploymentRuntime::Runc,
-			Some(r @ (DeploymentRuntime::Runc | DeploymentRuntime::Crun | DeploymentRuntime::Youki)) => r,
-			Some(
-				DeploymentRuntime::Workers | DeploymentRuntime::Workerd | DeploymentRuntime::Wasmtime,
-			) => {
-				return Err(Refused::new("beyond_host", "a container runs on runc, crun or youki"));
-			}
-		};
-		let port = input
-			.port
-			.ok_or_else(|| {
-				Refused::new("malformed", "an image is deployed with the port it is called on")
-			})
-			.and_then(|p| {
-				u16::try_from(p).map_err(|_| Refused::new("malformed", "a port is at most 65535"))
-			})?;
-		Self::within(binding, input, runtime, vec![ISOLATION], port, None)
-	}
-
-	/// What a deploy asks of a hosted runtime, its form, runtime and isolation the caller's.
-	fn hosted(
-		binding: &'a Binding,
-		input: &'a DeploymentDeploy,
-		hosted: &'a Hosted,
-	) -> Result<Self, Refused> {
-		let files = Some((&hosted.files, hosted.at.as_str()));
-		Self::within(binding, input, hosted.runtime, hosted.isolation.clone(), hosted.port, files)
-	}
-
-	/// What every deploy asks, checked against the binding, its container and its secrets' names.
-	fn within(
-		binding: &'a Binding,
-		input: &'a DeploymentDeploy,
-		runtime: DeploymentRuntime,
-		isolation: Vec<DeploymentIsolation>,
-		port: u16,
-		files: Option<(&'a BTreeMap<String, Vec<u8>>, &'a str)>,
-	) -> Result<Self, Refused> {
-		// The container it names, or else the binding's first, as the function kind chooses.
-		let into = input
-			.into
-			.or_else(|| binding.capacities.keys().next().copied())
-			.ok_or_else(|| Refused::new("beyond_host", "the binding holds no capacity"))?;
-		let capacity = binding.capacities.get(&into).ok_or_else(|| {
-			Refused::new("beyond_host", format!("the binding holds no capacity {into}"))
-		})?;
-		for name in input.secrets.keys() {
-			secrets::named(name)?;
-		}
-		let handed = handed::bound(input.handed.as_deref().unwrap_or_default())?;
-		let env =
-			std::iter::once(format!("MONOFLAKE_FOOTING={}", input.footing)).chain(handed.env).collect();
-		let mut secrets = input.secrets.clone();
-		secrets.extend(handed.secrets);
-		Ok(Self {
-			runs: labels::runs(&input.runs),
-			kind: labels::kind(&input.runs),
-			version: hex(&input.version),
-			runtime,
-			isolation,
-			port,
-			into,
-			capacity,
-			env,
-			secrets,
-			files,
-			reaching: input.reaching.iter().flatten().map(labels::runs).collect(),
-			targets: Vec::new(),
-		})
 	}
 }
 

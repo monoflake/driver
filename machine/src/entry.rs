@@ -26,7 +26,7 @@ const PORT: u16 = 36879;
 
 /// Where the entry listens unless told, loopback alone, so only what is put in front of it reaches
 /// it and nothing is opened by a default.
-const LISTEN: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), PORT);
+pub(crate) const LISTEN: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), PORT);
 
 /// What the entry is started with, its address and containerd's socket, and nothing of the driver.
 #[derive(Debug, Clone, clap::Args)]
@@ -206,7 +206,7 @@ const KIND: &str = "driver.kind";
 
 /// The id a label of what a container runs or reaches names, written in 8 hex digits, or as an
 /// app's was before, `app/<id>` in decimal, a scaffold retired with platform RFC 8yl4b.
-fn labeled(label: &str) -> Option<u32> {
+pub(crate) fn labeled(label: &str) -> Option<u32> {
 	hex(label).or_else(|| number(label.strip_prefix("app/")?))
 }
 

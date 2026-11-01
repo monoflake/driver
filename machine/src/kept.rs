@@ -142,6 +142,42 @@ pub(crate) fn read(directory: &Path, mount: &Path) -> (BTreeMap<Binding, Listed>
 	(lists, unread)
 }
 
+/// What a kept list says of its binding and nothing of what it made, so a process beside the driver
+/// reads it opening no bucket.
+pub(crate) struct Held {
+	pub(crate) binding: Binding,
+	pub(crate) namespace: String,
+	pub(crate) forgotten: Vec<[u8; 32]>,
+}
+
+/// Each kept list as [`Held`] and why any was not read.
+pub(crate) fn held(directory: &Path) -> (Vec<Held>, Vec<String>) {
+	let mut held = Vec::new();
+	let mut unread = Vec::new();
+	let Ok(entries) = fs::read_dir(directory) else { return (held, unread) };
+	for entry in entries.map_while(Result::ok) {
+		let path = entry.path();
+		let named = path.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".json"));
+		let Some(binding) = named.and_then(|n| n.parse::<Binding>().ok()) else { continue };
+		let read = fs::read(&path)
+			.map_err(|e| e.to_string())
+			.and_then(|bytes| serde_json::from_slice::<Value>(&bytes).map_err(|e| e.to_string()))
+			.and_then(|json| {
+				let namespace = namespaced(binding, &json)?;
+				let hashes = json.get("forgotten").and_then(Value::as_array);
+				let hashes = hashes.ok_or("no list forgotten")?;
+				let forgotten = hashes.iter().filter_map(|t| t.as_str().and_then(unhex)).collect();
+				Ok(Held { binding, namespace, forgotten })
+			});
+		match read {
+			Ok(list) => held.push(list),
+			Err(why) => unread.push(format!("{}: {why}", path.display())),
+		}
+	}
+	held.sort_by_key(|list| list.binding);
+	(held, unread)
+}
+
 #[cfg(test)]
 mod tests {
 	use std::path::PathBuf;

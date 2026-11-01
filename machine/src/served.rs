@@ -467,7 +467,9 @@ async fn route(
 	let operation = parts.next().filter(|n| !n.is_empty()).unwrap_or("-");
 	let took = started.elapsed().as_secs_f64() * 1000.0;
 	eprintln!("{interface} {operation} {} {took:.1}ms", served.outcome);
-	(served.status, [(header::CONTENT_TYPE, served.form.media())], served.bytes).into_response()
+	let headers =
+		[(header::CONTENT_TYPE, served.form.media()), (header::SERVER, crate::health::SERVED_AS)];
+	(served.status, headers, served.bytes).into_response()
 }
 
 /// The machine's cores and memory as the kernel writes them, none where they are not read, so no

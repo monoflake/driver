@@ -32,7 +32,7 @@ columns = ["Driver", "Version", "Commit", "Architecture"]
 # Where the project's own name is a variable a user's code reads beside other vendors', the
 # workspace's docs/naming.md.
 [[names.data]]
-file = "machine/container/src/containers.rs"
+file = "machine/container/src/containers/wanted.rs"
 spelled = ["MONOFLAKE_FOOTING"]
 
 [[names.data]]

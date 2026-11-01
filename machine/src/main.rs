@@ -1,6 +1,7 @@
 //! `driver-machine`, serving a machine's management and kinds, as its command `entry` the entry,
-//! and as its command `bind` a host bound to its control, RFCs 8c0rg, vr5lw, rmll5 and rxmd9; this
-//! file is its interface, the model's, `docs/code.md`.
+//! as its command `bind` a host bound to its control, RFCs 8c0rg, vr5lw, rmll5 and rxmd9, and as
+//! its commands `snapshot` and `check` an update judged; this file is its interface, the model's,
+//! `docs/code.md`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -21,6 +22,7 @@ use envelope::contracts::{
 mod answer;
 mod bind;
 mod entry;
+mod health;
 mod kept;
 mod listed;
 mod served;
@@ -66,6 +68,10 @@ enum Command {
 	Entry(entry::Arguments),
 	/// The host bound to its control once, by the binding's token read from a file or stdin.
 	Bind(bind::Arguments),
+	/// What deployments stand, written by the version an update is about to replace.
+	Snapshot(health::SnapshotArguments),
+	/// Whether the version just restarted is healthy, by the snapshot where one was written.
+	Check(health::CheckArguments),
 }
 
 /// What the driver is started with, its address, its bindings' tokens, its state, and what the
@@ -231,11 +237,15 @@ async fn main() -> ExitCode {
 	match Program::parse() {
 		Program { command: Some(Command::Entry(arguments)), .. } => entry::run(arguments).await,
 		Program { command: Some(Command::Bind(arguments)), .. } => bind::run(arguments).await,
+		Program { command: Some(Command::Snapshot(arguments)), .. } => {
+			health::snapshot(arguments).await
+		}
+		Program { command: Some(Command::Check(arguments)), .. } => health::check(arguments).await,
 		Program { driver: Some(arguments), .. } => served::run(arguments).await,
 		Program { command: None, driver: None } => {
 			let mut program = <Program as clap::CommandFactory>::command();
 			let missing = clap::error::ErrorKind::MissingRequiredArgument;
-			program.error(missing, "the driver's arguments, or the command entry or bind").exit()
+			program.error(missing, "the driver's arguments, or a command").exit()
 		}
 	}
 }
