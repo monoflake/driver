@@ -9,7 +9,7 @@ open Faked_install
 let only = (kinds: option<string>) =>
   [
     ...credentials->Array.filter(((name, _)) =>
-      name != "DRIVER_KINDS" && name != "DATABASE_API_TOKEN"
+      name != "DRIVER_KINDS" && name != "CLOUDFLARE_DRIVER_DATABASE"
     ),
     ...kinds->Option.mapOr([], k => [("DRIVER_KINDS", k)]),
   ]

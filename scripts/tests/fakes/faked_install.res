@@ -36,8 +36,8 @@ let anotherAccount = "699d98642c564d2e855e9661899b7252"
 /** Install's own inputs, every kind offered, its parts placed in Western North America. */
 let credentials = [
   ("DRIVER_ACCOUNT_ID", accountId),
-  ("DRIVER_API_TOKEN", "the-driver-token"),
-  ("DATABASE_API_TOKEN", "the-database-token"),
+  ("CLOUDFLARE_DRIVER_SCRIPTS", "the-driver-token"),
+  ("CLOUDFLARE_DRIVER_DATABASE", "the-database-token"),
   ("DRIVER_KINDS", "function,object,database"),
   ("DRIVER_CONTROL_BASE", base),
   ("DRIVER_LOCATION", "wnam"),

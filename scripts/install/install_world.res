@@ -15,8 +15,8 @@ let bucketRole = "bucket"
 
 /** What it is given, read from the environment alone, as this repository is public. */
 let account = "DRIVER_ACCOUNT_ID"
-let driverToken = "DRIVER_API_TOKEN"
-let databaseToken = "DATABASE_API_TOKEN"
+let driverToken = "CLOUDFLARE_DRIVER_SCRIPTS"
+let databaseToken = "CLOUDFLARE_DRIVER_DATABASE"
 let kindsInput = "DRIVER_KINDS"
 /** Where the control's calls are sent, as the runner's `--base` names it, platform RFC 8j7b0. */
 let controlBase = "DRIVER_CONTROL_BASE"

@@ -93,7 +93,7 @@ test("a missing input is refused by its name before anything runs, none read in 
   let root = fixture()
   let env = [...ambient, ("DRIVER_ACCOUNT_ID", ""), ("DRIVER_CONTROL_BASE", base)]
   let faked = make(~env, ~answer=_ => Ok(""))
-  let names = "DRIVER_ACCOUNT_ID, DRIVER_API_TOKEN"
+  let names = "DRIVER_ACCOUNT_ID, CLOUDFLARE_DRIVER_SCRIPTS"
   deepEqual(
     Install.install(faked.world, ~dry=false, ~root),
     Error(`${names} unset in the environment, which alone gives them`),
@@ -120,23 +120,26 @@ test("DRIVER_ACCOUNT_ID unset is refused, though CLOUDFLARE_ACCOUNT_ID is set", 
   deepEqual(faked.ran, [])
 })
 
-test("DATABASE_API_TOKEN missing is refused by its name alone, and said in a dry run", () => {
-  let root = fixture()
-  let env = credentials->Array.filter(((name, _)) => name != "DATABASE_API_TOKEN")
-  let faked = make(~env, ~answer=_ => Ok(""))
-  deepEqual(
-    Install.install(faked.world, ~dry=false, ~root),
-    Error("DATABASE_API_TOKEN unset in the environment, which alone gives them"),
-  )
-  deepEqual(faked.ran, [])
-  let (faked, result) = dryOn(~env, empty(), root)
-  deepEqual(result, Ok())
-  ok(
-    faked.said->Array.includes(
-      "DATABASE_API_TOKEN unset in the environment, so a run not dry refuses",
-    ),
-  )
-})
+test(
+  "CLOUDFLARE_DRIVER_DATABASE missing is refused by its name alone, and said in a dry run",
+  () => {
+    let root = fixture()
+    let env = credentials->Array.filter(((name, _)) => name != "CLOUDFLARE_DRIVER_DATABASE")
+    let faked = make(~env, ~answer=_ => Ok(""))
+    deepEqual(
+      Install.install(faked.world, ~dry=false, ~root),
+      Error("CLOUDFLARE_DRIVER_DATABASE unset in the environment, which alone gives them"),
+    )
+    deepEqual(faked.ran, [])
+    let (faked, result) = dryOn(~env, empty(), root)
+    deepEqual(result, Ok())
+    ok(
+      faked.said->Array.includes(
+        "CLOUDFLARE_DRIVER_DATABASE unset in the environment, so a run not dry refuses",
+      ),
+    )
+  },
+)
 
 test("a first install makes each part in order, and a second changes nothing", () => {
   let root = fixture()
@@ -373,41 +376,46 @@ test("each Worker is built in its own directory before it is bundled", () => {
   })
 })
 
-test("DRIVER_API_TOKEN and DATABASE_API_TOKEN are in no command's environment", () => {
-  let root = fixture()
-  let (faked, result) = installed(empty(), root)
-  deepEqual(result, Ok())
-  ok(faked.ran->Array.length > 0)
-  faked.ran->Array.forEach(command => {
-    deepEqual(
-      command.env->Option.getOrThrow->Dict.get("DRIVER_API_TOKEN"),
-      None,
-      ~message=line(command),
-    )
-    deepEqual(
-      command.env->Option.getOrThrow->Dict.get("DATABASE_API_TOKEN"),
-      None,
-      ~message=line(command),
-    )
-    let values = command.env->Option.getOrThrow->Dict.valuesToArray
-    ok(
-      !(values->Array.includes("the-driver-token") || values->Array.includes("the-database-token")),
-      ~message=line(command),
-    )
-    let wrangler =
-      Host.basename(command.program) == "wrangler" && !(command.args->Array.includes("--dry-run"))
-    deepEqual(
-      (
-        command.env->Option.getOrThrow->Dict.get("CLOUDFLARE_API_TOKEN"),
-        command.env->Option.getOrThrow->Dict.get("CLOUDFLARE_ACCOUNT_ID"),
-      ),
-      (None, wrangler ? Some(accountId) : None),
-      ~message=line(command),
-    )
-  })
-  deepEqual(faked.world.env->Dict.get("DRIVER_API_TOKEN"), Some("the-driver-token"))
-  deepEqual(faked.world.env->Dict.get("DATABASE_API_TOKEN"), Some("the-database-token"))
-})
+test(
+  "CLOUDFLARE_DRIVER_SCRIPTS and CLOUDFLARE_DRIVER_DATABASE are in no command's environment",
+  () => {
+    let root = fixture()
+    let (faked, result) = installed(empty(), root)
+    deepEqual(result, Ok())
+    ok(faked.ran->Array.length > 0)
+    faked.ran->Array.forEach(command => {
+      deepEqual(
+        command.env->Option.getOrThrow->Dict.get("CLOUDFLARE_DRIVER_SCRIPTS"),
+        None,
+        ~message=line(command),
+      )
+      deepEqual(
+        command.env->Option.getOrThrow->Dict.get("CLOUDFLARE_DRIVER_DATABASE"),
+        None,
+        ~message=line(command),
+      )
+      let values = command.env->Option.getOrThrow->Dict.valuesToArray
+      ok(
+        !(
+          values->Array.includes("the-driver-token") || values->Array.includes("the-database-token")
+        ),
+        ~message=line(command),
+      )
+      let wrangler =
+        Host.basename(command.program) == "wrangler" && !(command.args->Array.includes("--dry-run"))
+      deepEqual(
+        (
+          command.env->Option.getOrThrow->Dict.get("CLOUDFLARE_API_TOKEN"),
+          command.env->Option.getOrThrow->Dict.get("CLOUDFLARE_ACCOUNT_ID"),
+        ),
+        (None, wrangler ? Some(accountId) : None),
+        ~message=line(command),
+      )
+    })
+    deepEqual(faked.world.env->Dict.get("CLOUDFLARE_DRIVER_SCRIPTS"), Some("the-driver-token"))
+    deepEqual(faked.world.env->Dict.get("CLOUDFLARE_DRIVER_DATABASE"), Some("the-database-token"))
+  },
+)
 
 /** An install whose commands are answered by the account, the one `failing` names failed. */
 let failedAt = (root, failing) => {
@@ -530,7 +538,10 @@ after(() => fixtures->Array.forEach(root => Host.rmSync(root, {recursive: true, 
 
 test("an unset placeholder is refused as a missing driver input", () => {
   let env =
-    credentials->Array.map(((name, value)) => (name, name == "DRIVER_API_TOKEN" ? "unset" : value))
+    credentials->Array.map(((name, value)) => (
+      name,
+      name == "CLOUDFLARE_DRIVER_SCRIPTS" ? "unset" : value,
+    ))
   let faked = make(~env, ~answer=_ => Error("no command expected"))
   ok(Install.install(faked.world, ~dry=false, ~root=fixture())->Result.isError)
   deepEqual(faked.ran, [])

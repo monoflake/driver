@@ -266,7 +266,7 @@ Decided by the author on 2026-10-23, from the research the Options below record.
     marker checked by every batch would close it, which waits on the author.
   - **A rewind is Time Travel's restore**, a REST call, by a token of its own holding D1 Edit
     alone, the Worker `database`'s secret `API_TOKEN`, which `install` reads from
-    `DATABASE_API_TOKEN`; the account's id and the database's are its variables. Thirty days are
+    `CLOUDFLARE_DRIVER_DATABASE`; the account's id and the database's are its variables. Thirty days are
     kept, the paid plan's.
   - **A database's size** is held two ways. Before a batch runs, its statements' and parameters'
     bytes are added to the size last read, and a batch that would pass the item's size is refused
@@ -304,7 +304,9 @@ Decided by the author on 2026-10-23, from the research the Options below record.
     wrangler command, a secret by its name alone.
   - **What it is given comes from the environment**, this repository being public: since
     2026-10-24 `DRIVER_ACCOUNT_ID` for itself, never the ambient `CLOUDFLARE_*` names, as the
-    Ledger has it, and the Worker `driver`'s `API_TOKEN` as `DRIVER_API_TOKEN`. Since 2026-10-31 it
+    Ledger has it, and the Worker `driver`'s `API_TOKEN` as `CLOUDFLARE_DRIVER_SCRIPTS`, named vendor
+    first since 2026-11-01 by the workspace's `docs/naming.md`, as `CLOUDFLARE_DRIVER_DATABASE` is.
+    Since 2026-10-31 it
     runs on the Mac's own wrangler login and is given no token of its own, the workspace's
     `docs/toolchain.md` having a task run only on the author's Mac use the author's logged-in CLIs. The binding's token is read on stdin, as `driver-machine bind` reads it,
     and put as `BINDING` by its BLAKE3, and with `DRIVER_CONTROL_BASE` install binds once every
@@ -356,12 +358,13 @@ Choices made provisionally while the thread runs, read by the author at its end.
   - install writes the marker first, in the same step that makes the database, before any other
     migration.
   - Every Worker gets the var `INSTALL_ID`, and the driver forms every name and address from it.
-- **`DATABASE_API_TOKEN` is asked for only where `database` is offered**, provisional, chosen by the
+- **`CLOUDFLARE_DRIVER_DATABASE` is asked for only where `database` is offered**, provisional, chosen by the
   advisor on 2026-10-24.
 - **Install never reads the ambient `CLOUDFLARE_*` names**, provisional, chosen by the advisor on
   2026-10-24, since a repository's environment may hold the platform's own account, which is never
-  bound, RFC v7v3w.
-  - It reads `DRIVER_ACCOUNT_ID` for itself and `DRIVER_API_TOKEN` for the Worker.
+  bound, RFC v7v3w. The two Workers' tokens, `CLOUDFLARE_DRIVER_SCRIPTS` and
+  `CLOUDFLARE_DRIVER_DATABASE`, are its own and no ambient name, their `DRIVER` naming the holder.
+  - It reads `DRIVER_ACCOUNT_ID` for itself and `CLOUDFLARE_DRIVER_SCRIPTS` for the Worker.
   - It hands wrangler `CLOUDFLARE_ACCOUNT_ID` only in the environment of its own child processes,
     set from `DRIVER_ACCOUNT_ID`, and no `CLOUDFLARE_API_TOKEN`, so wrangler runs on the Mac's own
     login, `HOME` kept for it to find, and an ambient value never reaches wrangler.
