@@ -21,11 +21,11 @@ jobs:
           path: monoflake/driver
       # The platform at its pin, both installs and cargo's cache, held by .github/actions/setup.
       - uses: ./repos/monoflake/driver/.github/actions/setup
-      - name: build
+      - name: Build
         working-directory: repos/monoflake/driver
         run: mise run archive
       # The two archives alone, at the artifact's root, under the name the ring workflow downloads.
-      - name: upload
+      - name: Upload
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: driver-machine

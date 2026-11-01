@@ -19,11 +19,11 @@ runs:
         ref: 19f13719b553ec6150fad522bca60d6ec25b9b8e # monoflake/platform@main
         path: repos/monoflake/platform
         persist-credentials: false
-    - name: install platform
+    - name: Install platform
       shell: bash
       working-directory: repos/monoflake/platform
       run: pnpm install --frozen-lockfile
-    - name: install driver
+    - name: Install driver
       shell: bash
       working-directory: repos/monoflake/driver
       run: pnpm install --frozen-lockfile

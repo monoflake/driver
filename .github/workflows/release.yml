@@ -35,7 +35,7 @@ jobs:
           cache: "false"
       # Nothing is built where a release's manifest.json lists machine/Cargo.toml's version already.
       # The token is held only by a step that calls gh, and the public releases are read without it.
-      - name: source version
+      - name: Source version
         id: source
         working-directory: repos/monoflake/driver
         run: mise run ready
@@ -46,24 +46,24 @@ jobs:
         with:
           workspaces: repos/monoflake/driver -> target
           shared-key: driver-machine
-      - name: build
+      - name: Build
         if: steps.source.outputs.ready == 'true'
         working-directory: repos/monoflake/driver
         run: mise run archive
-      - name: version
+      - name: Version
         if: steps.source.outputs.ready == 'true'
         working-directory: repos/monoflake/driver
         env:
           GH_TOKEN: ${{ github.token }}
         run: mise run versioned
-      - name: release
+      - name: Release
         if: steps.source.outputs.ready == 'true'
         working-directory: repos/monoflake/driver
         env:
           GH_TOKEN: ${{ github.token }}
         run: mise run release
       # With nothing to release, each day's notes are still rendered again from its manifest.json.
-      - name: notes
+      - name: Notes
         if: steps.source.outputs.ready != 'true'
         working-directory: repos/monoflake/driver
         env:
