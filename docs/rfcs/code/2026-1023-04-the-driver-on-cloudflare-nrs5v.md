@@ -303,9 +303,10 @@ Decided by the author on 2026-10-23, from the research the Options below record.
     nothing changed, and each secret put only where its name is missing; `--dry-run` prints each
     wrangler command, a secret by its name alone.
   - **What it is given comes from the environment**, this repository being public: since
-    2026-10-24 `DRIVER_ACCOUNT_ID` and `DRIVER_INSTALL_TOKEN` for itself, never the ambient
-    `CLOUDFLARE_*` names, as the Ledger has it, and the Worker `driver`'s `API_TOKEN` as
-    `DRIVER_API_TOKEN`. The binding's token is read on stdin, as `driver-machine bind` reads it,
+    2026-10-24 `DRIVER_ACCOUNT_ID` for itself, never the ambient `CLOUDFLARE_*` names, as the
+    Ledger has it, and the Worker `driver`'s `API_TOKEN` as `DRIVER_API_TOKEN`. Since 2026-10-31 it
+    runs on the Mac's own wrangler login and is given no token of its own, the workspace's
+    `docs/toolchain.md` having a task run only on the author's Mac use the author's logged-in CLIs. The binding's token is read on stdin, as `driver-machine bind` reads it,
     and put as `BINDING` by its BLAKE3, and with `DRIVER_CONTROL_BASE` install binds once every
     Worker is deployed, monoflake/platform's RFC 8j7b0; the token and the base go both or neither,
     and with neither both steps are passed over.
@@ -360,10 +361,10 @@ Choices made provisionally while the thread runs, read by the author at its end.
 - **Install never reads the ambient `CLOUDFLARE_*` names**, provisional, chosen by the advisor on
   2026-10-24, since a repository's environment may hold the platform's own account, which is never
   bound, RFC v7v3w.
-  - It reads `DRIVER_ACCOUNT_ID` and `DRIVER_INSTALL_TOKEN` for itself and `DRIVER_API_TOKEN` for
-    the Worker.
-  - It hands wrangler `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` only in the environment of
-    its own child processes, set from those, so an ambient value never reaches wrangler.
+  - It reads `DRIVER_ACCOUNT_ID` for itself and `DRIVER_API_TOKEN` for the Worker.
+  - It hands wrangler `CLOUDFLARE_ACCOUNT_ID` only in the environment of its own child processes,
+    set from `DRIVER_ACCOUNT_ID`, and no `CLOUDFLARE_API_TOKEN`, so wrangler runs on the Mac's own
+    login, `HOME` kept for it to find, and an ambient value never reaches wrangler.
   - It refuses to run when `DRIVER_ACCOUNT_ID` is unset, rather than falling back.
   - Every `CF_*` name is stripped from a child's environment as well, and wrangler is kept from
     reading `.env` files, since wrangler 4 still reads the older names and loads `.env` and
@@ -426,7 +427,9 @@ Choices made provisionally while the thread runs, read by the author at its end.
     yours". It is still never touched, and a non-conflicting id is drawn.
 - **curl for List Workers, the token on stdin as a header**, provisional, chosen by the advisor on
   2026-10-24, wrangler listing no Workers, and since RFC 8j7b0 to read the account's Workers
-  subdomain and to call the control's `bind`. If paging exists, install reads every page before
+  subdomain and to call the control's `bind`. Since 2026-10-31 the bearer of the two calls to
+  Cloudflare's API is the Mac's wrangler login, its token read by `wrangler auth token --json` at
+  run time before each call, handed to curl on stdin alone and never kept or printed. If paging exists, install reads every page before
   deciding anything; a list it could not read whole counts as a failed read-only check, so install
   stops with nothing changed.
 - **`delete` answers Success with no Cloudflare call when `KINDS` lacks `function`**, provisional,

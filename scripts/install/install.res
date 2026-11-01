@@ -95,7 +95,6 @@ let inputsOf = (w, ~dry) =>
   ->then(offered => {
     let needed = [
       account,
-      installToken,
       driverToken,
       ...offered->Array.includes("database") ? [databaseToken] : [],
     ]
@@ -375,7 +374,7 @@ let install = (w, ~dry, ~root=root) =>
               }
               // Bound once every Worker is deployed, the Worker `driver` answering the call back.
               installed->then(
-                () => Install_bind.bound(w, ~dry, ~bind, ~worker=nameOf(install, "driver")),
+                () => Install_bind.bound(w, ~dry, ~root, ~bind, ~worker=nameOf(install, "driver")),
               )
             },
           ),

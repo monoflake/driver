@@ -156,7 +156,7 @@ let passedOver = (w, ~foreign, ~empty, ~records: array<(string, string)>) => {
 }
 
 /** The Workers the account holds, by Cloudflare's documented List Workers, read alone. */
-let workersList = (w, ~root) => {
+let workersList = (w, ~root, ~bearer) => {
   program: "curl",
   // `-q` first, so curl reads no .curlrc.
   args: [
@@ -171,8 +171,8 @@ let workersList = (w, ~root) => {
       )}/workers/scripts`,
   ],
   cwd: root,
-  // The token reaches curl on stdin alone, as a header, never in an argument.
-  input: `Authorization: Bearer ${value(w.env, installToken)->Option.getOr("")}`,
+  // The login's token reaches curl on stdin alone, as a header, never in an argument.
+  input: `Authorization: Bearer ${bearer}`,
   env: quiet(w.env),
 }
 
@@ -289,7 +289,8 @@ let leftOver = (w, ~databases, ~workers) => {
 
 /** The account's Workers, by List Workers read whole, each left over from the old naming said. */
 let workersOf = (w, ~root, ~databases) =>
-  w.run(workersList(w, ~root))
+  bearer(w, ~root)
+  ->then(bearer => w.run(workersList(w, ~root, ~bearer)))
   ->then(listedWorkers)
   ->Result.map(workers => {
     leftOver(w, ~databases, ~workers)
@@ -330,7 +331,7 @@ let recovered = (w, ~dry, ~root) => {
       empty: [],
       workers: [],
     })
-    switch [account, installToken]->Array.filter(name => value(w.env, name) == None) {
+    switch [account]->Array.filter(name => value(w.env, name) == None) {
     | [] =>
       switch surveyed(w, ~root) {
       | Ok(survey) =>
@@ -339,7 +340,8 @@ let recovered = (w, ~dry, ~root) => {
           | None =>
             let none = "d1 list names no driver's D1 holding its marker"
             w.say(`${none}, so a new install id would be drawn`)
-            w.say(`  by ${shown(workersList(w, ~root))}, again while a D1 or a Worker is so named`)
+            let list = shown(workersList(w, ~root, ~bearer=""))
+            w.say(`  by ${list}, again while a D1 or a Worker is so named`)
           | Some(id) => w.say(`d1 list names ${id}, so the install id ${id} would be reused`)
           }
           switch workersOf(w, ~root, ~databases=found.names) {

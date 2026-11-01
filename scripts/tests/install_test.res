@@ -10,7 +10,10 @@ test("a dry run reads the D1 and Workers lists alone, writes nothing and shows n
   let root = fixture()
   let (faked, result) = dryOn(empty(), root)
   deepEqual(result, Ok())
-  deepEqual((plain(faked), faked.scratched), (["wrangler d1 list --json", workersListed], []))
+  deepEqual(
+    (plain(faked), faked.scratched),
+    (["wrangler d1 list --json", loginRead, workersListed], []),
+  )
   ok(!shows(faked), ~message="a secret was said")
   ok(moments(root)->Array.every(path => !Host.existsSync(path)))
   ok(
@@ -73,15 +76,15 @@ test("a dry run that cannot read the account prints the rule and says why", () =
   let (unread, result) = dryOn(~answer=_ => Ok("not JSON"), empty(), fixture())
   deepEqual(result, Ok())
   ok(unread.said->Array.some(l => l->String.includes("d1 list printed no JSON array")))
-  let env = credentials->Array.filter(((name, _)) => name != "DRIVER_INSTALL_TOKEN")
+  let env = credentials->Array.filter(((name, _)) => name != "DRIVER_ACCOUNT_ID")
   let (unset, result) = dryOn(~env, empty(), fixture())
   deepEqual(result, Ok())
   deepEqual(unset.ran, [])
-  ok(unset.said->Array.includes("the install id is not known, as DRIVER_INSTALL_TOKEN unset;"))
+  ok(unset.said->Array.includes("the install id is not known, as DRIVER_ACCOUNT_ID unset;"))
   ok(unset.said->Array.includes(rule))
   ok(
     unset.said->Array.includes(
-      "DRIVER_INSTALL_TOKEN unset in the environment, so a run not dry refuses",
+      "DRIVER_ACCOUNT_ID unset in the environment, so a run not dry refuses",
     ),
   )
 })
@@ -90,7 +93,7 @@ test("a missing input is refused by its name before anything runs, none read in 
   let root = fixture()
   let env = [...ambient, ("DRIVER_ACCOUNT_ID", ""), ("DRIVER_CONTROL_BASE", base)]
   let faked = make(~env, ~answer=_ => Ok(""))
-  let names = "DRIVER_ACCOUNT_ID, DRIVER_INSTALL_TOKEN, DRIVER_API_TOKEN"
+  let names = "DRIVER_ACCOUNT_ID, DRIVER_API_TOKEN"
   deepEqual(
     Install.install(faked.world, ~dry=false, ~root),
     Error(`${names} unset in the environment, which alone gives them`),
@@ -398,7 +401,7 @@ test("DRIVER_API_TOKEN and DATABASE_API_TOKEN are in no command's environment", 
         command.env->Option.getOrThrow->Dict.get("CLOUDFLARE_API_TOKEN"),
         command.env->Option.getOrThrow->Dict.get("CLOUDFLARE_ACCOUNT_ID"),
       ),
-      wrangler ? (Some("the-install-token"), Some(accountId)) : (None, None),
+      (None, wrangler ? Some(accountId) : None),
       ~message=line(command),
     )
   })

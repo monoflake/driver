@@ -36,7 +36,6 @@ let anotherAccount = "699d98642c564d2e855e9661899b7252"
 /** Install's own inputs, every kind offered, its parts placed in Western North America. */
 let credentials = [
   ("DRIVER_ACCOUNT_ID", accountId),
-  ("DRIVER_INSTALL_TOKEN", "the-install-token"),
   ("DRIVER_API_TOKEN", "the-driver-token"),
   ("DATABASE_API_TOKEN", "the-database-token"),
   ("DRIVER_KINDS", "function,object,database"),
@@ -53,7 +52,7 @@ let ambient = [
 
 /** Every value no argument and no line said may hold. */
 let secrets = [
-  "the-install-token",
+  loginToken,
   "the-ambient-token",
   "the-driver-token",
   "the-database-token",
@@ -146,10 +145,11 @@ let subdomainRead = [
 ]->Array.join("")
 let origin = "https://1b2c3d4e.my-subdomain.workers.dev"
 let bindLine = line(Install_bind.bindCall(~token="", ~base, ~origin, ~env=dict{}))
-let bound = [subdomainRead, bindLine]
+let bound = [loginRead, subdomainRead, bindLine]
 
 let first = [
   "wrangler d1 list --json",
+  loginRead,
   workersListed,
   "wrangler r2 bucket list",
   "wrangler d1 list --json",
@@ -191,6 +191,7 @@ let again = [
   tablesRead("0a1b2c3d"),
   markerRead("0a1b2c3d"),
   tablesRead("5f6a7b8c"),
+  loginRead,
   workersListed,
   recordsRead("0a1b2c3d"),
   "wrangler d1 list --json",
@@ -226,6 +227,7 @@ let moments = root => [
 let reads = command => {
   let l = line(command)
   l == "wrangler d1 list --json" ||
+  l == loginRead ||
   l == workersListed ||
   (l->String.startsWith("wrangler d1 execute ") &&
     [

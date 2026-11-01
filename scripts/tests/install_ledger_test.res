@@ -52,7 +52,10 @@ test("more than one marked D1 is refused by name, and nothing is made", () => {
 test("a drawn id not of the id form is refused before anything is made", () => {
   let (faked, result) = installed(~draws=[], ~drawn="0A1B2C3D", empty(), fixture())
   deepEqual(result, Error("an install id drawn is not 8 lowercase hex digits, 0A1B2C3D"))
-  deepEqual(plain(faked), ["wrangler d1 list --json", workersListed, "wrangler r2 bucket list"])
+  deepEqual(
+    plain(faked),
+    ["wrangler d1 list --json", loginRead, workersListed, "wrangler r2 bucket list"],
+  )
 })
 
 /** Names drawn past those the faked account holds, each part's in turn. */
@@ -271,7 +274,47 @@ test("a Workers list that cannot be read stops install before anything is made",
   )
   unchanged(faked)
   let listing = faked.ran->Array.find(c => line(c) == workersListed)
-  deepEqual(listing->Option.flatMap(c => c.input), Some("Authorization: Bearer the-install-token"))
+  deepEqual(listing->Option.flatMap(c => c.input), Some(loginBearer))
+})
+
+test("the login's token is read fresh for each API call and reaches curl on stdin alone", () => {
+  let (faked, result) = installed(empty(), fixture())
+  deepEqual(result, Ok())
+  ok(!shows(faked), ~message="the login's token was said or given as an argument")
+  let lines = plain(faked)
+  let api = (c: Install_world.command) =>
+    c.args->Array.at(-1)->Option.getOr("")->String.startsWith("https://api.cloudflare.com/")
+  let calls = faked.ran->Array.filter(api)
+  deepEqual(Array.length(calls), 2)
+  calls->Array.forEach(c => deepEqual(c.input, Some(loginBearer), ~message=line(c)))
+  faked.ran->Array.forEachWithIndex((c, at) => {
+    let given = c.input->Option.getOr("")->String.includes(loginToken)
+    deepEqual(given, api(c), ~message=line(c))
+    if api(c) {
+      deepEqual(lines->Array.get(at - 1), Some(loginRead), ~message=line(c))
+    }
+  })
+})
+
+test("a wrangler not logged in stops install before anything is made", () => {
+  let account = empty()
+  let notLoggedIn = "Not logged in. Please run `wrangler login` to authenticate."
+  let faked = make(~answer=command =>
+    line(command) == loginRead ? Error(notLoggedIn) : answered(account, command)
+  )
+  deepEqual(Install.install(faked.world, ~dry=false, ~root=fixture()), Error(notLoggedIn))
+  unchanged(faked)
+  ok(plain(faked)->Array.every(l => l != workersListed))
+  let keyed = `{"type": "api_key", "key": "the-global-key", "email": "author@example.com"}`
+  let faked = make(~answer=command =>
+    line(command) == loginRead ? Ok(keyed) : answered(account, command)
+  )
+  deepEqual(
+    Install.install(faked.world, ~dry=false, ~root=fixture()),
+    Error("wrangler auth token answered no token, so run wrangler login first"),
+  )
+  unchanged(faked)
+  ok(faked.said->Array.every(l => !(l->String.includes("the-global-key"))))
 })
 
 test("curl is given -q first, so it reads no .curlrc", () => {

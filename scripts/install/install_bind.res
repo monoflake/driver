@@ -84,8 +84,8 @@ let bindOf = (w, ~token: option<string>) =>
   | (Some(token), Some(base)) => baseOf(base)->Result.map(base => Some((token, base)))
   }
 
-/** The account's workers.dev subdomain, read by curl with the install token on stdin. */
-let subdomainRead = w => {
+/** The account's workers.dev subdomain, read by curl with the login's bearer on stdin. */
+let subdomainRead = (w, ~bearer) => {
   program: "curl",
   args: [
     "-q",
@@ -103,7 +103,7 @@ let subdomainRead = w => {
       )}/workers/subdomain`,
   ],
   cwd: ".",
-  input: `Authorization: Bearer ${value(w.env, installToken)->Option.getOr("")}`,
+  input: `Authorization: Bearer ${bearer}`,
   env: quiet(w.env),
 }
 
@@ -203,22 +203,24 @@ let answeredBy = (body, ~sent) =>
   }
 
 /** The binding bound to the origin of the Worker `worker`, or the bind passed over. */
-let bound = (w, ~dry, ~bind, ~worker) =>
+let bound = (w, ~dry, ~root, ~bind, ~worker) =>
   switch bind {
   | None =>
     w.say(`no token on stdin and no ${controlBase}, so the bind is passed over`)
     Ok()
   | Some((token, base)) =>
-    let read = subdomainRead(w)
     if dry {
       let origin = `https://${worker}.<the account's subdomain>.workers.dev`
-      w.say(`would run ${shown(read)}, and bind the origin ${origin}`)
+      let read = subdomainRead(w, ~bearer="")
+      w.say(`would run ${shown(loginRead(w, ~root))} and ${shown(read)}`)
+      w.say(`  the login's token on stdin as a bearer, and bind the origin ${origin}`)
       let call = bindCall(~token, ~base, ~origin, ~env=w.env)
       w.say(`would run ${shown(call)}`)
       w.say(`  the token as ${binding} by its name alone, on stdin as a bearer`)
       Ok()
     } else {
-      w.run(read)
+      bearer(w, ~root)
+      ->then(bearer => w.run(subdomainRead(w, ~bearer)))
       ->then(subdomainOf)
       ->then(subdomain => originOf(`https://${worker}.${subdomain}.workers.dev`))
       ->then(origin =>

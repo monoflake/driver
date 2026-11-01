@@ -24,6 +24,7 @@ test(
       plain(faked),
       [
         "wrangler d1 list --json",
+        loginRead,
         workersListed,
         "wrangler d1 list --json",
         "wrangler d1 create 0a1b2c3d --location wnam",
@@ -103,11 +104,11 @@ test("no ambient CLOUDFLARE_ name reaches a command, wrangler given install's ow
       ~message=line(command),
     )
     deepEqual(command.env->Option.getOrThrow->Dict.get("CLOUDFLARE_EMAIL"), None)
-    deepEqual(command.env->Option.getOrThrow->Dict.get("DRIVER_INSTALL_TOKEN"), None)
+    deepEqual(command.env->Option.getOrThrow->Dict.get("CLOUDFLARE_API_TOKEN"), None)
   })
   ok(
     faked.ran->Array.some(c =>
-      c.env->Option.getOrThrow->Dict.get("CLOUDFLARE_API_TOKEN") == Some("the-install-token")
+      c.env->Option.getOrThrow->Dict.get("CLOUDFLARE_ACCOUNT_ID") == Some(accountId)
     ),
   )
 })
@@ -215,11 +216,7 @@ test("a command is given the allowed names alone from install's environment, not
       Host.basename(command.program) == "wrangler" && !(command.args->Array.includes("--dry-run"))
     deepEqual(env->Dict.get("CONTROL_SECRET"), None, ~message=line(command))
     deepEqual(env->Dict.get("AWS_SECRET_ACCESS_KEY"), None, ~message=line(command))
-    deepEqual(
-      env->Dict.get("CLOUDFLARE_API_TOKEN"),
-      wrangler ? Some("the-install-token") : None,
-      ~message=line(command),
-    )
+    deepEqual(env->Dict.get("CLOUDFLARE_API_TOKEN"), None, ~message=line(command))
     deepEqual(
       (env->Dict.get("PATH"), env->Dict.get("HOME")),
       (Some("/usr/bin:/bin"), Some("/home/someone")),
@@ -232,7 +229,7 @@ test("a command is given the allowed names alone from install's environment, not
         "PATH",
         "WRANGLER_SEND_METRICS",
         "CLOUDFLARE_CF_FETCH_ENABLED",
-        ...wrangler ? ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"] : [],
+        ...wrangler ? ["CLOUDFLARE_ACCOUNT_ID"] : [],
       ]->Array.toSorted(String.compare)
     deepEqual(names, expected, ~message=line(command))
   })

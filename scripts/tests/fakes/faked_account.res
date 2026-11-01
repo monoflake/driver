@@ -112,6 +112,13 @@ let recordsRead = name =>
 let recordsWritten = (name, records) =>
   `wrangler d1 execute ${name} --remote --command ${Install_ledger.recordsWrite(records)}`
 
+/** The token the Mac's faked wrangler login holds, and the read install takes it by. */
+let loginToken = "the-login-token"
+let loginRead = "wrangler auth token --json"
+
+/** What curl is given on stdin for a call of Cloudflare's API, the login's bearer alone. */
+let loginBearer = `Authorization: Bearer ${loginToken}`
+
 /** The Workers list, by curl and the documented account id. */
 let workersListed = [
   "curl -q --silent --show-error --fail-with-body --header @- ",
@@ -198,6 +205,14 @@ let answered = (account, command: Install_world.command) => {
       ),
     )
   | ("rescript", list{"build"}) => Ok("")
+  | ("wrangler", list{"auth", "token", "--json"}) =>
+    Ok(`{\n  "type": "oauth",\n  "token": "${loginToken}"\n}`)
+  | ("curl", _)
+    if command.args
+    ->Array.at(-1)
+    ->Option.getOr("")
+    ->String.startsWith("https://api.cloudflare.com/") && command.input != Some(loginBearer) =>
+    Error(`${line(command)} given no login's bearer on stdin`)
   | ("curl", _) if command.args->Array.at(-1)->Option.getOr("")->String.endsWith("/subdomain") =>
     Ok(`{"success": true, "errors": [], "messages": [], "result": {"subdomain": "my-subdomain"}}`)
   | ("curl", _) if command.args->Array.at(-1)->Option.getOr("")->String.startsWith(base) =>

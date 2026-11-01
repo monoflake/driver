@@ -15,15 +15,14 @@ let bucketRole = "bucket"
 
 /** What it is given, read from the environment alone, as this repository is public. */
 let account = "DRIVER_ACCOUNT_ID"
-let installToken = "DRIVER_INSTALL_TOKEN"
 let driverToken = "DRIVER_API_TOKEN"
 let databaseToken = "DATABASE_API_TOKEN"
 let kindsInput = "DRIVER_KINDS"
 /** Where the control's calls are sent, as the runner's `--base` names it, platform RFC 8j7b0. */
 let controlBase = "DRIVER_CONTROL_BASE"
 
-/** The names wrangler reads, set in its own environment alone and never read from install's. */
-let wranglerToken = "CLOUDFLARE_API_TOKEN"
+/** The name wrangler reads its account by, set in its own environment alone and never read from
+ * install's; wrangler runs on the Mac's own login. */
 let wranglerAccount = "CLOUDFLARE_ACCOUNT_ID"
 
 /** The kinds the driver may offer, `function` alone where `DRIVER_KINDS` names none. */
@@ -90,10 +89,10 @@ let parsed = Worker_install.parsed
 /** The place `DRIVER_LOCATION` names, where it names one of `locations`. */
 let placeOf = env => value(env, location)->Option.filter(hint => locations->Array.includes(hint))
 
-/** The environment wrangler runs in, its account and token set from install's own inputs. */
+/** The environment wrangler runs in, its account set from install's own input, `HOME` kept so
+ * wrangler finds its login. */
 let accounted = env => {
   let given = quiet(env)
-  given->Dict.set(wranglerToken, value(env, installToken)->Option.getOr(""))
   given->Dict.set(wranglerAccount, value(env, account)->Option.getOr(""))
   given
 }
@@ -107,6 +106,19 @@ let wrangler = (~root, ~cwd, ~env, arguments) =>
     arguments,
   )
 
-/** A command of the account's, given install's own account and token alone. */
+/** A command of the account's, given install's own account alone. */
 let commanded = (w, ~root, ~cwd, arguments) =>
   wrangler(~root, ~cwd, ~env=accounted(w.env), arguments)
+
+/** The read of the Mac's own wrangler login, its token printed as JSON. */
+let loginRead = (w, ~root) => commanded(w, ~root, ~cwd=root, ["auth", "token", "--json"])
+
+/** The token a login read answers, its answer never said since it holds the token. */
+let bearerOf = body =>
+  switch parsed(body)->Option.flatMap(json => json->text("token")) {
+  | Some(token) if token != "" => Ok(token)
+  | Some(_) | None => Error("wrangler auth token answered no token, so run wrangler login first")
+  }
+
+/** The bearer of the Mac's wrangler login, read fresh for each call and never kept. */
+let bearer = (w, ~root) => w.run(loginRead(w, ~root))->then(bearerOf)
