@@ -1,13 +1,9 @@
 # Releases driver-machine at the version machine/Cargo.toml names, once, by the workspace's
-# scripts/release, on a push to main, by hand, and each day for a push's run that failed, RFC 8c0rg.
+# scripts/release, by hand alone, so a version rising publishes nothing by itself.
 name: release
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
-  schedule:
-    - cron: "31 6 * * *"
 
 # A run started while another builds waits behind it in order, up to a hundred deep, and none is
 # canceled, so two never race to release one day, as runtime's publish queues.
