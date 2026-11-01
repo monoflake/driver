@@ -151,6 +151,35 @@ let reached = (~holds=holds, ~fetch=fetched, commits) => {
   }
 }
 
+// The setup action pins the contracts used to infer a minor raise.
+let served = (
+  ~read=file,
+  ~current=current,
+  ~reach=commits => reached(commits),
+  ~source=() => Archive.readFileSync(Archive.join([Archive.root, "machine", "src", "served.rs"])),
+  (),
+) =>
+  switch platform(current()) {
+  | None => Error(`${setup} pins no platform commit`)
+  | Some(now) =>
+    switch reach([now]) {
+    | Error(unknown) =>
+      Versioned.warn(
+        `monoflake/platform lacks ${unknown->Array.join(
+            ", ",
+          )} even after a fetch, so its served interface versions were not read; the patch is raised at least`,
+      )
+      Ok(Dict.make())
+    | Ok() =>
+      read(~cwd=sibling, ~from=now, "model/contracts.json")->Result.flatMap(text =>
+        switch JSON.parseOrThrow(text) {
+        | contracts => Ok(Versioned.interfaces(~source=source(), ~contracts))
+        | exception JsExn(_) => Error("the pinned platform contracts are not JSON")
+        }
+      )
+    }
+  }
+
 /** What changed since the last release, the driver's own inputs and the platform's, and the
  * platform commits that could not be read even after a fetch, where the platform is not known. */
 type compared = {own: bool, shared: bool, unknown: array<string>}

@@ -410,18 +410,89 @@ test("bump stops at a refusal and says nothing after it", () => {
     JSON.parseOrThrow(`{"name":"driver-machine","version":"${version}","commit":"released"}`),
   ])
   let since = _ => Ok((true, []))
+  let served = () => Ok(serves)
   let write = (~manifest as _, _) => Error("Cargo.lock could not be synchronized")
   let code = ref(0)
-  let lines = printed(() => code := exited(() => Bump.main(~listed, ~since, ~write, ())))
+  let lines = printed(() => code := exited(() => Bump.main(~listed, ~since, ~served, ~write, ())))
   deepEqual(code.contents, 1)
   deepEqual(lines, ["built: Cargo.lock could not be synchronized"])
   let write = (~manifest as _, _) => Ok()
-  let lines = printed(() => code := exited(() => Bump.main(~listed, ~since, ~write, ())))
+  let lines = printed(() => code := exited(() => Bump.main(~listed, ~since, ~served, ~write, ())))
   deepEqual(code.contents, 0)
   ok(
     lines->Array.length == 1 &&
       lines->Array.getUnsafe(0)->String.startsWith(`driver-machine ${version} -> `),
   )
+})
+
+test("bump infers served interface raises from the setup pin before the local contracts", () => {
+  let version = Archive.version()->Option.getOr("")
+  let entry = JSON.parseOrThrow(
+    `{"name":"driver-machine","version":"${version}","interfaces":{"management":1}}`,
+  )
+  let listed = () => Ok([entry])
+  let since = _ => Ok((true, []))
+  [1, 2]->Array.forEach(interface => {
+    let asked = []
+    let read = (~cwd, ~from, path) => {
+      asked->Array.push((cwd, from, path))
+      Ok(`{"interfaces":{"management":{"version":${interface->Int.toString}}}}`)
+    }
+    let served = () =>
+      Inputs.served(
+        ~read,
+        ~current=() => pinning(now),
+        ~reach=present,
+        ~source=() => `const SERVED: &str = "management";`,
+        (),
+      )
+    let written = ref(None)
+    let write = (~manifest, next) => {
+      deepEqual(manifest, version)
+      written := Some(next)
+      Ok()
+    }
+    deepEqual(exited(() => Bump.main(~listed, ~since, ~served, ~write, ())), 0)
+    deepEqual(asked, [(Inputs.sibling, now, "model/contracts.json")])
+    deepEqual(
+      written.contents,
+      Versioned.next(
+        ~manifest=version,
+        ~last=Some(Inputs.recorded(entry)),
+        ~serves=dict{"management": interface},
+      ),
+    )
+  })
+})
+
+test("bump keeps the patch fallback for an unreadable pin and refuses unreadable contracts", () => {
+  let read = (~cwd as _, ~from as _, _) => {
+    ok(false, ~message="a missing pin must not read local contracts")
+    Error("not reached")
+  }
+  let result = ref(Error("not run"))
+  let lines = printed(() =>
+    result := Inputs.served(~read, ~current=() => pinning(now), ~reach=_ => Error([now]), ())
+  )
+  deepEqual(result.contents, Ok(Dict.make()))
+  deepEqual(lines->Array.length, 1)
+  [Error("contracts could not be read"), Ok("{")]->Array.forEach(answer => {
+    let served = () =>
+      Inputs.served(
+        ~read=(~cwd as _, ~from as _, _) => answer,
+        ~current=() => pinning(now),
+        ~reach=present,
+        (),
+      )
+    ok(served()->Result.isError)
+    let version = Archive.version()->Option.getOr("")
+    let listed = () => Ok([JSON.parseOrThrow(`{"name":"driver-machine","version":"${version}"}`)])
+    let write = (~manifest as _, _) => {
+      ok(false, ~message="unreadable contracts must leave the version unchanged")
+      Ok()
+    }
+    deepEqual(exited(() => Bump.main(~listed, ~since=_ => Ok((true, [])), ~served, ~write, ())), 0)
+  })
 })
 
 test("release membership delegates the name and version and keeps lookup errors", () => {

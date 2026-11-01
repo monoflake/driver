@@ -108,11 +108,7 @@ let holds = version =>
 
 /** The interfaces the program serves, as served.rs names them, each at the version
  * monoflake/platform's contracts give it. */
-let served = () => {
-  let source = Archive.readFileSync(Archive.join([root, "machine", "src", "served.rs"]))
-  let contracts = JSON.parseOrThrow(
-    Archive.readFileSync(Archive.join([root, "..", "platform", "model", "contracts.json"])),
-  )
+let interfaces = (~source, ~contracts) => {
   switch /const SERVED: &str = "([^"]*)";/->RegExp.exec(source) {
   | Some(found) =>
     found
@@ -134,6 +130,14 @@ let served = () => {
   | None => Dict.make()
   }
 }
+
+let served = () =>
+  interfaces(
+    ~source=Archive.readFileSync(Archive.join([root, "machine", "src", "served.rs"])),
+    ~contracts=JSON.parseOrThrow(
+      Archive.readFileSync(Archive.join([root, "..", "platform", "model", "contracts.json"])),
+    ),
+  )
 
 /** What every published release here lists, read by the workspace's scripts/release. */
 let listed = () =>

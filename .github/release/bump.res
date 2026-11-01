@@ -42,7 +42,13 @@ let written = (~manifest, version) => {
   }
 }
 
-let main = (~listed=Versioned.listed, ~since=entry => since(entry), ~write=written, ()) =>
+let main = (
+  ~listed=Versioned.listed,
+  ~since=entry => since(entry),
+  ~served=() => Inputs.served(),
+  ~write=written,
+  (),
+) =>
   switch (Archive.version(), listed()) {
   | (None, _) => Versioned.refuse("machine/Cargo.toml names no version")
   | (_, Error(why)) => Versioned.unread(why, ~undone)
@@ -51,19 +57,23 @@ let main = (~listed=Versioned.listed, ~since=entry => since(entry), ~write=writt
     switch last->Option.mapOr(Ok((false, [])), since) {
     | Error(why) => Versioned.unread(why, ~undone)
     | Ok((changed, messages)) =>
-      switch Versioned.bumped(
-        ~manifest,
-        ~last=last->Option.map(Inputs.recorded),
-        ~serves=Versioned.served(),
-        ~messages,
-        ~changed,
-      ) {
-      | None => Versioned.refuse("machine/Cargo.toml needs MAJOR.MINOR.PATCH")
-      | Some(version) if version == manifest => Console.log(`driver-machine ${manifest}, kept`)
-      | Some(version) =>
-        switch Versioned.dry ? Ok() : write(~manifest, version) {
-        | Error(why) => Versioned.refuse(why)
-        | Ok() => Console.log(`driver-machine ${manifest} -> ${version}`)
+      switch changed && last->Option.isSome ? served() : Ok(Dict.make()) {
+      | Error(why) => Versioned.unread(why, ~undone)
+      | Ok(serves) =>
+        switch Versioned.bumped(
+          ~manifest,
+          ~last=last->Option.map(Inputs.recorded),
+          ~serves,
+          ~messages,
+          ~changed,
+        ) {
+        | None => Versioned.refuse("machine/Cargo.toml needs MAJOR.MINOR.PATCH")
+        | Some(version) if version == manifest => Console.log(`driver-machine ${manifest}, kept`)
+        | Some(version) =>
+          switch Versioned.dry ? Ok() : write(~manifest, version) {
+          | Error(why) => Versioned.refuse(why)
+          | Ok() => Console.log(`driver-machine ${manifest} -> ${version}`)
+          }
         }
       }
     }
