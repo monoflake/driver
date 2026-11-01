@@ -58,6 +58,5 @@ let driver: Made.driver = {
       "../platform/tests/kinds/management/ends.json",
       "../platform/tests/kinds/deployments/lifecycle.json",
     ],
-    released: false,
   },
 }

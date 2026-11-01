@@ -23,8 +23,7 @@ cloudflare/ driver(cloudflare): the Worker `driver` on a bound account, RFC nrs5
             in migrations/, and beneath it function/ and management/, so far its first slice
 scripts/    archive.res, the program built static for both architectures and archived; dev.res, one
             built for a test machine, copied in, restarted and checked
-.github/    release.yml and release/, the release's scripts, run by CI and by `bump` and verify's
-            version guard
+.github/    release.yml and release/, the release's scripts, run by CI and verify's version guard
 model/      each driver, machine.res and cloudflare.res, in made.res's types; filling.res, its blocks
             and the fill; tasks.res, the tasks; plan/progress.res, each written block's state
 docs/       rfcs/, what is decided here alone
@@ -46,7 +45,7 @@ workspace's configuration as platform's do.
 | `mise run check`         | the platform's check with the drivers filled, the blocks                            |
 | `mise run fmt`           | formats the ReScript and the prose                                                  |
 | `mise run verify`        | everything formatted, the check, the blocks, the tests, the version guard, the deny |
-| `mise run bump`          | driver-machine's version raised by RFC 8c0rg, `Cargo.lock` synchronized             |
+| `mise run bump`          | the workspace's bump run over this repository, `Cargo.lock` following               |
 | `mise run brief <name>`  | one block's brief, read from the model                                              |
 | `mise run accept <name>` | one block held to its brief, alone                                                  |
 | `mise run built <name>`  | one block built, formatted, linted and tested alone                                 |

@@ -1,6 +1,6 @@
 [package]
 name = "driver-machine-management"
-version = "0.0.0"
+version = "0.1.0"
 description = "What the machine driver's management reports of a machine: its processor, load, memory, disks, interfaces, space, control groups and btrfs qgroups, read as the kernel writes them"
 edition.workspace = true
 publish.workspace = true

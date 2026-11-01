@@ -100,9 +100,13 @@ depends = ["//:build"]
 run = "node {{env.WORKSPACE}}/scripts/clean.res.mjs"
 
 [tasks.bump]
-description = "Raise driver-machine's source version by RFC 8c0rg and synchronize Cargo.lock"
-usage = 'flag "-n --dry-run" help="Say which version would be written and write nothing"'
-run = 'rescript build > /dev/null && node .github/release/bump.res.mjs ${usage_dry_run:+--dry-run}'
+description = "Raise what a landing changes here, by the workspace's bump: `bump [--dry-run] [--minor <package>]`"
+usage = '''
+flag "-n --dry-run" help="Say which versions would be written and write nothing"
+flag "--minor <package>" help="Raise the minor of a package serving several interfaces or none"
+'''
+depends = ["//:build"]
+run = 'node {{env.WORKSPACE}}/scripts/versions/bump.res.mjs monoflake/driver ${usage_dry_run:+--dry-run} ${usage_minor:+--minor "$usage_minor"}'
 
 [tasks.prepare]
 description = "Make platform beside it ready by its own prepare, then install the driver's packages, as a fresh clone needs"

@@ -1,4 +1,4 @@
-/** The source inputs compared with the last release, a lock moved alone not one, RFC 8c0rg. */
+/** The source inputs compared with the last release, aligned with the landing roll. */
 let own = ["machine", "Cargo.toml"]
 let sibling = Archive.join([Archive.root, "..", "platform"])
 let setup = ".github/actions/setup/action.yml"
@@ -184,11 +184,48 @@ let served = (
  * platform commits that could not be read even after a fetch, where the platform is not known. */
 type compared = {own: bool, shared: bool, unknown: array<string>}
 
-/** A summary without the tests under `machine`, which no release carries, RFC 8c0rg. */
+/** The exclusions in the workspace's scripts/versions/counted.res also hold at a release. */
+let counts = path => {
+  let parts = path->String.split("/")
+  let name = parts->Array.at(-1)->Option.getOr("")
+  let settings = [
+    ".editorconfig",
+    ".gitattributes",
+    ".gitignore",
+    ".oxfmtrc.json",
+    ".oxlintrc.json",
+    "actionlint.yaml",
+    "clippy.toml",
+    "deny.toml",
+    "jujutsu.toml",
+    "rustfmt.toml",
+  ]
+  !(parts->Array.some(part => part == "docs" || part == "tests")) &&
+  !(settings->Array.includes(name)) &&
+  !RegExp.test(/_test\.[^\/]+$/, name) &&
+  !RegExp.test(/(\.md|^LICENSE[^\/]*)$/, name)
+}
+
+let paths = line => {
+  let path = line->String.replaceRegExp(/^[A-Z] /, "")
+  switch /^(.*)\{(.*) => (.*)\}(.*)$/->RegExp.exec(path) {
+  | Some(found) =>
+    switch found->RegExp.Result.matches->Array.map(part => part->Option.getOr("")) {
+    | [before, from, to, after] => [
+        `${before}${from}${after}`->String.replaceAll("//", "/"),
+        `${before}${to}${after}`->String.replaceAll("//", "/"),
+      ]
+    | _ => [path]
+    }
+  | None => [path]
+  }
+}
+
+/** Only the paths a landing counts are carried into the release input guard. */
 let carried = summary =>
   summary
   ->String.split("\n")
-  ->Array.filter(line => !(line->String.includes("/tests/")))
+  ->Array.filter(line => line != "" && paths(line)->Array.some(counts))
   ->Array.join("\n")
 
 let changed = (
@@ -209,7 +246,7 @@ let changed = (
         | Ok() =>
           sharedAt(~read, now)
           ->Result.flatMap(paths => diff(~cwd=sibling, ~from=last, ~to=now, paths))
-          ->Result.map(shared => {own, shared: shared != "", unknown: []})
+          ->Result.map(shared => {own, shared: carried(shared) != "", unknown: []})
         }
       }
     })

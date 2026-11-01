@@ -1,6 +1,6 @@
 [package]
 name = "driver-machine-object"
-version = "0.0.0"
+version = "0.1.0"
 description = "driver(machine)'s object: a bucket as a btrfs subvolume, its names indexed by SQLite and its contents files named by their hash, RFC vr5lw"
 edition.workspace = true
 publish.workspace = true

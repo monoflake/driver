@@ -81,6 +81,13 @@ let read = (~cwd, ~from, path) =>
 test("a change confined to machine's tests is no input change", () => {
   [
     "M machine/container/tests/roots.rs",
+    "M machine/guide.md",
+    "machine/docs/a.txt",
+    "M machine/src/a_test.rs",
+    "machine/src/a_test.res.mjs",
+    "M machine/.gitignore",
+    "machine/rustfmt.toml",
+    "machine/LICENSE-MIT",
     "M machine/tests/a.rs\nM machine/object/tests/b.rs",
   ]->Array.forEach(summary => deepEqual(Inputs.carried(summary), ""))
   deepEqual(

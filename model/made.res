@@ -33,8 +33,6 @@ type program = {
   serves: array<string>,
   /** The samples its tests read, from this repository's root. */
   samples: array<string>,
-  /** Whether the author has opened its releases; until then its version is `0.0.0`. */
-  released: bool,
 }
 
 /** A driver, its implementations, its management and the runtimes it gives compute by. */
@@ -58,7 +56,6 @@ let held = (
   ~uses=[],
   ~takes=[],
   ~blocks=?,
-  ~released=?,
   ~samples=[],
 ): Blocks.held => {
   name,
@@ -69,7 +66,6 @@ let held = (
   takes,
   samples,
   ?blocks,
-  ?released,
 }
 
 /**
@@ -114,7 +110,6 @@ let blocks = (role, d: driver) => {
           ~uses=p.uses,
           ~takes=p.takes,
           ~blocks=p.serves,
-          ~released=p.released,
           ~samples=p.samples,
         ),
       ),

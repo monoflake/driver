@@ -34,8 +34,7 @@ let numbers = version =>
 
 let later = ((a, b, c), (x, y, z)) => a != x ? a > x : b != y ? b > y : c > z
 
-/** The version `mise run bump` writes, RFC 8c0rg, the manifest's own where the major is new, the
- * minor raised where an interface it serves is or a change is breaking, and the patch otherwise. */
+/** The release guard's minimum version since the last release, kept by the landing roll. */
 let incremented = (~manifest, ~last: option<(string, dict<int>)>, ~serves: dict<int>, ~breaking) =>
   switch (numbers(manifest), last->Option.flatMap(((version, _)) => numbers(version))) {
   | (None, _) => None

@@ -337,7 +337,7 @@ checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 
 [[package]]
 name = "codec"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "minicbor",
 ]
@@ -461,7 +461,7 @@ dependencies = [
 
 [[package]]
 name = "driver-machine"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "axum",
  "clap",
@@ -482,7 +482,7 @@ dependencies = [
 
 [[package]]
 name = "driver-machine-container"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "chacha20poly1305",
  "containerd-client",
@@ -497,7 +497,7 @@ dependencies = [
 
 [[package]]
 name = "driver-machine-function"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "driver-machine-container",
  "envelope",
@@ -509,7 +509,7 @@ dependencies = [
 
 [[package]]
 name = "driver-machine-management"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "blake3",
  "rustix",
@@ -517,7 +517,7 @@ dependencies = [
 
 [[package]]
 name = "driver-machine-object"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "blake3",
  "envelope",
@@ -527,7 +527,7 @@ dependencies = [
 
 [[package]]
 name = "driver-machine-volume"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "rustix",
 ]
@@ -546,7 +546,7 @@ checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
 
 [[package]]
 name = "envelope"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "codec",
  "envelope-generator",
@@ -555,7 +555,7 @@ dependencies = [
 
 [[package]]
 name = "envelope-generator"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "serde_json",
 ]

@@ -29,6 +29,25 @@ test_data = [
 built = "target/archives/built.json"
 columns = ["Driver", "Version", "Commit", "Architecture"]
 
+# What a landing's roll reads beyond its defaults, the workspace's scripts/versions.
+[versions]
+contracts = "model/contracts.json"
+repository = "../platform"
+pin = ".github/actions/setup/action.yml"
+
+[versions.counts]
+machine = ["Cargo.toml", ".github/actions/setup/action.yml"]
+cloudflare = [".github/actions/setup/action.yml"]
+"cloudflare/object" = [".github/actions/setup/action.yml"]
+"cloudflare/database" = [".github/actions/setup/action.yml"]
+"cloudflare/function" = [".github/actions/setup/action.yml"]
+
+[versions.serves]
+machine = ["management", "deployments", "object"]
+"cloudflare/object" = ["object"]
+"cloudflare/database" = ["database"]
+"cloudflare/management" = ["management"]
+
 # Where the project's own name is a variable a user's code reads beside other vendors', the
 # workspace's docs/naming.md.
 [[names.data]]
