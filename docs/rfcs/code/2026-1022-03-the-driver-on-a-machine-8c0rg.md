@@ -1,10 +1,14 @@
 ---
 name: 'The Driver on a Machine'
 title: '`driver-machine`: the one program a machine runs as its driver, how it is built, versioned, released and tried'
-status: accepted
+status: landed
 supersedes: []
 blocked-by: []
-commits: []
+commits:
+  - monoflake/driver@98397b8b
+  - monoflake/driver@dc6b2785
+  - monoflake/driver@c960808f
+  - monoflake/driver@ee4cca1e
 references: []
 ---
 
