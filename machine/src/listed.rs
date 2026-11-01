@@ -11,10 +11,11 @@ use driver_machine_container::{Capacity, Refused};
 use driver_machine_management::Binding;
 use driver_machine_object::{Bucket, MOST, Open as _};
 use driver_machine_volume::{BUCKETS, VOLUMES, Volume, place};
+use envelope::contracts::interface::{deployments, management};
 use envelope::contracts::{
 	ManagementApply, ManagementCapacity, ManagementDescribed, ManagementEnd, ManagementEnded,
 	ManagementHeld, ManagementHolding, ManagementItem, ManagementKind, ManagementPolicy,
-	ManagementState,
+	ManagementRange, ManagementState,
 };
 use envelope::{Bounded, Uint53};
 
@@ -128,6 +129,14 @@ fn refused(reason: &'static str, message: impl Into<String>) -> Refused {
 }
 
 /// A generation or a time as the contract writes it, one past 2^53 a fault of the driver's.
+// A build reads only its own version today; a per-build declaration replaces these, RFC wnqvu.
+const LOWEST_MANAGEMENT: u32 = management::VERSION;
+const LOWEST_DEPLOYMENTS: u32 = deployments::VERSION;
+
+fn range(highest: u32, lowest: u32) -> Result<ManagementRange, Refused> {
+	Ok(ManagementRange { lowest: uint53(u64::from(lowest))?, highest: uint53(u64::from(highest))? })
+}
+
 fn uint53(value: u64) -> Result<Uint53, Refused> {
 	Uint53::new(value).ok_or_else(|| refused("fault", format!("{value} is past 2^53")))
 }
@@ -407,6 +416,10 @@ impl Manage for Listed {
 			kinds: Some(OFFERED.to_vec()),
 			adopted: None,
 			warnings: None,
+			versions: Some(BTreeMap::from([
+				("management".to_owned(), range(management::VERSION, LOWEST_MANAGEMENT)?),
+				("deployments".to_owned(), range(deployments::VERSION, LOWEST_DEPLOYMENTS)?),
+			])),
 		})
 	}
 

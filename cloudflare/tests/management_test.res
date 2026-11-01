@@ -6,6 +6,27 @@ open Node
 open Calls
 module Contracts = Envelope.Contracts
 
+let range = version => {
+  let n = JSON.Number(Int.toFloat(version))
+  JSON.Object(dict{"lowest": n, "highest": n})
+}
+
+let versions = JSON.Object(
+  dict{
+    "management": range(Contracts.Interface.Management.version),
+    "deployments": range(Contracts.Interface.Deployments.version),
+  },
+)->JSON.stringify
+
+test("describe reports the generated interface versions in successful data", async () => {
+  let (status, media, answer) = await manage(envOf(), "describe", "{}")
+  deepEqual((status, media), (200, Some("application/json")))
+  let fields = answer->JSON.Decode.object->Option.getOrThrow
+  deepEqual(fields->Dict.get("status"), Some(JSON.String("success")))
+  let data = fields->Dict.get("data")->Option.flatMap(JSON.Decode.object)->Option.getOrThrow
+  deepEqual(data->Dict.get("versions"), Some(JSON.parseOrThrow(versions)))
+})
+
 test("a call is answered only for the binding's token", async () => {
   let env = envOf()
   let denied = (403, Some(JSON.String("denied")))
@@ -35,8 +56,11 @@ test("a binding new holds nothing, its grace a week, and names the revision give
     (
       200,
       Some("application/json"),
-      success(`{"generation": 0, "policy": 0, "grace": 604800, "items": [],
-        "revision": "4b825dc", "kinds": ["function", "object", "database"], "adopted": []}`),
+      success(
+        `{"generation": 0, "policy": 0, "grace": 604800, "items": [],
+        "revision": "4b825dc", "kinds": ["function", "object", "database"], "adopted": [],
+        "versions": ${versions}}`,
+      ),
     ),
   )
 })
@@ -56,12 +80,14 @@ test("a database item is made at the Worker `database`'s address, as an object i
   let (_, _, described) = await manage(env, "describe", "{}")
   deepEqual(
     described,
-    success(`{"generation": 1, "policy": 0, "grace": 604800, "items": [{"id": 1,
+    success(
+      `{"generation": 1, "policy": 0, "grace": 604800, "items": [{"id": 1,
     "capacity": {"name": "object", "size": 1048576}, "state": {"name": "made",
     "address": "2c3d4e5f.my-subdomain.workers.dev"}}, {"id": 2,
     "capacity": {"name": "database", "size": 1048576}, "state": {"name": "made",
     "address": "4e5f6a7b.my-subdomain.workers.dev"}}],
-    "kinds": ["function", "object", "database"], "adopted": []}`),
+    "kinds": ["function", "object", "database"], "adopted": [], "versions": ${versions}}`,
+    ),
   )
 })
 
@@ -76,10 +102,12 @@ test(
     let (_, _, described) = await manage(env, "describe", "{}")
     deepEqual(
       described,
-      success(`{"generation": 1, "policy": 0, "grace": 604800, "items": [{"id": 1,
+      success(
+        `{"generation": 1, "policy": 0, "grace": 604800, "items": [{"id": 1,
       "capacity": {"name": "object", "size": 1048576}, "state": {"name": "made",
       "address": "2c3d4e5f.my-subdomain.workers.dev"}}],
-      "kinds": ["function", "object", "database"], "adopted": []}`),
+      "kinds": ["function", "object", "database"], "adopted": [], "versions": ${versions}}`,
+      ),
     )
     deepEqual(
       reasonOf(await manage(env, "end", `{"id": 1}`)),
@@ -106,8 +134,10 @@ test(
       (
         200,
         Some("application/json"),
-        success(`{"generation": 2, "policy": 1, "grace": 0, "items": [],
-        "kinds": ["function", "object", "database"], "adopted": []}`),
+        success(
+          `{"generation": 2, "policy": 1, "grace": 0, "items": [],
+        "kinds": ["function", "object", "database"], "adopted": [], "versions": ${versions}}`,
+        ),
       ),
     )
   },
@@ -155,8 +185,10 @@ test("a call in CBOR is answered in CBOR", async () => {
   deepEqual(
     answer->Result.map(a => Contracts.Answer.toJson(a, Contracts.ManagementDescribed.toJson)),
     Ok(
-      success(`{"generation": 0, "policy": 0, "grace": 604800, "items": [],
-      "kinds": ["function", "object", "database"], "adopted": []}`),
+      success(
+        `{"generation": 0, "policy": 0, "grace": 604800, "items": [],
+      "kinds": ["function", "object", "database"], "adopted": [], "versions": ${versions}}`,
+      ),
     ),
   )
   deepEqual(
@@ -310,8 +342,10 @@ test("a list naming a kind KINDS does not offer is refused whole as beyond_host"
   let (_, _, described) = await manage(env, "describe", "{}")
   deepEqual(
     described,
-    success(`{"generation": 0, "policy": 0, "grace": 604800, "items": [],
-    "kinds": ["function"], "adopted": []}`),
+    success(
+      `{"generation": 0, "policy": 0, "grace": 604800, "items": [],
+    "kinds": ["function"], "adopted": [], "versions": ${versions}}`,
+    ),
   )
   let objects = envOf(~db=database(), ~vars=dict{"INSTALL_ID": installId, "KINDS": "object"}, ())
   ignore(await manage(objects, "apply", `{"generation": 2, "items": []}`))

@@ -8,7 +8,7 @@ mod common;
 
 use codec::Cbor as _;
 use common::{Started, matches, sample, token};
-use envelope::contracts::interface::management;
+use envelope::contracts::interface::{deployments, management};
 use envelope::contracts::{ManagementDescribe, ManagementDescribed};
 use envelope::{Answer, Bounded, Encoded, Envelope};
 use serde_json::{Value, json};
@@ -36,6 +36,13 @@ fn a_call_with_its_token_is_served_and_logged() {
 	assert_eq!(status, 200);
 	assert_eq!(answer["status"], "success");
 	assert!(matches(&output, &answer["data"]), "{answer}");
+	assert_eq!(
+		answer["data"]["versions"],
+		json!({
+			"management": { "lowest": management::VERSION, "highest": management::VERSION },
+			"deployments": { "lowest": deployments::VERSION, "highest": deployments::VERSION },
+		})
+	);
 	let line = driver.logged("management describe");
 	assert!(line.starts_with("management describe success "), "{line}");
 	assert!(line.ends_with("ms"), "{line}");
@@ -152,6 +159,13 @@ fn cbor_is_answered_where_nothing_else_is_asked_and_json_where_accept_asks() {
 		Answer::<ManagementDescribed>::from_cbor(&codec::Value::decode(&reply.body).unwrap()).unwrap();
 	let Answer::Success(described) = read else { panic!("{read:?}") };
 	assert_eq!(described.generation.get(), 0);
+	assert_eq!(
+		described.to_json()["versions"],
+		json!({
+			"management": { "lowest": management::VERSION, "highest": management::VERSION },
+			"deployments": { "lowest": deployments::VERSION, "highest": deployments::VERSION },
+		})
+	);
 	assert!(matches(&output, &described.to_json()));
 	let asked = [headers[0], headers[1], ("Accept", "application/json")];
 	let reply = driver.request("POST", "/management/describe", &asked, &body);

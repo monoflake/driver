@@ -340,6 +340,10 @@ let adopting = (env, store: Management.store, before: Management.kept, records) 
 }
 
 /** A management call on the list kept, its grace swept first. */
+let // A build reads only its own version today; a per-build declaration replaces these, RFC wnqvu.
+lowestManagement = Contracts.Interface.Management.version
+let lowestDeployments = Contracts.Interface.Deployments.version
+
 let managed = async (env, store, call: Contracts.Interface.Management.call, form, ~kinds) => {
   let now = Date.now()
   // A swept item's store is cleared by its Worker, `object` or `database`, as requests come.
@@ -401,6 +405,16 @@ let managed = async (env, store, call: Contracts.Interface.Management.call, form
       kinds: kinds->Array.map(kindTo),
       adopted: kept.adopted->Array.map(adoptedTo),
       warnings: ?(warnings == [] ? None : Some(warnings->Array.map(warningTo))),
+      versions: dict{
+        "management": {
+          lowest: Int.toFloat(lowestManagement),
+          highest: Int.toFloat(Contracts.Interface.Management.version),
+        },
+        "deployments": {
+          lowest: Int.toFloat(lowestDeployments),
+          highest: Int.toFloat(Contracts.Interface.Deployments.version),
+        },
+      },
     }
     Contracts.Answer.Success(described)->Answer.written(
       form,
