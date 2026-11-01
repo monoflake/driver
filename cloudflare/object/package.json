@@ -10,6 +10,6 @@
 		"@monoflake/keys": "link:../../../platform/code/libs/keys"
 	},
 	"devDependencies": {
-		"wrangler": "4.151.3"
+		"wrangler": "4.156.0"
 	}
 }

@@ -56,7 +56,7 @@ let driver: Made.driver = {
       language: #rust,
       as_: "objects on the machine's file system",
       uses: ["envelope*"],
-      takes: [rust("rusqlite", "0.40"), rust("blake3", "1"), rust("serde_json", "1")],
+      takes: [rust("rusqlite", "0.41"), rust("blake3", "1"), rust("serde_json", "1")],
       samples: [
         "../platform/tests/kinds/objects/listing.json",
         "../platform/tests/kinds/objects/ranges.json",

@@ -13,7 +13,7 @@ workspace = true
 envelope = { path = "../../../platform/code/libs/envelope" }
 blake3 = "1"
 # SQLite compiled in, so the static musl build links no library of the system's.
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 
 [dev-dependencies]
 serde_json = "1"
