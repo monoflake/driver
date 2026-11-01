@@ -144,3 +144,21 @@ Choices made provisionally while the thread runs, read by the author at its end.
   fence's tables is monoflake/platform's to decide.
   Rejected: conform inserting rules into the live firewall itself. NixOS's firewall forced off on
   the local machine hid that conform's entry was closed on a real one.
+
+## State
+
+Written on 2026-11-01. The fence around the driver's containers is built, and the host firewall
+this RFC set out to replace is not.
+
+Built, in monoflake/machine: `system/network/fence.nix` declares `table bridge fence` and `table
+inet fence`, covers `driver0` and `conform0`, and holds every base chain's policy at accept behind
+a build-time scope check. The driver writes only the elements of the set `reaching` whose reacher
+lies in its own subnet. `machine.reservedPorts` and the `ip_local_reserved_ports` sysctl are in
+`system/network/default.nix`, and `docs/fence.md` there states the rule.
+
+Not built: `table inet filter`. `system/base/network.nix` in monoflake/machine still enables
+`networking.nftables` with NixOS's own firewall, opens SSH on the tailnet's interface alone, and
+`docs/local.md` there says NixOS's firewall runs as on a real machine. No module declares the zones
+by reverse path, the default drop of the public interface, a per-deployment egress map, or the
+tried-then-kept activation with its four conditions. The three points left to be settled as it is
+built are therefore still open.

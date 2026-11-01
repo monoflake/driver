@@ -574,3 +574,24 @@ Choices made provisionally while the thread runs, read by the author at its end.
   bind's inputs. Install now asks the descriptor itself, reads until the pipe ends with no time
   limit, and on any other read error refuses before a command runs, naming the error's code and
   never what was read. A terminal is still no token.
+
+## State
+
+Written on 2026-11-01. The three slices are built, and the inline data path and a D1 of each
+database item are not.
+
+Built, in `cloudflare/` of this repository: the management and `function`, the `object` adapter on
+R2 and the `database` adapter on D1, which `src/driver.res` finds by the account's records and
+wires as `databases`. `migrations/0006-owned.sql` makes the bare-id ownership records, and
+`scripts/install/install.res` draws each part's eight hex digits, checks them against the
+account's names and records them before making anything. So the Worker, database and bucket names
+`driver`, `object`, `database` and `objects` in the first slices' bullets are history: the parts
+carry drawn ids found by role in `owned`. The bullet that holds a `database` item `failed` until
+the third slice is built is stale for the same reason, since that slice exists.
+
+Not built: a deployment's `reaching` still answers `beyond_host` at `src/driver.res`, so the
+Cloudflare half of the workspace's deferred item `inline-data-path` waits. A D1 of each database
+item is not made: `database/src/held.res` still holds one database for one item under the
+clearing lease, and `owned` has the single role `user_database`, so the deferred item
+`d1-per-item` stands. Whether a real account now offers `database` is not recorded in this
+repository.
