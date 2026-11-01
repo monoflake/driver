@@ -78,6 +78,17 @@ let read = (~cwd, ~from, path) =>
     Ok(Archive.readFileSync(Archive.join([cwd, path])))
   }
 
+test("a change confined to machine's tests is no input change", () => {
+  [
+    "M machine/container/tests/roots.rs",
+    "M machine/tests/a.rs\nM machine/object/tests/b.rs",
+  ]->Array.forEach(summary => deepEqual(Inputs.carried(summary), ""))
+  deepEqual(
+    Inputs.carried("M machine/container/tests/roots.rs\nM machine/container/src/lib.rs"),
+    "M machine/container/src/lib.rs",
+  )
+})
+
 test(
   "the input comparison includes every local Rust dependency and the generated contracts",
   () => {

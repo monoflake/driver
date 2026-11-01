@@ -112,6 +112,8 @@ Chosen on 2026-10-27, provisional.
   rate limited, warns and passes, the bump writing nothing. Nothing runs verify in CI, so no rule
   depends on CI. Chosen by the advisor on 2026-10-27, replacing a refusal everywhere and then a
   refusal in CI.
+- A change confined to tests under `machine/` is no input change either, decided by the author on
+  2026-11-01, as no release carries them.
 - A change confined to `Cargo.lock` is no input change. Verify and bump compare the program's
   crate and `Cargo.toml` alone, so only the driver's own code asks for a raise and a release, and
   a dependency moved by the scheduled update rides the next real release. Chosen by the author on

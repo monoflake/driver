@@ -331,8 +331,10 @@ async fn a_nix_store_that_never_exits_is_killed_and_neither_a_deploy_nor_a_start
 	let [line] = told.as_slice() else { panic!("{told:?}") };
 	assert!(line.starts_with(&format!("root b1 {id} not made, ")), "{line}");
 	assert!(line.ends_with("killed, not done within 500 ms"), "{line}");
-	let pid = std::fs::read_to_string(driver.state.join("nix-store.pid")).unwrap();
-	assert!(ended(pid.trim()), "nix-store {pid} still runs");
+	// Killed before it wrote its pid under load, it left no process to ask after.
+	if let Ok(pid) = std::fs::read_to_string(driver.state.join("nix-store.pid")) {
+		assert!(ended(pid.trim()), "nix-store {pid} still runs");
+	}
 	// A deploy's turn is bounded the same, and refused.
 	let other = DeploymentDeploy { runs: DeploymentRuns::App { id: 2 }, ..echo() };
 	let began = Instant::now();

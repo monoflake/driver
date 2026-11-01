@@ -155,6 +155,13 @@ let reached = (~holds=holds, ~fetch=fetched, commits) => {
  * platform commits that could not be read even after a fetch, where the platform is not known. */
 type compared = {own: bool, shared: bool, unknown: array<string>}
 
+/** A summary without the tests under `machine`, which no release carries, RFC 8c0rg. */
+let carried = summary =>
+  summary
+  ->String.split("\n")
+  ->Array.filter(line => !(line->String.includes("/tests/")))
+  ->Array.join("\n")
+
 let changed = (
   ~diff=difference,
   ~read=file,
@@ -164,7 +171,7 @@ let changed = (
 ) =>
   pins(~read, ~current, entry)->Result.flatMap(((from, last, now)) =>
     diff(~cwd=Archive.root, ~from, own)->Result.flatMap(own => {
-      let own = own != ""
+      let own = carried(own) != ""
       if last == now {
         Ok({own, shared: false, unknown: []})
       } else {
