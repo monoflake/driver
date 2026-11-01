@@ -12,7 +12,7 @@ open Asserted
 
 type ended = {status: int, said: string}
 
-/** Executables put first on the path: flock that always holds, mv that reads -T as BSD's -h, and
+/** Executables put first on the path: flock that always holds, mv that reads -T on either's -h, and
  * systemctl that logs its calls and fails a restart while FAIL names a file and `current` is a dev
  * version. */
 let shims = (root, ~exec, ~config) => {
@@ -24,7 +24,13 @@ let shims = (root, ~exec, ~config) => {
     Archive.chmodSync(path, 0o755)
   }
   put("flock", "exit 0")
-  put("mv", `if [ "$1" = -T ]; then shift; exec /bin/mv -h "$@"; fi\nexec /bin/mv "$@"`)
+  // GNU mv takes -T as the script does; BSD's reads it as -h. The real mv is found past this one.
+  put(
+    "mv",
+    `PATH=\${PATH#"$(dirname "$0"):"}
+if ! mv --version > /dev/null 2>&1 && [ "$1" = -T ]; then shift; exec mv -h "$@"; fi
+exec mv "$@"`,
+  )
   put(
     "systemctl",
     `echo "$*" >> "$LOG"
