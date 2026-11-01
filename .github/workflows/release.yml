@@ -1,9 +1,21 @@
-# Releases driver-machine at the version machine/Cargo.toml names, once, by the workspace's
-# scripts/release, by hand alone, so a version rising publishes nothing by itself.
+# Publishes the selected build after both archives match their recorded hashes.
 name: release
 
 on:
   workflow_dispatch:
+    inputs:
+      run:
+        description: Successful build.yml run id
+        required: true
+        type: string
+      sha256_x86_64:
+        description: Recorded sha256 of the tested x86_64 archive
+        required: true
+        type: string
+      sha256_aarch64:
+        description: Recorded sha256 of the tested aarch64 archive
+        required: true
+        type: string
 
 # A run started while another builds waits behind it in order, up to a hundred deep, and none is
 # canceled, so two never race to release one day, as runtime's publish queues.
@@ -13,6 +25,7 @@ concurrency:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   release:
@@ -24,43 +37,28 @@ jobs:
         with:
           path: monoflake/driver
           scripts: true
-      # The platform at its pin and both installs, as .github/actions/setup holds them, its cache
-      # left to the step below that runs only where something is built.
+      # The setup action installs the release scripts without a cargo cache.
       - uses: ./repos/monoflake/driver/.github/actions/setup
         with:
           cache: "false"
-      # Nothing is built where a release's manifest.json lists machine/Cargo.toml's version already.
-      # The token is held only by a step that calls gh, and the public releases are read without it.
-      - name: Source version
-        id: source
-        working-directory: repos/monoflake/driver
-        run: mise run ready
-      # The target directory and cargo's registry, kept between runs in the repository's cache under
-      # the key .github/actions/setup gives build.yml, the workspace's docs/ci.md.
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        if: steps.source.outputs.ready == 'true'
-        with:
-          workspaces: repos/monoflake/driver -> target
-          shared-key: driver-machine
-      - name: Build
-        if: steps.source.outputs.ready == 'true'
-        working-directory: repos/monoflake/driver
-        run: mise run archive
-      - name: Version
-        if: steps.source.outputs.ready == 'true'
+      - name: Promote build
+        id: promote
         working-directory: repos/monoflake/driver
         env:
           GH_TOKEN: ${{ github.token }}
-        run: mise run versioned
+          RELEASE_RUN: ${{ inputs.run }}
+          RELEASE_SHA256_X86_64: ${{ inputs.sha256_x86_64 }}
+          RELEASE_SHA256_AARCH64: ${{ inputs.sha256_aarch64 }}
+        run: mise exec -- sh -c 'rescript build && node .github/release/promote.res.mjs'
       - name: Release
-        if: steps.source.outputs.ready == 'true'
+        if: steps.promote.outputs.ready == 'true'
         working-directory: repos/monoflake/driver
         env:
           GH_TOKEN: ${{ github.token }}
         run: mise run release
-      # With nothing to release, each day's notes are still rendered again from its manifest.json.
+      # Each day's notes are still rendered again when the version was already released.
       - name: Notes
-        if: steps.source.outputs.ready != 'true'
+        if: steps.promote.outputs.ready != 'true'
         working-directory: repos/monoflake/driver
         env:
           GH_TOKEN: ${{ github.token }}

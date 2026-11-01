@@ -159,6 +159,44 @@ let listed = () =>
     }
   }
 
+/** Where the version is released already, its recorded archive hashes against the release's own:
+ * equal passes, differing names both, and with none recorded the version alone is enough. */
+let released = (~entries, ~recorded: option<dict<string>>, version) =>
+  switch recorded {
+  | None => Ok()
+  | Some(recorded) =>
+    let assets =
+      entries
+      ->Array.find(entry =>
+        entry->text("name") == Some(Archive.package) && entry->text("version") == Some(version)
+      )
+      ->Option.flatMap(entry => entry->field("assets"))
+      ->Option.flatMap(JSON.Decode.array)
+    switch assets {
+    | None => Error(`${version} is released but its archive hashes are not listed to compare`)
+    | Some(assets) =>
+      Archive.targets->Array.reduce(Ok(), (done, (_, machine, _)) =>
+        done->Result.flatMap(() => {
+          let target = `linux-${machine}`
+          let have =
+            assets
+            ->Array.find(asset => asset->text("target") == Some(target))
+            ->Option.flatMap(asset => asset->text("sha256"))
+          let want = recorded->Dict.get(machine)->Option.getOr("")->String.toLowerCase
+          switch have {
+          | Some(have) if have->String.toLowerCase == want => Ok()
+          | _ =>
+            Error(
+              `${version} is released with ${target} sha256 ${have->Option.getOr(
+                  "none",
+                )}, not the recorded ${want}`,
+            )
+          }
+        })
+      )
+    }
+  }
+
 /** The highest version a published release lists of the program, with its assets and interfaces. */
 let lastOf = entries =>
   entries
@@ -208,8 +246,18 @@ let write = document => {
   }
 }
 
-let main = () =>
-  switch (Archive.version(), listed()) {
+let main = (
+  ~manifest=Archive.version(),
+  ~serves=served,
+  ~recorded: option<dict<string>>=?,
+  ~commit=commit,
+  ~root=root,
+  ~listed=listed,
+  ~holds=holds,
+  ~write=write,
+  (),
+) =>
+  switch (manifest, listed()) {
   | (None, _) => refuse("machine/Cargo.toml: no [package] version")
   | (_, Error(why)) => refuse(why)
   | (Some("0.0.0"), _) =>
@@ -228,13 +276,6 @@ let main = () =>
       ))
     let missing = archives->Array.filter(((_, path)) => !existsSync(path))
     let last = lastOf(entries)
-    let serves = served()
-    Console.log(
-      `serves ${serves
-        ->Dict.toArray
-        ->Array.map(((name, v)) => `${name} ${v->Int.toString}`)
-        ->Array.join(", ")}`,
-    )
     Console.log(
       last->Option.mapOr("no release lists driver-machine yet", entry =>
         `last released ${entry->text("version")->Option.getOr("")} in ${entry
@@ -245,13 +286,37 @@ let main = () =>
     switch (holds(manifest), numbers(manifest)) {
     | (Error(why), _) => refuse(why)
     | (Ok(true), _) =>
-      Console.log(`${manifest} is released already, so nothing is released`)
-      write(JSON.Encode.object(dict{"artifacts": JSON.Encode.array([])}))
+      switch released(~entries, ~recorded, manifest) {
+      | Error(why) => refuse(why)
+      | Ok() =>
+        Console.log(`${manifest} is released already, so nothing is released`)
+        write(JSON.Encode.object(dict{"artifacts": JSON.Encode.array([])}))
+      }
     | _ if missing != [] && !dry =>
       refuse(`not built: ${missing->Array.map(((_, path)) => path)->Array.join(", ")}`)
     | (_, None) => refuse(`machine/Cargo.toml's version ${manifest} is not MAJOR.MINOR.PATCH`)
+    | (Ok(false), Some(_))
+      if last
+      ->Option.flatMap(entry => entry->text("version"))
+      ->Option.mapOr(false, was =>
+        numbers(manifest)->Option.mapOr(false, now =>
+          numbers(was)->Option.mapOr(false, was => !later(now, was))
+        )
+      ) =>
+      refuse(
+        `${manifest} is not above the last release ${last
+          ->Option.flatMap(entry => entry->text("version"))
+          ->Option.getOr("")}; an older build is not released after a newer one`,
+      )
     | (Ok(false), Some(_)) =>
       let version = manifest
+      let serves = serves()
+      Console.log(
+        `serves ${serves
+          ->Dict.toArray
+          ->Array.map(((name, v)) => `${name} ${v->Int.toString}`)
+          ->Array.join(", ")}`,
+      )
       Console.log(`releases ${version}`)
       let directory = Archive.join([root, "target", "archives", "release"])
       let assets = archives->Array.map(((target, path)) => {

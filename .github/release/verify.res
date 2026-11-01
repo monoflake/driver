@@ -33,7 +33,12 @@ let guard = (~listed=Versioned.listed, ~compare=entry => Inputs.changed(entry), 
   }
 
 if Archive.isMain {
-  if Archive.ran("node", ["--test", ".github/release/versioned_test.res.mjs"]) {
+  if (
+    Archive.ran(
+      "node",
+      ["--test", ".github/release/versioned_test.res.mjs", ".github/release/promote_test.res.mjs"],
+    )
+  ) {
     guard()
   } else {
     Versioned.refuse("the release's tests failed")
