@@ -15,11 +15,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      # The workspace above the repository, its scripts compiled.
+      # The workspace above the repository, its scripts left uncompiled as the build runs none.
       - uses: canmi21/canmi/.github/actions/workspace@main
         with:
           path: monoflake/driver
-          scripts: true
       # The platform at its pin, both installs and cargo's cache, held by .github/actions/setup.
       - uses: ./repos/monoflake/driver/.github/actions/setup
       - name: build
