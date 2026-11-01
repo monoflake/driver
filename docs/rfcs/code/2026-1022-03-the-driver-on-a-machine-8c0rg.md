@@ -94,7 +94,7 @@ Chosen on 2026-10-27, provisional.
   commit and refuses changed inputs without a source version above the released one. The
   workspace's dependency update calls the bump task when `cargo update` changes the driver's lock;
   runtime's update path is unchanged. Chosen by the advisor.
-- The platform commit a release builds from is the one the working copy's `release.yml` pins.
+- The platform commit a release builds from is the one the working copy's setup action pins.
   Verify and bump compare the platform's shared Rust crates, generator and contracts, and read the
   platform's commit messages, from the commit the last release pinned to that one, never the local
   checkout's own; the local monoflake/platform supplies that history. The workspace's update runs
@@ -109,9 +109,9 @@ Chosen on 2026-10-27, provisional.
   since an unneeded patch release is harmless and a missed one strands a platform change, and
   verify warns that the platform was not checked and passes; a change of the driver's own inputs
   without a raise is still refused. Any other comparison or release lookup that fails, offline or
-  rate limited, warns and passes, the bump writing nothing. Nothing runs verify in CI, so no rule
-  depends on CI. Chosen by the advisor on 2026-10-27, replacing a refusal everywhere and then a
-  refusal in CI.
+  rate limited, warns and passes, the bump writing nothing. verify.yml runs verify on every push, and
+  a failed lookup warns there too, so an unreachable listing reddens no push. Chosen by the advisor
+  on 2026-10-27, replacing a refusal everywhere and then a refusal in CI, and kept on 2026-11-01.
 - A change confined to tests under `machine/` is no input change either, decided by the author on
   2026-11-01, as no release carries them.
 - A change confined to `Cargo.lock` is no input change. Verify and bump compare the program's

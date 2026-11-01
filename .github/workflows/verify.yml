@@ -1,0 +1,31 @@
+# Runs verify on every push, so a commit pushed without the local check is still held.
+# It holds no secret, and a version guard's failed lookup still warns and passes, RFC 8c0rg.
+name: verify
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: canmi21/canmi/.github/actions/workspace@main
+        with:
+          path: monoflake/driver
+          scripts: "true"
+          history: "true"
+      - uses: ./repos/monoflake/driver/.github/actions/setup
+      - name: Compile the platform
+        working-directory: repos/monoflake/platform
+        run: pnpm exec rescript build
+      - name: Generate the envelope
+        working-directory: repos/monoflake/platform
+        run: mise run generate envelope
+      - name: Verify
+        working-directory: repos/monoflake/driver
+        run: mise run verify
