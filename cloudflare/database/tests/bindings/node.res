@@ -155,7 +155,7 @@ type gate = {reached: promise<unit>, release: unit => unit}
 /** node's SQLite in memory with the driver's migrations applied in order. */
 let migrated = () => {
   let db = openSqlite(":memory:")
-  let migrations = fromBlock("../migrations")
+  let migrations = fromBlock("migrations")
   list(migrations)
   ->Array.filter(name => name->String.endsWith(".sql"))
   ->Array.toSorted(String.compare)

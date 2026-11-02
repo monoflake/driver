@@ -34,6 +34,6 @@ let drafts = () => {
 let tree = (): Blocks.tree => {
   root: Base.url("../", importMetaUrl),
   blocks: drivers->Array.flatMap(((role, d)) => Made.blocks(role, d))->Map.fromArray,
-  work: Progress.blocks,
+  work: Written.blocks,
   rows: Array.concat(Blocks.openRows(), drafts()),
 }

@@ -38,7 +38,7 @@ switch Base.args->Array.get(2) {
   Tree.check(
     Filling.tree(),
     ~title="Driver blocks held",
-    ~work="model/plan/progress.res",
+    ~work="model/written.res",
     ~provided=Driver_provided.blocks->Dict.keysToArray,
   )
   Base.shownInWork()

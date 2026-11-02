@@ -455,7 +455,7 @@ test(
 
 test("migration 0006 records only the Workers the driver made", async () => {
   let db = openSqlite(":memory:")
-  let migrations = fromBlock("migrations")
+  let migrations = fromBlock("database/migrations")
   let files =
     list(migrations)->Array.filter(n => n->String.endsWith(".sql"))->Array.toSorted(String.compare)
   let apply = name => db->exec(readText(`${migrations}/${name}`))

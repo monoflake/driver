@@ -39,7 +39,7 @@ let asDatabase: sqlite => Object.database = %raw(`db => {
 /** node's SQLite in memory with the driver's migrations applied in order. */
 let migrated = () => {
   let db = openSqlite(":memory:")
-  let migrations = fromBlock("../migrations")
+  let migrations = fromBlock("../database/migrations")
   list(migrations)
   ->Array.filter(name => name->String.endsWith(".sql"))
   ->Array.toSorted(String.compare)

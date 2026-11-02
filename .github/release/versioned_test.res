@@ -23,27 +23,6 @@ test("the author alone changes the major", () => {
   deepEqual(Versioned.next(~manifest="2.0.0", ~last=recorded, ~serves), Some("2.0.0"))
 })
 
-test("both Conventional Commits breaking signals increment the minor", () => {
-  [
-    "feat!: change the format",
-    "fix(machine)!: change the format",
-    "fix: change\n\nBREAKING CHANGE: old data is refused",
-  ]->Array.forEach(message => {
-    ok(Versioned.breaking(message))
-    deepEqual(
-      Versioned.bumped(
-        ~manifest="0.3.7",
-        ~last=recorded,
-        ~serves,
-        ~messages=[message],
-        ~changed=true,
-      ),
-      Some("0.4.0"),
-    )
-  })
-  ok(!Versioned.breaking("fix: mention a BREAKING CHANGE: in prose"))
-})
-
 test("changed inputs require a version above the last release", () => {
   ok(Versioned.checked(~manifest="0.3.7", ~last=Some("0.3.7"), ~changed=true)->Result.isError)
   deepEqual(Versioned.checked(~manifest="0.3.8", ~last=Some("0.3.7"), ~changed=true), Ok())
@@ -145,13 +124,6 @@ test("the platform is compared from the last release's pin to the working copy's
   }
   ignore(Inputs.changed(~diff, ~read, ~current=() => pinning(now), ~reach=present, release))
   deepEqual(compared, [(last, Some(now))])
-  let logged = []
-  let log = (~cwd, ~from, ~to=?, _) => {
-    logged->Array.push((cwd == Inputs.sibling, from, to))
-    Ok([])
-  }
-  ignore(Inputs.breakingSince(~log, ~read, ~current=() => pinning(now), ~reach=present, release))
-  deepEqual(logged, [(false, "released", None), (true, last, Some(now))])
 })
 
 test("a release older than the setup action has its pin read from release.yml", () => {
@@ -213,29 +185,6 @@ test("inputs unchanged since the last release compare as unchanged", () => {
   )
 })
 
-test("bump keeps a version raised by hand and never lowers one", () => {
-  let bumped = (manifest, messages) =>
-    Versioned.bumped(~manifest, ~last=recorded, ~serves, ~messages, ~changed=true)
-  deepEqual(bumped("0.5.0", []), Some("0.5.0"))
-  deepEqual(bumped("0.3.9", []), Some("0.3.9"))
-  deepEqual(bumped("0.3.8", ["feat!: change the format"]), Some("0.4.0"))
-  deepEqual(bumped("0.4.0", ["feat!: change the format"]), Some("0.4.0"))
-  deepEqual(bumped("0.3.7", []), Some("0.3.8"))
-})
-
-test("bump writes nothing new where no input changed since the last release", () => {
-  deepEqual(
-    Versioned.bumped(
-      ~manifest="0.3.7",
-      ~last=recorded,
-      ~serves=dict{"management": 2},
-      ~messages=["feat!: change the format"],
-      ~changed=false,
-    ),
-    Some("0.3.7"),
-  )
-})
-
 @get external exitCode: Base.process => Nullable.t<int> = "exitCode"
 
 /** Each line `run` printed, to stdout or stderr. */
@@ -273,7 +222,6 @@ test("a lookup that fails is warned of and passes, in CI or not", () => {
     | None => Archive.env->Dict.delete("CI")
     }
     deepEqual(exited(() => Verify.guard()), 0)
-    deepEqual(exited(() => Bump.main()), 0)
   })
   deepEqual(Archive.readFileSync(Archive.join([Archive.root, "machine", "Cargo.toml"])), manifest)
   ["WORKSPACE", "CI"]->Array.forEach(name =>
@@ -317,26 +265,8 @@ test("a pin the local platform lacks is fetched once, then read", () => {
   )
 })
 
-test("with a pin still missing, bump raises the patch and verify warns and passes", () => {
-  let entry = JSON.parseOrThrow(`{"name":"driver-machine","version":"0.3.7","commit":"released"}`)
+test("with a pin still missing, verify warns and passes", () => {
   let compare = _ => Ok({Inputs.own: false, shared: false, unknown: [now]})
-  let reached = ref(Ok())
-  let breaking = (~reach, _) => {
-    reached := reach([last, now])
-    Ok({Inputs.messages: ["fix: a"], unread: [now]})
-  }
-  deepEqual(Bump.since(~compare, ~breaking, entry), Ok((true, ["fix: a"])))
-  deepEqual(reached.contents, Error([now]))
-  deepEqual(
-    Versioned.bumped(
-      ~manifest="0.3.7",
-      ~last=recorded,
-      ~serves,
-      ~messages=["fix: a"],
-      ~changed=true,
-    ),
-    Some("0.3.8"),
-  )
   let version = Archive.version()->Option.getOr("")
   let listed = () => Ok([
     JSON.parseOrThrow(`{"name":"driver-machine","version":"${version}","commit":"released"}`),
@@ -352,154 +282,6 @@ test("with a pin still missing, bump raises the patch and verify warns and passe
   )
   let compare = _ => Ok({Inputs.own: true, shared: false, unknown: [now]})
   deepEqual(exited(() => Verify.guard(~listed, ~compare, ())), 1)
-})
-
-test("each commit's message since a release is read apart, in jj and in git alike", () => {
-  let messages = ["feat!: change the format", "fix: change\n\nBREAKING CHANGE: refused", "fix: a"]
-  let made = (init, commit, head) => {
-    let cwd = mkdtempSync(Archive.join([tmpdir(), "inputs-"]))
-    after(() => rmSync(cwd, {recursive: true, force: true}))
-    let run = ((command, args)) => Inputs.output(~cwd, command, args)
-    let write = (path, text) => Versioned.writeFileSync(Archive.join([cwd, path]), text)
-    ok(run(init)->Result.isOk)
-    write("a", "0")
-    ok(run(commit("chore: before"))->Result.isOk)
-    let from = run(head)
-    let middle = ref(Error("not made"))
-    messages->Array.forEachWithIndex((message, index) => {
-      write("a", Int.toString(index + 1))
-      ok(run(commit(message))->Result.isOk)
-      if index == 1 {
-        middle := run(head)
-      }
-    })
-    write("b", "elsewhere")
-    ok(run(commit("feat!: touches another path"))->Result.isOk)
-    let to = middle.contents->Result.getOr("")
-    deepEqual(
-      from->Result.flatMap(from => Inputs.messages(~cwd, ~from, ~to, ["a"])),
-      Ok(["fix: change\n\nBREAKING CHANGE: refused", "feat!: change the format"]),
-    )
-    from->Result.flatMap(from => Inputs.messages(~cwd, ~from, ["a"]))
-  }
-  let config = mkdtempSync(Archive.join([tmpdir(), "jj-"]))
-  after(() => rmSync(config, {recursive: true, force: true}))
-  Archive.env->Dict.set("JJ_CONFIG", config)
-  Archive.env->Dict.set("JJ_USER", "test")
-  Archive.env->Dict.set("JJ_EMAIL", "test@example.com")
-  let jj = made(
-    ("jj", ["git", "init"]),
-    message => ("jj", ["commit", "--message", message]),
-    ("jj", ["log", "--no-graph", "--revisions", "@-", "--template", "commit_id"]),
-  )
-  let git = made(
-    ("git", ["init", "--quiet"]),
-    message => (
-      "sh",
-      [
-        "-c",
-        `git add -A && git -c user.name=test -c user.email=t@example.com commit -qm "$0"`,
-        message,
-      ],
-    ),
-    ("git", ["rev-parse", "HEAD"]),
-  )
-  [jj, git]->Array.forEach(read => {
-    let sorted = list => list->Array.toSorted(String.compare)
-    deepEqual(read->Result.map(sorted), Ok(sorted(messages)))
-    ok(read->Result.getOr([])->Array.filter(Versioned.breaking)->Array.length == 2)
-  })
-})
-
-test("bump stops at a refusal and says nothing after it", () => {
-  let version = Archive.version()->Option.getOr("")
-  let listed = () => Ok([
-    JSON.parseOrThrow(`{"name":"driver-machine","version":"${version}","commit":"released"}`),
-  ])
-  let since = _ => Ok((true, []))
-  let served = () => Ok(serves)
-  let write = (~manifest as _, _) => Error("Cargo.lock could not be synchronized")
-  let code = ref(0)
-  let lines = printed(() => code := exited(() => Bump.main(~listed, ~since, ~served, ~write, ())))
-  deepEqual(code.contents, 1)
-  deepEqual(lines, ["built: Cargo.lock could not be synchronized"])
-  let write = (~manifest as _, _) => Ok()
-  let lines = printed(() => code := exited(() => Bump.main(~listed, ~since, ~served, ~write, ())))
-  deepEqual(code.contents, 0)
-  ok(
-    lines->Array.length == 1 &&
-      lines->Array.getUnsafe(0)->String.startsWith(`driver-machine ${version} -> `),
-  )
-})
-
-test("bump infers served interface raises from the setup pin before the local contracts", () => {
-  let version = Archive.version()->Option.getOr("")
-  let entry = JSON.parseOrThrow(
-    `{"name":"driver-machine","version":"${version}","interfaces":{"management":1}}`,
-  )
-  let listed = () => Ok([entry])
-  let since = _ => Ok((true, []))
-  [1, 2]->Array.forEach(interface => {
-    let asked = []
-    let read = (~cwd, ~from, path) => {
-      asked->Array.push((cwd, from, path))
-      Ok(`{"interfaces":{"management":{"version":${interface->Int.toString}}}}`)
-    }
-    let served = () =>
-      Inputs.served(
-        ~read,
-        ~current=() => pinning(now),
-        ~reach=present,
-        ~source=() => `const SERVED: &str = "management";`,
-        (),
-      )
-    let written = ref(None)
-    let write = (~manifest, next) => {
-      deepEqual(manifest, version)
-      written := Some(next)
-      Ok()
-    }
-    deepEqual(exited(() => Bump.main(~listed, ~since, ~served, ~write, ())), 0)
-    deepEqual(asked, [(Inputs.sibling, now, "model/contracts.json")])
-    deepEqual(
-      written.contents,
-      Versioned.next(
-        ~manifest=version,
-        ~last=Some(Inputs.recorded(entry)),
-        ~serves=dict{"management": interface},
-      ),
-    )
-  })
-})
-
-test("bump keeps the patch fallback for an unreadable pin and refuses unreadable contracts", () => {
-  let read = (~cwd as _, ~from as _, _) => {
-    ok(false, ~message="a missing pin must not read local contracts")
-    Error("not reached")
-  }
-  let result = ref(Error("not run"))
-  let lines = printed(() =>
-    result := Inputs.served(~read, ~current=() => pinning(now), ~reach=_ => Error([now]), ())
-  )
-  deepEqual(result.contents, Ok(Dict.make()))
-  deepEqual(lines->Array.length, 1)
-  [Error("contracts could not be read"), Ok("{")]->Array.forEach(answer => {
-    let served = () =>
-      Inputs.served(
-        ~read=(~cwd as _, ~from as _, _) => answer,
-        ~current=() => pinning(now),
-        ~reach=present,
-        (),
-      )
-    ok(served()->Result.isError)
-    let version = Archive.version()->Option.getOr("")
-    let listed = () => Ok([JSON.parseOrThrow(`{"name":"driver-machine","version":"${version}"}`)])
-    let write = (~manifest as _, _) => {
-      ok(false, ~message="unreadable contracts must leave the version unchanged")
-      Ok()
-    }
-    deepEqual(exited(() => Bump.main(~listed, ~since=_ => Ok((true, [])), ~served, ~write, ())), 0)
-  })
 })
 
 test("release membership delegates the name and version and keeps lookup errors", () => {

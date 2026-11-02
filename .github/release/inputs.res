@@ -151,35 +151,6 @@ let reached = (~holds=holds, ~fetch=fetched, commits) => {
   }
 }
 
-// The setup action pins the contracts used to infer a minor raise.
-let served = (
-  ~read=file,
-  ~current=current,
-  ~reach=commits => reached(commits),
-  ~source=() => Archive.readFileSync(Archive.join([Archive.root, "machine", "src", "served.rs"])),
-  (),
-) =>
-  switch platform(current()) {
-  | None => Error(`${setup} pins no platform commit`)
-  | Some(now) =>
-    switch reach([now]) {
-    | Error(unknown) =>
-      Versioned.warn(
-        `monoflake/platform lacks ${unknown->Array.join(
-            ", ",
-          )} even after a fetch, so its served interface versions were not read; the patch is raised at least`,
-      )
-      Ok(Dict.make())
-    | Ok() =>
-      read(~cwd=sibling, ~from=now, "model/contracts.json")->Result.flatMap(text =>
-        switch JSON.parseOrThrow(text) {
-        | contracts => Ok(Versioned.interfaces(~source=source(), ~contracts))
-        | exception JsExn(_) => Error("the pinned platform contracts are not JSON")
-        }
-      )
-    }
-  }
-
 /** What changed since the last release, the driver's own inputs and the platform's, and the
  * platform commits that could not be read even after a fetch, where the platform is not known. */
 type compared = {own: bool, shared: bool, unknown: array<string>}
@@ -250,59 +221,6 @@ let changed = (
         }
       }
     })
-  )
-
-/** Each commit's message from `from` to `to`, or to the working copy, that touches `paths`. */
-let messages = (~cwd, ~from, ~to=?, paths) =>
-  (
-    jj(cwd)
-      ? output(
-          ~cwd,
-          "jj",
-          [
-            "log",
-            "--no-graph",
-            "--revisions",
-            `${from}..${to->Option.getOr("@")}`,
-            "--template",
-            `description ++ "\\0"`,
-            ...paths,
-          ],
-        )
-      : output(
-          ~cwd,
-          "git",
-          ["log", "--format=%B%x00", `${from}..${to->Option.getOr("HEAD")}`, "--", ...paths],
-        )
-  )->Result.map(log =>
-    log->String.split("\u0000")->Array.map(String.trim)->Array.filter(message => message != "")
-  )
-
-/** Each commit's message since the last release, the driver's and the platform's, and the
- * platform commits that could not be read even after a fetch, whose messages are not among them. */
-type since = {messages: array<string>, unread: array<string>}
-
-let breakingSince = (
-  ~log=messages,
-  ~read=file,
-  ~current=current,
-  ~reach=commits => reached(commits),
-  entry,
-) =>
-  pins(~read, ~current, entry)->Result.flatMap(((from, last, now)) =>
-    log(~cwd=Archive.root, ~from, own)->Result.flatMap(own =>
-      if last == now {
-        Ok({messages: own, unread: []})
-      } else {
-        switch reach([last, now]) {
-        | Error(unread) => Ok({messages: own, unread})
-        | Ok() =>
-          sharedAt(~read, now)
-          ->Result.flatMap(paths => log(~cwd=sibling, ~from=last, ~to=now, paths))
-          ->Result.map(shared => {messages: [...own, ...shared], unread: []})
-        }
-      }
-    )
   )
 
 let recorded = entry => (

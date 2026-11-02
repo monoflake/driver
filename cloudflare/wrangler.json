@@ -10,7 +10,7 @@
 			"binding": "DB",
 			"database_name": "driver",
 			"database_id": "00000000-0000-0000-0000-000000000000",
-			"migrations_dir": "migrations"
+			"migrations_dir": "database/migrations"
 		}
 	],
 	"vars": { "INSTALL_ID": "", "ACCOUNT_ID": "", "KINDS": "function" }

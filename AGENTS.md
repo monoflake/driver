@@ -20,12 +20,12 @@ machine/    driver(machine): the program driver-machine, RFC 8c0rg, the entry it
             run as a unit of its own, RFC rmll5, and beneath it each kind's crate, container/,
             function/, object/ and volume/, which owns every subvolume and qgroup, and management/
 cloudflare/ driver(cloudflare): the Worker `driver` on a bound account, RFC nrs5v, its D1 state
-            in migrations/, and beneath it function/ and management/, so far its first slice
+            in database/migrations/, and beneath it function/ and management/, so far its first slice
 scripts/    archive.res, the program built static for both architectures and archived; dev.res, one
             built for a test machine, copied in, restarted and checked
 .github/    release.yml and release/, the release's scripts, run by CI and verify's version guard
 model/      each driver, machine.res and cloudflare.res, in made.res's types; filling.res, its blocks
-            and the fill; tasks.res, the tasks; plan/progress.res, each written block's state
+            and the fill; tasks.res, the tasks; written.res, each written block's state
 docs/       rfcs/, what is decided here alone
 ```
 

@@ -52,27 +52,6 @@ let incremented = (~manifest, ~last: option<(string, dict<int>)>, ~serves: dict<
 
 let next = (~manifest, ~last, ~serves) => incremented(~manifest, ~last, ~serves, ~breaking=false)
 
-let breaking = message =>
-  RegExp.test(/^[a-z]+(?:\([^\n)]+\))?!:/, message) ||
-  RegExp.test(/(?:^|\n)BREAKING CHANGE: /, message)
-
-/** The version `mise run bump` writes, the manifest's own where no input changed since the last
- * release, and otherwise the higher of it and the incremented one, so a raise by hand is kept. */
-let bumped = (~manifest, ~last, ~serves, ~messages, ~changed) =>
-  switch numbers(manifest) {
-  | None => None
-  | Some(_) if !changed => Some(manifest)
-  | Some(now) =>
-    incremented(
-      ~manifest,
-      ~last,
-      ~serves,
-      ~breaking=messages->Array.some(breaking),
-    )->Option.map(next =>
-      numbers(next)->Option.mapOr(false, next => later(next, now)) ? next : manifest
-    )
-  }
-
 let checked = (~manifest, ~last, ~changed) =>
   switch (numbers(manifest), last->Option.flatMap(numbers)) {
   | (None, _) => Error("machine/Cargo.toml needs MAJOR.MINOR.PATCH")

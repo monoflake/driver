@@ -41,6 +41,9 @@ jobs:
       - uses: ./repos/monoflake/driver/.github/actions/setup
         with:
           cache: "false"
+      - name: Build
+        working-directory: repos/monoflake/driver
+        run: mise exec -- rescript build
       - name: Promote build
         id: promote
         working-directory: repos/monoflake/driver
@@ -49,7 +52,7 @@ jobs:
           RELEASE_RUN: ${{ inputs.run }}
           RELEASE_SHA256_X86_64: ${{ inputs.sha256_x86_64 }}
           RELEASE_SHA256_AARCH64: ${{ inputs.sha256_aarch64 }}
-        run: mise exec -- sh -c 'rescript build && node .github/release/promote.res.mjs'
+        run: mise exec -- node .github/release/promote.res.mjs
       - name: Release
         if: steps.promote.outputs.ready == 'true'
         working-directory: repos/monoflake/driver
@@ -62,4 +65,4 @@ jobs:
         working-directory: repos/monoflake/driver
         env:
           GH_TOKEN: ${{ github.token }}
-        run: mise exec -- node "$GITHUB_WORKSPACE/scripts/release/release.res.mjs" notes
+        run: mise exec -- node .github/release/notes.res.mjs
