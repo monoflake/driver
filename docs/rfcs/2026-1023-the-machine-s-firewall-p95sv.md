@@ -1,10 +1,8 @@
 ---
 name: "The Machine's Firewall"
 title: "A machine's firewall: nftables, its policy declared by the machine's module and its members written by the driver"
-status: accepted
+status: decided
 supersedes: []
-blocked-by: []
-commits: []
 references: []
 ---
 
@@ -39,12 +37,6 @@ Decided by the author on 2026-10-23.
 - **A firewall changed on a machine reached remotely is tried before it is kept**: activated
   without becoming the boot default, and rolled back on its own unless the tailnet is confirmed
   still to reach the machine within minutes.
-- **Built once the fourth thread has returned the test machines**, before the platform keeps data.
-- **Three points are settled as it is built, provisionally, and written here then**: whether
-  Tailscale keeps writing its own rules beside the table or the table holds the one it needs, its
-  addresses dropped from any other interface; whether the bridge plugin's masquerade stays the
-  plugin's or moves into the table; how a deployment's `network` is written as addresses and ports
-  on a machine.
 
 **The fence is not tried and not rolled back**, decided by the author on 2026-10-24, narrowing the
 rule that a firewall changed on a machine reached remotely is tried before it is kept.
@@ -147,18 +139,10 @@ Choices made provisionally while the thread runs, read by the author at its end.
 
 ## State
 
-Written on 2026-11-01. The fence around the driver's containers is built, and the host firewall
-this RFC set out to replace is not.
+Written on 2026-11-01. The fence around the driver's containers is built.
 
 Built, in monoflake/machine: `system/network/fence.nix` declares `table bridge fence` and `table
 inet fence`, covers `driver0` and `conform0`, and holds every base chain's policy at accept behind
 a build-time scope check. The driver writes only the elements of the set `reaching` whose reacher
 lies in its own subnet. `machine.reservedPorts` and the `ip_local_reserved_ports` sysctl are in
 `system/network/default.nix`, and `docs/fence.md` there states the rule.
-
-Not built: `table inet filter`. `system/base/network.nix` in monoflake/machine still enables
-`networking.nftables` with NixOS's own firewall, opens SSH on the tailnet's interface alone, and
-`docs/local.md` there says NixOS's firewall runs as on a real machine. No module declares the zones
-by reverse path, the default drop of the public interface, a per-deployment egress map, or the
-tried-then-kept activation with its four conditions. The three points left to be settled as it is
-built are therefore still open.

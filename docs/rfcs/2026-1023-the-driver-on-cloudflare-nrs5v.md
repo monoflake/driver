@@ -1,10 +1,8 @@
 ---
 name: 'The Driver on Cloudflare'
 title: '`driver(cloudflare)`: where it runs, how a binding is kept apart, and what each kind is on an account'
-status: accepted
+status: decided
 supersedes: []
-blocked-by: []
-commits: []
 references:
   - url: https://developers.cloudflare.com/workers/platform/limits/
     took: "a request's CPU, subrequests, Workers an account and a Worker's size of 64 MiB on every plan"
@@ -142,10 +140,9 @@ Decided by the author on 2026-10-23, from the research the Options below record.
   for the test; an organization's own free account is bound only after conform passes and clearing
   is proven on the empty one. What a test makes is still removed when it ends.
 - **Workers, R2 and D1 alone, no Durable Object yet**: the driver's own state, its tokens' hashes,
-  its lists and when each item went unasked, is kept in D1, and the grace is swept by a Cron
-  Trigger, where the Options had a Durable Object and its alarm; the instance kind waits. **The
-  Cron Trigger is struck by monoflake/cloud's RFC rxmd9**, which puts every timer on a machine: the
-  grace is swept as each request to the management arrives, never one to a kind. **Which machine
+  its lists and when each item went unasked, is kept in D1, and the instance kind
+  waits. **There is no Cron Trigger, by monoflake/cloud's RFC rxmd9**, which puts every timer on a
+  machine: the grace is swept as each request to the management arrives, never one to a kind. **Which machine
   calls the sweep on time was decided by the author on 2026-10-24**: the grace is event-driven. When
   an applied list leaves an item on a Cloudflare binding unasked, its grace end is known, and that
   event sets one tick at that time; at the tick the binding's management is called once, and that
@@ -160,12 +157,11 @@ Decided by the author on 2026-10-23, from the research the Options below record.
   clearing lease leaves is closed by design. Rejected: a guard statement before every batch, which
   patches the hand-over, and leaving the gap. It is built when `database` is first offered on a
   Cloudflare binding, since an organization's free account is not offered it, so nothing uses it
-  today; until then the one database, its clearing lease and its change of owner below stand, and
-  they are replaced once it is built. Its cost: the free plan allows 10 D1 databases an account,
+  today. Its cost: the free plan allows 10 D1 databases an account,
   the paid plan many more.
 - **The first slice is management and function**, hello deployed through the platform to an empty
   test account; then object on R2; then database on D1.
-- **Settled as it is built, provisionally, and written here then**: how a deployment's `network` is
+- **Settled in the slices, provisionally**: how a deployment's `network` is
   answered where it cannot be enforced; whether the binding's token or its hash is the Worker's
   secret; the account's Workers subdomain or a Custom Domain for a deployment's name; a bucket per object item or a
   prefix in one; how D1's size is held to an item's capacity. The first slice's, each provisional,
@@ -577,8 +573,7 @@ Choices made provisionally while the thread runs, read by the author at its end.
 
 ## State
 
-Written on 2026-11-01. The three slices are built, and the inline data path and a D1 of each
-database item are not.
+Written on 2026-11-01. The three slices are built.
 
 Built, in `cloudflare/` of this repository: the management and `function`, the `object` adapter on
 R2 and the `database` adapter on D1, which `src/driver.res` finds by the account's records and
@@ -588,10 +583,3 @@ account's names and records them before making anything. So the Worker, database
 `driver`, `object`, `database` and `objects` in the first slices' bullets are history: the parts
 carry drawn ids found by role in `owned`. The bullet that holds a `database` item `failed` until
 the third slice is built is stale for the same reason, since that slice exists.
-
-Not built: a deployment's `reaching` still answers `beyond_host` at `src/driver.res`, so the
-Cloudflare half of the workspace's deferred item `inline-data-path` waits. A D1 of each database
-item is not made: `database/src/held.res` still holds one database for one item under the
-clearing lease, and `owned` has the single role `user_database`, so the deferred item
-`d1-per-item` stands. Whether a real account now offers `database` is not recorded in this
-repository.

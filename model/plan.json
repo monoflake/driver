@@ -18,6 +18,31 @@
 					"commit": "121713f8"
 				}
 			}
+		},
+		{
+			"id": "egress-map",
+			"says": "The driver writes a per-deployment egress map into the machine's filter, from each deployment's `network`, adding it as the deployment deploys and removing it as it deletes, elements only and never a rule",
+			"holds": {
+				"owes": "the author's word"
+			},
+			"why": "p95sv",
+			"waits": "author"
+		},
+		{
+			"id": "adopt-object-database",
+			"says": "driver(cloudflare) adopts `object` and `database` as it adopts `function`, which management.res answers beyond_host until the D1 wiring lands",
+			"holds": {
+				"owes": "adoption of both kinds"
+			},
+			"why": "vbg0u"
+		},
+		{
+			"id": "binding-names-declared",
+			"says": "`{app}.b{binding}` is admitted only where a deployment declares it, not for every deployment",
+			"holds": {
+				"owes": "the entry admitting declared names alone"
+			},
+			"why": "3txyw"
 		}
 	]
 }
