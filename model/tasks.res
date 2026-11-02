@@ -18,7 +18,18 @@ external spawn: (string, array<string>, options) => spawned = "spawnSync"
 /** monoflake/platform's check run with this fill, its status, as cloud's whole model runs it. */
 let platform = () => {
   let here = fileURLToPath(importMetaUrl)
-  let check = join([here, "..", "..", "..", "platform", "model", "check.res.mjs"])
+  let check = join([
+    here,
+    "..",
+    "..",
+    "..",
+    "platform",
+    "code",
+    "tools",
+    "check",
+    "src",
+    "main.res.mjs",
+  ])
   let fill = join([temporary(join([tmpdir(), "fill-"])), "fill.json"])
   write(
     fill,
