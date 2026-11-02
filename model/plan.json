@@ -1,0 +1,23 @@
+{
+	"items": [
+		{
+			"id": "release-by-run",
+			"says": "monoflake/driver's release publishes the build a run already rehearsed, named by its run id, and refuses a hash not recorded, ending the second build of driver-single-build",
+			"delivers": ["driver-archive"],
+			"holds": {
+				"committed": {
+					"commit": "2d8bb004"
+				}
+			}
+		},
+		{
+			"id": "compat-versions",
+			"says": "A driver's description reports the interface versions it implements, and the control refuses a driver outside the range it speaks",
+			"holds": {
+				"committed": {
+					"commit": "121713f8"
+				}
+			}
+		}
+	]
+}
