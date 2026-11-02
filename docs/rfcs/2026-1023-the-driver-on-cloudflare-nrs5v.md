@@ -304,7 +304,7 @@ Decided by the author on 2026-10-23, from the research the Options below record.
     first since 2026-11-01 by the workspace's `docs/naming.md`, as `CLOUDFLARE_DRIVER_DATABASE` is.
     Since 2026-10-31 it
     runs on the Mac's own wrangler login and is given no token of its own, the workspace's
-    `docs/toolchain.md` having a task run only on the author's Mac use the author's logged-in CLIs. The binding's token is read on stdin, as `driver-machine bind` reads it,
+    `docs/toolchain/secrets.md` having a task run only on the author's Mac use the author's logged-in CLIs. The binding's token is read on stdin, as `driver-machine bind` reads it,
     and put as `BINDING` by its BLAKE3, and with `DRIVER_CONTROL_BASE` install binds once every
     Worker is deployed, monoflake/platform's RFC 8j7b0; the token and the base go both or neither,
     and with neither both steps are passed over.

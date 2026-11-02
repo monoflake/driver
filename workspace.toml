@@ -5,7 +5,8 @@ base = "https://github.com/canmi21/canmi.git"
 [push]
 visibility = "public"
 
-# What the workspace's update moves here besides this repository's own task, its docs/toolchain.md.
+# What the workspace's update moves here besides this repository's own task, its
+# docs/toolchain/dependencies.md.
 # What this repository exports and what it depends on, RFC 8q1af.
 [boundary]
 exports = ["driver-archive", "driver-install"]
@@ -19,7 +20,8 @@ actions = true
 [rfcs]
 ids = "monoflake"
 
-# Suffixes this repository alone tracks, formatted by nothing, the workspace's docs/lint-format.md.
+# Suffixes this repository alone tracks, formatted by nothing, the workspace's
+# docs/toolchain/lint-format.md.
 [format]
 unformatted = [".capnp", ".sql"]
 # The readings a test reads, kept byte for byte, which neither the suffixes part nor a hook touches.
