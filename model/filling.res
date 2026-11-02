@@ -19,15 +19,20 @@ let given: dict<Drivers.driver> =
  */
 let drafts = () => {
   let rfcs = Base.url("../docs/rfcs/", importMetaUrl)
-  Base.readdirSync(rfcs)->Array.flatMap(area => {
-    let dir = Base.urlIn(`${area}/`, rfcs)
-    Base.readdirSync(dir)->Array.filterMap(file =>
-      file->String.endsWith(".md") &&
-        Base.readFileSync(Base.urlIn(file, dir))->String.includes("\nstatus: draft\n")
-        ? file->String.split("-")->Array.at(-1)->Option.map(s => s->String.replace(".md", ""))
-        : None
-    )
-  })
+  let draftIn = (dir, file) =>
+    file->String.endsWith(".md") &&
+      Base.readFileSync(Base.urlIn(file, dir))->String.includes("\nstatus: draft\n")
+      ? file->String.split("-")->Array.at(-1)->Option.map(s => s->String.replace(".md", ""))
+      : None
+  // The RFCs sit flat while they number few, and in a directory of an area past that.
+  Base.readdirSync(rfcs)->Array.flatMap(entry =>
+    entry->String.endsWith(".md")
+      ? draftIn(rfcs, entry)->Option.mapOr([], id => [id])
+      : {
+          let dir = Base.urlIn(`${entry}/`, rfcs)
+          Base.readdirSync(dir)->Array.filterMap(file => draftIn(dir, file))
+        }
+  )
 }
 
 /** This repository's blocks, held by monoflake/platform's `tree.res`. */
