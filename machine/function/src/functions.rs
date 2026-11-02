@@ -1,7 +1,7 @@
 //! The `deployments` interface for modules, each deployment's workerd hosted by the container kind,
 //! which keeps what it runs as it keeps an image's container.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use driver_machine_container::{Binding, Deployments, Host, Hosted, Refused, SECRETS};
 use envelope::contracts::{
@@ -119,7 +119,18 @@ where
 		// it reaches, so the bundle is fetched each time.
 		let bytes = self.containers.fetch(&binding.namespace, &input.artifact).await?;
 		let bundle = Bundle::unpack(&bytes)?;
-		let worker = Worker::of(&input, &bundle);
+		let held = self.containers.secret_names(binding, &input.runs).await?;
+		let mut worker = Worker::of(&input, &bundle);
+		let mut names: BTreeSet<String> = worker
+			.bindings
+			.iter()
+			.map(|b| match b {
+				Bound::Secret { name } | Bound::Text { name, .. } => name.clone(),
+			})
+			.collect();
+		worker.bindings.extend(
+			held.into_iter().filter(|name| names.insert(name.clone())).map(|name| Bound::Secret { name }),
+		);
 		let hosted = Hosted {
 			image: self.workerd.clone(),
 			cmd: command(&worker),

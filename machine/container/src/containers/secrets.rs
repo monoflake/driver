@@ -196,6 +196,21 @@ pub(super) async fn restore(
 	placed(&places.open, &secrets, uid, gid).await
 }
 
+/// The names held in the sealed copy, without opening its values.
+pub(super) async fn names(places: &Places) -> Result<Vec<String>, Refused> {
+	let mut entries = match tokio::fs::read_dir(&places.sealed).await {
+		Ok(entries) => entries,
+		Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+		Err(e) => return Err(failed(&places.sealed, &e)),
+	};
+	let mut names = Vec::new();
+	while let Some(entry) = entries.next_entry().await.map_err(|e| failed(&places.sealed, &e))? {
+		names.push(entry.file_name().to_string_lossy().into_owned());
+	}
+	names.sort();
+	Ok(names)
+}
+
 /// The secrets opened from the sealed copy, even where tmpfs still holds its files.
 pub(super) async fn read(
 	places: &Places,

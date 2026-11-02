@@ -118,6 +118,12 @@ pub struct Hosted {
 /// What another kind asks of the containers, an artifact fetched as an image's is and a runtime of
 /// the machine's run as an image is, RFC vr5lw; implemented for [`Containers`].
 pub trait Host {
+	/// The secret names held for the deployment on this binding, empty where none is deployed.
+	fn secret_names(
+		&self,
+		binding: &Binding,
+		runs: &DeploymentRuns,
+	) -> impl Future<Output = Result<Vec<String>, Refused>> + Send;
 	/// An artifact fetched for the namespace, held to its bound and its hash; its bytes.
 	fn fetch(
 		&self,

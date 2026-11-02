@@ -731,6 +731,18 @@ where
 	Q: Quota,
 	F: Fetch,
 {
+	async fn secret_names(
+		&self,
+		binding: &Binding,
+		runs: &DeploymentRuns,
+	) -> Result<Vec<String>, Refused> {
+		let mine = self.mine(binding, runs).await?;
+		match chosen(&mine) {
+			Some(previous) => secrets::names(&self.places(&binding.namespace, &previous.id)).await,
+			None => Ok(Vec::new()),
+		}
+	}
+
 	async fn fetch(
 		&self,
 		namespace: &str,

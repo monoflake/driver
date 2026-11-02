@@ -28,6 +28,7 @@ fn refused(reason: &'static str) -> Refused {
 /// A deployment the fake runs.
 struct Held {
 	version: [u8; 32],
+	secrets: std::collections::BTreeSet<String>,
 	address: String,
 	runtime: DeploymentRuntime,
 	isolation: Vec<DeploymentIsolation>,
@@ -125,6 +126,22 @@ impl Deployments for Fake {
 }
 
 impl Host for Fake {
+	async fn secret_names(
+		&self,
+		binding: &Binding,
+		runs: &DeploymentRuns,
+	) -> Result<Vec<String>, Refused> {
+		Ok(
+			self
+				.held
+				.lock()
+				.unwrap()
+				.get(&key(binding, runs))
+				.map(|h| h.secrets.iter().cloned().collect())
+				.unwrap_or_default(),
+		)
+	}
+
 	async fn fetch(&self, _: &str, artifact: &DeploymentArtifact) -> Result<Vec<u8>, Refused> {
 		self.fetched.lock().unwrap().push(artifact.address.clone());
 		let bytes = self.served.get(&artifact.address).ok_or_else(|| refused("unfetchable"))?;
@@ -146,8 +163,17 @@ impl Host for Fake {
 		if !input.into.is_some_and(|into| binding.capacities.contains_key(&into)) {
 			return Err(refused("beyond_host"));
 		}
+		let mut secrets = self
+			.held
+			.lock()
+			.unwrap()
+			.get(&key(binding, &input.runs))
+			.map(|h| h.secrets.clone())
+			.unwrap_or_default();
+		secrets.extend(input.secrets.iter().flat_map(|s| s.keys()).cloned());
 		let held = Held {
 			version: input.version,
+			secrets,
 			address: format!("10.88.0.2:{}", hosted.port),
 			runtime: hosted.runtime,
 			isolation: hosted.isolation.clone(),

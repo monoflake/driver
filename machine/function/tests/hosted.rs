@@ -93,6 +93,52 @@ async fn deployed_again_the_container_kind_tells_the_one_deployment_apart() {
 }
 
 #[tokio::test]
+async fn a_secretless_redeploy_binds_the_kept_secret() {
+	retained(None, &["TOKEN"]).await;
+}
+
+#[tokio::test]
+async fn a_partial_redeploy_binds_the_kept_and_given_secrets() {
+	retained(Some(BTreeMap::from([("OTHER".into(), b"new hidden".to_vec())])), &["OTHER", "TOKEN"])
+		.await;
+}
+
+#[tokio::test]
+async fn a_first_deploy_without_secrets_binds_none() {
+	let functions = functions(served());
+	functions.deploy(&binding(), echo()).await.unwrap();
+	let hosted = functions.containers.hosted.lock().unwrap();
+	let [(_, hosted)] = hosted.as_slice() else { panic!("hosted {}", hosted.len()) };
+	assert_eq!(hosted.cmd, ["serve", "/worker/config.capnp", "config"]);
+	let config = String::from_utf8(hosted.files["config.capnp"].clone()).unwrap();
+	assert!(!config.contains("text = embed"), "{config}");
+}
+
+async fn retained(secrets: Option<BTreeMap<String, Vec<u8>>>, names: &[&str]) {
+	let functions = functions(served());
+	let first = DeploymentDeploy {
+		secrets: Some(BTreeMap::from([("TOKEN".into(), b"kept hidden".to_vec())])),
+		..echo()
+	};
+	functions.deploy(&binding(), first).await.unwrap();
+	let next = DeploymentDeploy { version: [2; 32], secrets, ..echo() };
+	functions.deploy(&binding(), next).await.unwrap();
+	let hosted = functions.containers.hosted.lock().unwrap();
+	let [_, (input, hosted)] = hosted.as_slice() else { panic!("hosted {}", hosted.len()) };
+	assert_eq!(input.secrets.as_ref().map_or(0, BTreeMap::len), names.len() - 1);
+	assert_eq!(
+		hosted.cmd,
+		["serve", "/worker/config.capnp", "config", "--import-path", "/run/secrets"]
+	);
+	let config = String::from_utf8(hosted.files["config.capnp"].clone()).unwrap();
+	assert_eq!(config.matches("text = embed").count(), names.len());
+	for name in names {
+		assert!(config.contains(&format!("(name = \"{name}\", text = embed \"/{name}\")")), "{config}");
+	}
+	assert!(!config.contains("hidden"));
+}
+
+#[tokio::test]
 async fn what_workerd_cannot_give_is_beyond_the_host_and_nothing_is_fetched() {
 	let functions = functions(served());
 	let empty = Binding { capacities: BTreeMap::new(), ..binding() };

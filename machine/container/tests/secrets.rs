@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use common::{ECHO_TWO, binding, cleared, deploy, driver, echo, hash, lines, of, shell, spec_of};
-use driver_machine_container::Deployments;
+use driver_machine_container::{Deployments, Host};
 use envelope::contracts::{DeploymentDeploy, DeploymentRuns};
 
 struct Cleanup(PathBuf);
@@ -31,11 +31,13 @@ async fn absent_or_empty_secrets_keep_the_previous_sealed_copy() {
 		let name = if secrets.is_none() { "env-absent" } else { "env-empty" };
 		let (driver, log) = driver(name, shell(), false);
 		let _cleanup = Cleanup(driver.state.clone());
+		assert!(driver.secret_names(&binding(), &of().runs).await.unwrap().is_empty());
 		driver.deploy(&binding(), echo()).await.unwrap();
 		let old = spec_of(&driver).id;
 		let open = driver.secrets.join("b1").join(&old);
 		cleared(&open);
 		std::fs::remove_dir_all(open).unwrap();
+		assert_eq!(driver.secret_names(&binding(), &of().runs).await.unwrap(), ["TOKEN"]);
 		let next = DeploymentDeploy { secrets, ..deploy("file:///echo-two.tar", ECHO_TWO) };
 		driver.deploy(&binding(), next).await.unwrap();
 		let new = spec_of(&driver).id;
@@ -65,6 +67,7 @@ async fn one_name_overlays_the_previous_secrets_and_leaves_the_rest() {
 		..deploy("file:///echo-two.tar", ECHO_TWO)
 	};
 	driver.deploy(&binding(), next).await.unwrap();
+	assert_eq!(driver.secret_names(&binding(), &of().runs).await.unwrap(), ["KEEP", "TOKEN"]);
 	let open = driver.secrets.join("b1").join(spec_of(&driver).id);
 	assert!(std::fs::read(open.join("TOKEN")).unwrap() == b"changed");
 	assert!(std::fs::read(open.join("KEEP")).unwrap() == b"retained");
@@ -82,6 +85,7 @@ async fn no_previous_for_this_app_gives_only_the_names_supplied() {
 	let _cleanup = Cleanup(driver.state.clone());
 	driver.deploy(&binding(), echo()).await.unwrap();
 	let next = DeploymentDeploy { runs: DeploymentRuns::App { id: 2 }, secrets: None, ..echo() };
+	assert!(driver.secret_names(&binding(), &next.runs).await.unwrap().is_empty());
 	driver.deploy(&binding(), next).await.unwrap();
 	let id = common::id_of(&driver, "00000002");
 	assert!(!driver.state.join("secrets/b1").join(&id).exists());
