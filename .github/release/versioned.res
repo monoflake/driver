@@ -3,7 +3,7 @@
  * archives in target/archives/built.json at machine/Cargo.toml's version, or none if released.
  */
 type captured = {status: Nullable.t<int>, stdout: Nullable.t<string>, stderr: Nullable.t<string>}
-type capturing = {cwd: string, encoding: string, maxBuffer: int}
+type capturing = {cwd: string, encoding: string, maxBuffer: int, env?: dict<string>}
 @module("node:child_process")
 external capture: (string, array<string>, capturing) => captured = "spawnSync"
 @module("node:fs") external existsSync: string => bool = "existsSync"
@@ -67,6 +67,16 @@ let already = (entries, version) =>
     entry->text("name") == Some(Archive.package) && entry->text("version") == Some(version)
   )
 
+/** The environment the workspace's release script runs in, naming the driver's repository where
+ * neither the workflow nor a checkout's origin does, as in a temporary copy. */
+let releasing = () => {
+  let env = Archive.env->Dict.copy
+  if env->Dict.get("GITHUB_REPOSITORY") == None {
+    env->Dict.set("GITHUB_REPOSITORY", "monoflake/driver")
+  }
+  env
+}
+
 /** Release membership belongs to the workspace's scripts/release/release.res. */
 let holds = version =>
   switch Archive.env->Dict.get("WORKSPACE") {
@@ -76,7 +86,7 @@ let holds = version =>
     switch capture(
       "node",
       [script, "holds", Archive.package, version, ...dry ? ["--dry-run"] : []],
-      {cwd: root, encoding: "utf8", maxBuffer: 67108864},
+      {cwd: root, encoding: "utf8", maxBuffer: 67108864, env: releasing()},
     ).status->Nullable.toOption {
     | Some(0) => Ok(true)
     | Some(2) => Ok(false)
@@ -126,7 +136,7 @@ let listed = () =>
     switch capture(
       "node",
       [script, "listed", ...dry ? ["--dry-run"] : []],
-      {cwd: root, encoding: "utf8", maxBuffer: 67108864},
+      {cwd: root, encoding: "utf8", maxBuffer: 67108864, env: releasing()},
     ) {
     | {status, stdout} if status->Nullable.toOption == Some(0) =>
       switch JSON.parseOrThrow(stdout->Nullable.toOption->Option.getOr(""))->JSON.Decode.array {
