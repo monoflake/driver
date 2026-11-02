@@ -114,7 +114,7 @@ async fn its_spec_holds_its_capacity_its_network_and_what_it_is_given() {
 #[tokio::test]
 async fn a_deployment_without_secrets_binds_none() {
 	let (driver, _) = driver("secretless", shell(), false);
-	driver.deploy(&binding(), DeploymentDeploy { secrets: BTreeMap::new(), ..echo() }).await.unwrap();
+	driver.deploy(&binding(), DeploymentDeploy { secrets: None, ..echo() }).await.unwrap();
 	let s = spec_of(&driver).runtime_spec;
 	assert!(s["mounts"].as_array().unwrap().iter().all(|m| m["destination"] != "/run/secrets"));
 	assert!(!driver.state.join("secrets.key").exists());
@@ -271,7 +271,7 @@ async fn an_image_without_its_port_or_with_a_secret_misnamed_is_malformed() {
 	let portless = DeploymentDeploy { port: None, ..echo() };
 	let wide = DeploymentDeploy { port: Some(70_000), ..echo() };
 	let secret = |name: &str| DeploymentDeploy {
-		secrets: BTreeMap::from([(name.to_owned(), b"x".to_vec())]),
+		secrets: Some(BTreeMap::from([(name.to_owned(), b"x".to_vec())])),
 		..echo()
 	};
 	let platform = secret("MONOFLAKE_FOOTING");

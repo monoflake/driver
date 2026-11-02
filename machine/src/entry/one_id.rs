@@ -122,7 +122,7 @@ fn deploy(runs: DeploymentRuns, reaching: Option<Vec<DeploymentRuns>>) -> Deploy
 			architecture: None,
 		},
 		footing: "https://footing.example".into(),
-		secrets: BTreeMap::new(),
+		secrets: None,
 		network: Vec::new(),
 		into: None,
 		port: Some(8080),

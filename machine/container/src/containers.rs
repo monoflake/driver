@@ -406,6 +406,18 @@ where
 		if let Some(same) = same {
 			return self.told(binding, &input.runs, same).await;
 		}
+		if let Some(previous) = chosen(&mine) {
+			let places = self.places(namespace, &previous.id);
+			if tokio::fs::try_exists(&places.sealed)
+				.await
+				.map_err(|e| Refused::new("fault", e.to_string()))?
+			{
+				let seal = KeyFile::of(&self.state).await?;
+				let mut held = secrets::read(&places, &seal).await?;
+				held.extend(wanted.secrets);
+				wanted.secrets = held;
+			}
+		}
 		let id = container_id(&input.runs, &wanted.version, &wanted.reaching);
 		let image = self.imported(namespace, input, hosted).await?;
 		if let Err(refused) = self.made(binding, &image, &wanted, &id).await {

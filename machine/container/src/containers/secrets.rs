@@ -189,9 +189,21 @@ pub(super) async fn restore(
 	if tokio::fs::try_exists(&places.open).await.unwrap_or(false) {
 		return Ok(());
 	}
+	let secrets = read(places, seal).await?;
+	if secrets.is_empty() {
+		return Ok(());
+	}
+	placed(&places.open, &secrets, uid, gid).await
+}
+
+/// The secrets opened from the sealed copy, even where tmpfs still holds its files.
+pub(super) async fn read(
+	places: &Places,
+	seal: &impl Seal,
+) -> Result<BTreeMap<String, Vec<u8>>, Refused> {
 	let mut entries = match tokio::fs::read_dir(&places.sealed).await {
 		Ok(entries) => entries,
-		Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+		Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
 		Err(e) => return Err(failed(&places.sealed, &e)),
 	};
 	let mut secrets = BTreeMap::new();
@@ -199,7 +211,7 @@ pub(super) async fn restore(
 		let sealed = tokio::fs::read(entry.path()).await.map_err(|e| failed(&entry.path(), &e))?;
 		secrets.insert(entry.file_name().to_string_lossy().into_owned(), seal.open(&sealed)?);
 	}
-	placed(&places.open, &secrets, uid, gid).await
+	Ok(secrets)
 }
 
 /// Both copies gone, none there being no failure.

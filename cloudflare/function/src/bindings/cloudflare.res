@@ -100,6 +100,7 @@ let formOf = (bundle, ~bindings, ~tag) => {
   let metadata = dict{
     "main_module": JSON.String(bundle.modules->Array.get(0)->Option.mapOr("", m => m.name)),
     "bindings": JSON.Array(bindings->Array.map(boundJson)),
+    "keep_bindings": JSON.Array([JSON.String("secret_text")]),
     "compatibility_date": JSON.String(bundle.compatibilityDate),
     "compatibility_flags": JSON.Array(bundle.compatibilityFlags->Array.map(f => JSON.String(f))),
   }

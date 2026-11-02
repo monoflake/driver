@@ -31,7 +31,7 @@ fn echo() -> DeploymentDeploy {
 			architecture: None,
 		},
 		footing: "https://footing.invalid".into(),
-		secrets: BTreeMap::new(),
+		secrets: None,
 		network: vec![DeploymentNetwork::Http],
 		into: None,
 		port: None,
@@ -67,7 +67,8 @@ async fn workerd_is_hosted_from_its_image_with_its_configuration_and_modules() {
 async fn secrets_are_imported_only_where_a_deployment_has_them() {
 	let functions = functions(served());
 	let secrets = BTreeMap::from([("TOKEN".to_owned(), b"hidden".to_vec())]);
-	let secret = DeploymentDeploy { runs: DeploymentRuns::App { id: 2 }, secrets, ..echo() };
+	let secret =
+		DeploymentDeploy { runs: DeploymentRuns::App { id: 2 }, secrets: Some(secrets), ..echo() };
 	functions.deploy(&binding(), echo()).await.unwrap();
 	functions.deploy(&binding(), secret).await.unwrap();
 	let hosted = functions.containers.hosted.lock().unwrap();
@@ -178,7 +179,7 @@ async fn a_worker_reads_what_it_reaches_from_its_environment_beside_what_is_hand
 	let reacher = DeploymentDeploy {
 		runs: DeploymentRuns::App { id: 2 },
 		handed: Some(vec![DeploymentHanded::Root { value: vec![1] }]),
-		secrets: BTreeMap::from([("TOKEN".to_owned(), b"hidden".to_vec())]),
+		secrets: Some(BTreeMap::from([("TOKEN".to_owned(), b"hidden".to_vec())])),
 		reaching: Some(vec![stand_in]),
 		..echo()
 	};

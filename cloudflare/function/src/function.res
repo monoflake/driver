@@ -156,6 +156,7 @@ let checkedForm = (input: Contracts.DeploymentDeploy.t) =>
     } else {
       // A Worker's secret binding holds text, and the message names the secret, never its bytes.
       switch input.secrets
+      ->Option.getOr(dict{})
       ->Dict.toArray
       ->Array.find(((_, bytes)) => Web.fromUtf8(bytes) == None) {
       | Some((name, _)) => beyond(`the secret ${name} is no UTF-8 text, as a Worker's secret is`)
@@ -188,7 +189,10 @@ let checked = (input: Contracts.DeploymentDeploy.t) =>
   | (true, _) => beyond("a Worker reaches no other deployment on its binding yet")
   | (false, Some(name)) => Error({reason: "invalid", message: `${name} is handed twice`})
   | (false, None) =>
-    switch input.secrets->Dict.keysToArray->Array.find(name => name->String.startsWith(reserved)) {
+    switch input.secrets
+    ->Option.getOr(dict{})
+    ->Dict.keysToArray
+    ->Array.find(name => name->String.startsWith(reserved)) {
     | Some(name) =>
       Error({reason: "malformed", message: `${name} is a name the platform keeps, ${reserved}`})
     | None => checkedForm(input)
@@ -250,6 +254,7 @@ let bindingsOf = (input: Contracts.DeploymentDeploy.t) =>
     [
       input.handed->Option.getOr([])->Array.map(handedBound),
       input.secrets
+      ->Option.getOr(dict{})
       ->Dict.toArray
       ->Array.toSorted(((a, _), (b, _)) => String.compare(a, b))
       ->Array.map(((name, bytes)) => SecretText({

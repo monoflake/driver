@@ -81,7 +81,8 @@ fn listed(entries: &[String], indent: &str) -> String {
 impl Configure for Worker {
 	fn of(input: &DeploymentDeploy, bundle: &Bundle) -> Self {
 		let footing = Bound::Text { name: FOOTING.to_owned(), text: input.footing.clone() };
-		let secrets = input.secrets.keys().map(|name| Bound::Secret { name: name.clone() });
+		let secrets =
+			input.secrets.iter().flat_map(|s| s.keys()).map(|name| Bound::Secret { name: name.clone() });
 		let outbound = input.network.iter().any(|n| match n {
 			DeploymentNetwork::Http | DeploymentNetwork::Tcp => true,
 			DeploymentNetwork::Udp | DeploymentNetwork::Icmp => false,

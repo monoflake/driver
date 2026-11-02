@@ -390,7 +390,7 @@ pub fn deploy(address: &str, bytes: &[u8]) -> DeploymentDeploy {
 		isolation: vec![DeploymentIsolation::Kernel],
 		artifact: DeploymentArtifact { address: address.into(), hash: hash(bytes), architecture: None },
 		footing: "https://footing.invalid".into(),
-		secrets: BTreeMap::from([("TOKEN".into(), b"hidden".to_vec())]),
+		secrets: Some(BTreeMap::from([("TOKEN".into(), b"hidden".to_vec())])),
 		network: vec![DeploymentNetwork::Http],
 		into: Some(3),
 		port: Some(8080),

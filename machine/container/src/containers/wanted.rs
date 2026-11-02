@@ -119,13 +119,13 @@ impl<'a> Wanted<'a> {
 		let capacity = binding.capacities.get(&into).ok_or_else(|| {
 			Refused::new("beyond_host", format!("the binding holds no capacity {into}"))
 		})?;
-		for name in input.secrets.keys() {
+		for name in input.secrets.iter().flat_map(|s| s.keys()) {
 			secrets::named(name)?;
 		}
 		let handed = handed::bound(input.handed.as_deref().unwrap_or_default())?;
 		let env =
 			std::iter::once(format!("MONOFLAKE_FOOTING={}", input.footing)).chain(handed.env).collect();
-		let mut secrets = input.secrets.clone();
+		let mut secrets = input.secrets.clone().unwrap_or_default();
 		secrets.extend(handed.secrets);
 		Ok(Self {
 			runs: labels::runs(&input.runs),

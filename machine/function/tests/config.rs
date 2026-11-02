@@ -40,7 +40,7 @@ fn the_configuration_made_for_a_sample_deployment_is_as_written() {
 fn a_secret_is_named_and_never_written_and_a_network_not_given_is_not_reached() {
 	let bundle = Bundle::unpack(&bundle("counter-modules")).unwrap();
 	let input = DeploymentDeploy {
-		secrets: BTreeMap::from([("TOKEN".into(), b"hidden".to_vec())]),
+		secrets: Some(BTreeMap::from([("TOKEN".into(), b"hidden".to_vec())])),
 		network: vec![DeploymentNetwork::Udp],
 		..deployed()
 	};
@@ -68,7 +68,7 @@ fn what_is_handed_follows_the_footing_by_its_reserved_name() {
 	];
 	let input = DeploymentDeploy {
 		handed: Some(handed),
-		secrets: BTreeMap::from([("TOKEN".into(), b"hidden".to_vec())]),
+		secrets: Some(BTreeMap::from([("TOKEN".into(), b"hidden".to_vec())])),
 		..deployed()
 	};
 	let worker = Worker::of(&input, &bundle);

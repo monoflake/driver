@@ -63,6 +63,7 @@ test(
       Some(
         JSON.parseOrThrow(`{
         "main_module": "main.js",
+        "keep_bindings": ["secret_text"],
         "bindings": [
           {"type": "plain_text", "name": "MONOFLAKE_FOOTING", "text": "https://footing.invalid"},
           {"type": "secret_text", "name": "KEY", "text": "s3cret"}
@@ -107,6 +108,7 @@ test(
       metadataOf(made),
       Some(
         JSON.parseOrThrow(`{"main_module": "stopped.js", "bindings": [],
+        "keep_bindings": ["secret_text"],
         "compatibility_date": "2026-10-21", "compatibility_flags": [],
         "annotations": {"workers/tag": "0a1b2c3d/00000001/made"}}`),
       ),
