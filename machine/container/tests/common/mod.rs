@@ -266,7 +266,7 @@ impl Fetch for Artifacts {
 }
 
 pub const LARGEST: u64 = 1 << 30;
-/// How long a nix-store stand-in is waited on, short as a test is.
+/// How long a nix-store stand-in that never exits is waited on, short as its test is.
 pub const WAITED: std::time::Duration = std::time::Duration::from_millis(500);
 pub const ECHO: &[u8] = b"echo image";
 pub const ECHO_TWO: &[u8] = b"echo image, two";
@@ -342,7 +342,12 @@ pub fn driver(test: &str, config: ImageConfig, refuse: bool) -> (Driver, Log) {
 			crun: "/bin/crun".into(),
 			youki: "/bin/youki".into(),
 		},
-		roots: Roots { directory: state.join("roots"), store, nix: None, waited: WAITED },
+		roots: Roots {
+			directory: state.join("roots"),
+			store,
+			nix: None,
+			waited: std::time::Duration::from_secs(30),
+		},
 		secrets: state.join("tmpfs"),
 		state,
 		largest: LARGEST,

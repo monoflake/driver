@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use common::{
-	Driver, ECHO_TWO, Held, binding, deploy, driver, echo, id_of, lines, of, reason, shell, spec_of,
+	Driver, ECHO_TWO, Held, WAITED, binding, deploy, driver, echo, id_of, lines, of, reason, shell,
+	spec_of,
 };
 use driver_machine_container::{Deployments, Restart, Spec, Task};
 use envelope::contracts::{DeploymentDeploy, DeploymentRuns, DeploymentRuntime};
@@ -280,7 +281,8 @@ async fn a_root_nix_store_refuses_refuses_the_deploy_with_what_it_said() {
 	driver.roots.nix = Some(nix_store(&driver, true));
 	let refused = driver.deploy(&binding(), echo()).await.unwrap_err();
 	assert_eq!(refused.reason, "fault");
-	assert!(refused.message.unwrap().ends_with(": error: refused"));
+	let said = refused.message.unwrap();
+	assert!(said.ends_with(": error: refused"), "{said}");
 	assert!(driver.containerd.held.lock().unwrap().is_empty());
 }
 
@@ -325,6 +327,7 @@ async fn a_nix_store_that_never_exits_is_killed_and_neither_a_deploy_nor_a_start
 	// Its root gone, so a start asks nix-store for it again.
 	std::fs::remove_file(driver.roots.directory.join("b1").join(&id)).unwrap();
 	driver.roots.nix = Some(nix_store_waiting(&driver));
+	driver.roots.waited = WAITED;
 	let began = Instant::now();
 	let told = driver.rooted(&["b1".into()], LONG).await;
 	assert!(began.elapsed() < Duration::from_secs(5), "{:?}", began.elapsed());
