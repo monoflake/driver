@@ -43,7 +43,7 @@ jobs:
           cache: "false"
       - name: Build
         working-directory: repos/monoflake/driver
-        run: mise exec -- rescript build
+        run: mise run build
       - name: Promote build
         id: promote
         working-directory: repos/monoflake/driver
