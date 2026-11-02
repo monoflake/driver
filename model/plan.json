@@ -1,6 +1,13 @@
 {
 	"items": [
 		{
+			"id": "machine-keeps-runtime-up",
+			"says": "A deployment on a machine stays running without a call asking: its task gone or stopped by anything but a stop call is started again with its secrets, workerd being the runtime the platform provides and an image's process with a restart backoff, and only a stop call leaves one stopped",
+			"holds": {
+				"owes": "a supervising loop in machine/container, today a killed workerd stays stopped until a redeploy, seen on okra on 2026-11-02"
+			}
+		},
+		{
 			"id": "release-by-run",
 			"says": "monoflake/driver's release publishes the build a run already rehearsed, named by its run id, and refuses a hash not recorded, ending the second build of driver-single-build",
 			"delivers": ["driver-archive"],
