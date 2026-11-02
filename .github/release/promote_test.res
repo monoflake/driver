@@ -387,6 +387,66 @@ test("a hash mismatch copies neither downloaded archive into the release inputs"
   )
 })
 
+let tagging = (~listing, ~patch=Ok(""), ()) => {
+  let calls = []
+  let execute = (_, args) => {
+    calls->Array.push(args)->ignore
+    switch args {
+    | _ if args->Array.get(0) == Some("release") => Ok(listing)
+    | _ if args->Array.includes("PATCH") => patch
+    | _ => Ok("")
+    }
+  }
+  (calls, execute)
+}
+
+test("a release's tag is set on the run's head commit, not on main", () => {
+  let head = "3333333333333333333333333333333333333333"
+  let (directory, hashes, _, execute) = fixture()
+  let source = Promote.prepare(
+    ~run="123",
+    ~repository,
+    ~hashes,
+    ~execute=(command, args) =>
+      switch args {
+      | ["api", path] if path->String.endsWith("/actions/runs/123") =>
+        Ok(JSON.stringify(run(~sha=head, ())))
+      | ["api", path] if path->String.includes("/compare/main...") =>
+        ok(path->String.endsWith(head))
+        Ok(`{"status":"behind"}`)
+      | _ => execute(command, args->Array.map(arg => arg->String.replaceAll(head, commit)))
+      },
+    ~directory,
+    (),
+  )
+  let built = switch source {
+  | Ok({commit}) => commit
+  | Error(why) => why
+  }
+  deepEqual(built, head)
+  let (calls, execute) = tagging(~listing=`[]`, ())
+  deepEqual(Promote.tagged(~repository, ~commit=built, ~tag="2026.11.02", ~execute, ()), Ok())
+  let update = calls->Array.get(1)->Option.getOr([])
+  ok(update->Array.includes(`repos/${repository}/git/refs/tags/2026.11.02`))
+  ok(update->Array.includes(`sha=${head}`))
+})
+
+test("a missing tag is created at the commit and a published release keeps its own", () => {
+  let (calls, execute) = tagging(~listing=`[]`, ~patch=Error("not found"), ())
+  deepEqual(Promote.tagged(~repository, ~commit, ~tag="2026.11.02", ~execute, ()), Ok())
+  let created = calls->Array.get(2)->Option.getOr([])
+  ok(created->Array.includes("POST"))
+  ok(created->Array.includes("ref=refs/tags/2026.11.02"))
+  ok(created->Array.includes(`sha=${commit}`))
+  let (calls, execute) = tagging(~listing=`[{"tagName":"2026.11.02","isDraft":false}]`, ())
+  deepEqual(Promote.tagged(~repository, ~commit, ~tag="2026.11.02", ~execute, ()), Ok())
+  deepEqual(calls->Array.length, 1)
+  let (calls, execute) = tagging(~listing=`[{"tagName":"2026.11.02","isDraft":true}]`, ())
+  deepEqual(Promote.tagged(~repository, ~commit, ~tag="2026.11.02", ~execute, ()), Ok())
+  deepEqual(calls->Array.length, 2)
+  deepEqual(Promote.day(Date.fromString("2026-11-02T05:00:00Z")->Date.getTime), "2026.11.02")
+})
+
 test("release dispatch requires the run and hashes and invokes promotion before publishing", () => {
   let workflow = Archive.readFileSync(Archive.join([Archive.root, ".github/workflows/release.yml"]))
   ok(workflow->String.includes("  workflow_dispatch:\n"))

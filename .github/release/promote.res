@@ -109,6 +109,45 @@ let checked = (~directory, ~version, ~hashes, ~files=readdirSync, ~digest=Versio
   }
 }
 
+/** The UTC day's name, as the workspace's release names its tag. */
+let day = now =>
+  now->Date.fromTime->Date.toISOString->String.slice(~start=0, ~end=10)->String.replaceAll("-", ".")
+
+/** A release not yet published has its tag set on the build's own commit, so the tag the release
+ * then takes is not main at release time. A published release keeps the tag it has. */
+let tagged = (~repository, ~commit, ~tag, ~execute=output, ()) =>
+  execute(
+    "gh",
+    ["release", "list", "--repo", repository, "--limit", "100", "--json", "tagName,isDraft"],
+  )
+  ->Result.flatMap(json)
+  ->Result.flatMap(listing => {
+    let published =
+      listing
+      ->JSON.Decode.array
+      ->Option.getOr([])
+      ->Array.some(release =>
+        release->Versioned.text("tagName") == Some(tag) &&
+          release->Versioned.field("isDraft") != Some(JSON.Encode.bool(true))
+      )
+    if published {
+      Ok()
+    } else {
+      let ref = `repos/${repository}/git/refs`
+      switch execute(
+        "gh",
+        ["api", "-X", "PATCH", `${ref}/tags/${tag}`, "-f", `sha=${commit}`, "-F", "force=true"],
+      ) {
+      | Ok(_) => Ok()
+      | Error(_) =>
+        execute(
+          "gh",
+          ["api", "-X", "POST", ref, "-f", `ref=refs/tags/${tag}`, "-f", `sha=${commit}`],
+        )->Result.map(_ => ())
+      }
+    }
+  })
+
 let prepare = (
   ~run,
   ~repository,
@@ -215,6 +254,12 @@ if Archive.isMain {
         Versioned.environment("GITHUB_OUTPUT")->Option.forEach(path =>
           appendFileSync(path, `ready=${ready ? "true" : "false"}\n`)
         )
+        if ready {
+          switch tagged(~repository=Versioned.repository, ~commit, ~tag=day(Date.now()), ()) {
+          | Error(why) => Versioned.refuse(why)
+          | Ok() => ()
+          }
+        }
       },
       (),
     )
