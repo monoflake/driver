@@ -8,6 +8,14 @@
 			}
 		},
 		{
+			"id": "machine-rewind-by-wal",
+			"says": "A machine keeps a `database` item's 30-day rewind by its WAL archive and serves `rewind`, where it serves `execute` alone until then, due before the author declares the platform keeps data",
+			"holds": {
+				"owes": "the WAL archive and `rewind` in driver-machine, today rewinds.json waits in conform"
+			},
+			"why": "vr5lw"
+		},
+		{
 			"id": "release-by-run",
 			"says": "monoflake/driver's release publishes the build a run already rehearsed, named by its run id, and refuses a hash not recorded, ending the second build of driver-single-build",
 			"delivers": ["driver-archive"],
