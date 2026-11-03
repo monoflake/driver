@@ -450,9 +450,13 @@ where
 		}
 		let id = container_id(&input.runs, &wanted.version, &wanted.reaching, wanted.fill.as_deref());
 		let image = self.imported(namespace, input, hosted).await?;
-		if let Err(refused) = self.made(binding, &image, &wanted, &id).await {
+		// An old one still serves its sockets, so they are moved aside, never removed, until it goes.
+		let mut held = Vec::new();
+		let holding = (!mine.is_empty()).then_some(&mut held);
+		if let Err(refused) = self.made(binding, &image, &wanted, &id, holding).await {
 			// What was made of it before the failure goes with it; the failure is what is answered.
 			let _ = self.removed(namespace, &id, !wanted.reaching.is_empty()).await;
+			sockets::restore(&held).await?;
 			return Err(refused);
 		}
 		self.settled(binding, &input.runs, &id).await?;
@@ -460,6 +464,7 @@ where
 			self.containerd.stop(namespace, &old.id, GRACE).await?;
 			self.gone(namespace, old).await?;
 		}
+		sockets::release(&held).await?;
 		self.answer(binding, &input.runs).await
 	}
 
@@ -470,6 +475,7 @@ where
 		image: &Image,
 		wanted: &Wanted<'_>,
 		id: &str,
+		held: Option<&mut Vec<PathBuf>>,
 	) -> Result<(), Refused> {
 		let namespace = binding.namespace.as_str();
 		let mounts = self.containerd.prepare(namespace, id, image).await?;
@@ -539,7 +545,7 @@ where
 			labels: kept.write(),
 		};
 		let output = self.state.join("output").join(namespace).join(format!("{id}.log"));
-		sockets::prepare(&kept.sockets, user.uid, user.gid).await?;
+		sockets::prepare(&kept.sockets, user.uid, user.gid, held).await?;
 		self.containerd.create(namespace, &spec, &mounts, &output).await?;
 		// Once it is made, so the roots a start reads first never hold one of a container not listed.
 		roots::made(&self.roots, namespace, id, &spec.binary).await?;
@@ -564,7 +570,7 @@ where
 		// and a reacher let reach the entry again.
 		let network = network_id(&binding.namespace, &listed.id);
 		let attachment = self.network.attach(&network, kept.port).await?;
-		sockets::prepare(&kept.sockets, kept.user.0, kept.user.1).await?;
+		sockets::prepare(&kept.sockets, kept.user.0, kept.user.1, None).await?;
 		self.containerd.start(&binding.namespace, &listed.id).await?;
 		// The entry it was made with, as its environment and hosts name it.
 		if !kept.reaching.is_empty() {

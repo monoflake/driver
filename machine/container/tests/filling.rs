@@ -122,6 +122,36 @@ async fn a_hosted_runtime_given_sockets_it_was_not_given_before_is_made_anew() {
 }
 
 #[tokio::test]
+async fn a_new_version_that_fails_hands_the_old_ones_live_sockets_back() {
+	use std::os::unix::fs::MetadataExt;
+	let (mut driver, _) = driver("filling-held-sockets", shell(), false);
+	let owner = std::fs::metadata(&driver.state).unwrap();
+	driver.containerd.config.user = Some(format!("{}:{}", owner.uid(), owner.gid()));
+	let writable = driver.state.join("writable");
+	let sockets = vec![Sockets { directory: writable.clone(), at: "/write".into(), writable: true }];
+	let first = DeploymentDeploy { form: DeploymentForm::Modules, port: None, ..echo() };
+	driver.host(&binding(), first, hosted(&driver, sockets.clone())).await.unwrap();
+	std::fs::write(writable.join("data.sock"), b"live").unwrap();
+	let short: String =
+		common::hash(common::ECHO_TWO).iter().take(6).map(|b| format!("{b:02x}")).collect();
+	driver.containerd.unstartable.lock().unwrap().push(format!("00000001-{short}*"));
+	let second = DeploymentDeploy {
+		form: DeploymentForm::Modules,
+		port: None,
+		..common::deploy("file:///echo-two.tar", common::ECHO_TWO)
+	};
+	assert!(driver.host(&binding(), second.clone(), hosted(&driver, sockets.clone())).await.is_err());
+	assert_eq!(std::fs::read(writable.join("data.sock")).unwrap(), b"live");
+	assert!(!writable.join("data.sock.held").exists());
+	driver.containerd.unstartable.lock().unwrap().clear();
+	driver.host(&binding(), second, hosted(&driver, sockets)).await.unwrap();
+	assert!(!writable.join("data.sock").exists());
+	assert!(!writable.join("data.sock.held").exists());
+	assert_eq!(ids(&driver).len(), 1);
+	common::cleared(&driver.state);
+}
+
+#[tokio::test]
 async fn writable_sockets_are_prepared_before_deploy_and_restart_and_read_only_ones_are_untouched()
 {
 	use std::os::unix::fs::{MetadataExt, PermissionsExt};

@@ -63,13 +63,14 @@ entry reads for function and container deployments alike, and checks it in `allo
 
 ## State
 
-Meanwhile, the storage component is admitted alone. The entry hides every component from a caller outside the containers' subnet, RFC y2xd3, so the
-gateway could not reach the organization's storage, which platform's RFC vr5lw has it route its
-reserved scope `storage` to at `/v1/storage/...`. By the author's design, until this question is
-decided, the entry admits the storage component on the provisional `{app}.b{binding}` path as it
-admits an app, and admits no other component so. The container kind labels a component's name
-`driver.component` from its deployment's `runs`, and `kind` in `machine/src/entry.rs` reads a
-component labeled `storage` as an app's. The gateway reaches it by its own configured value,
-`STORAGE = {id}.b{binding}`, and storage keeps no public name.
+Meanwhile, the storage component is admitted alone. The entry hides every component from a caller
+outside the containers' subnet, RFC y2xd3, so the gateway could not reach the organization's
+storage, which platform's RFC vr5lw has it route its reserved scope `storage` to at
+`/v1/storage/...`. By the author's design, until this question is decided, the entry admits the
+storage component on the provisional `{app}.b{binding}` path as it admits an app, and admits no
+other component so. The container kind labels a component's name `driver.component` from its
+deployment's `runs`, and `kind` in `machine/src/entry.rs` reads a component labeled `storage` as an
+app's. The gateway reaches it by its own configured value, `STORAGE = {id}.b{binding}`, and storage
+keeps no public name.
 
 Whichever option is taken here covers storage as it covers an app, and this exception goes with it.

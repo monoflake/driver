@@ -1,6 +1,6 @@
 [package]
 name = "driver-machine-container"
-version = "0.1.8"
+version = "0.1.9"
 description = "driver(machine)'s container: an image deployed as a container by containerd, RFC vr5lw"
 edition.workspace = true
 publish.workspace = true

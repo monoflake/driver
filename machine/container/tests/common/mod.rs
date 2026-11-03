@@ -96,7 +96,9 @@ impl Containerd for Machine {
 
 	async fn start(&self, namespace: &str, id: &str) -> Result<u32, Fault> {
 		self.note(format!("start {id}"));
-		if self.unstartable.lock().unwrap().iter().any(|u| u == id) {
+		// An entry ending in `*` names every id it begins.
+		let unstartable = |u: &String| u.strip_suffix('*').map_or(u == id, |p| id.starts_with(p));
+		if self.unstartable.lock().unwrap().iter().any(unstartable) {
 			return Err(Fault(format!("{id} does not start")));
 		}
 		let mut held = self.held.lock().unwrap();

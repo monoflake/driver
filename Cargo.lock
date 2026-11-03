@@ -461,7 +461,7 @@ dependencies = [
 
 [[package]]
 name = "driver-machine"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "axum",
  "clap",
@@ -483,7 +483,7 @@ dependencies = [
 
 [[package]]
 name = "driver-machine-container"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "chacha20poly1305",
  "containerd-client",
@@ -508,7 +508,7 @@ dependencies = [
 
 [[package]]
 name = "driver-machine-function"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "driver-machine-container",
  "envelope",
