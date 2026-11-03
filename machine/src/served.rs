@@ -437,6 +437,8 @@ async fn stored(driver: Arc<Driver>, binding: Binding, call: object::Call, form:
 /// What a database refused a batch for, keeping its words as the message.
 fn unexecuted(refusal: Unexecuted) -> Refused {
 	let (reason, message) = match refusal {
+		Unexecuted::Expired => return Refused { reason: "expired", message: None },
+		Unexecuted::Malformed(words) => ("malformed", words),
 		Unexecuted::Invalid(words) => ("invalid", words),
 		Unexecuted::Constraint(words) => ("constraint", words),
 		Unexecuted::BeyondLimit(words) => ("beyond_limit", words),
@@ -458,7 +460,39 @@ async fn queried(
 ) -> Served {
 	let input = match call {
 		database::Call::Execute(input) => input,
-		database::Call::Status(_) => return unrecorded::<database::Status>(form),
+		database::Call::Status(input) => {
+			let holding = driver
+				.lists
+				.lock()
+				.await
+				.get(&binding)
+				.and_then(|l| item.and_then(|id| l.databases.get(&id)).cloned());
+			let Some(database) = holding else {
+				return answered::<database::Status>(
+					Err(Refused { reason: "not_found", message: None }),
+					form,
+				);
+			};
+			let ran = tokio::task::spawn_blocking(move || {
+				use driver_machine_database::DatabaseStatusAnswer;
+				let answer =
+					database.status(&input.id).map_err(unexecuted).and_then(|answer| match answer {
+						DatabaseStatusAnswer::Found(steps) => Ok(steps),
+						DatabaseStatusAnswer::NotFound => Err(Refused { reason: "not_found", message: None }),
+						DatabaseStatusAnswer::Forgotten => Err(Refused { reason: "forgotten", message: None }),
+					});
+				answered::<database::Status>(answer, form)
+			})
+			.await;
+			return match ran {
+				Ok(served) => served,
+				Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
+				Err(e) => answered::<database::Status>(
+					Err(Refused { reason: "fault", message: Some(e.to_string()) }),
+					form,
+				),
+			};
+		}
 		database::Call::Rewind(_) => {
 			return answered::<database::Rewind>(
 				Err(Refused {

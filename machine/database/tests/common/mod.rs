@@ -56,6 +56,8 @@ pub fn answer(database: &Database, input: &DatabaseExecute) -> Value {
 		Ok(output) => json!({"output": output.to_json()}),
 		Err(error) => {
 			let (failure, reason) = match error {
+				Unexecuted::Expired => ("rejected", "expired"),
+				Unexecuted::Malformed(_) => ("rejected", "malformed"),
 				Unexecuted::Invalid(_) => ("rejected", "invalid"),
 				Unexecuted::Constraint(_) => ("rejected", "constraint"),
 				Unexecuted::BeyondLimit(_) => ("rejected", "beyond_limit"),

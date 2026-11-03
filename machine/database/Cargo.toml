@@ -1,6 +1,6 @@
 [package]
 name = "driver-machine-database"
-version = "0.1.4"
+version = "0.1.5"
 description = "driver(machine)'s database: one SQLite file on a volume, with one writer and one copy, RFC 4elqc"
 edition.workspace = true
 publish.workspace = true
@@ -16,4 +16,7 @@ rusqlite = { version = "0.41", features = ["bundled", "hooks"] }
 
 [dev-dependencies]
 blake3 = "1"
+serde_json = "1"
+
+[build-dependencies]
 serde_json = "1"

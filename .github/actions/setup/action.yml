@@ -16,7 +16,7 @@ runs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         repository: monoflake/platform
-        ref: 94cdfcf0b8375b3711e3791e5ea4ba6d61435b4f # monoflake/platform@main
+        ref: db144801de0625367afbcdbb40d778d66a7792d3 # monoflake/platform@main
         path: repos/monoflake/platform
         persist-credentials: false
     - name: Install platform

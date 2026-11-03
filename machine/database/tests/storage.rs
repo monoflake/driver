@@ -42,13 +42,13 @@ fn capacity_can_grow_and_shrink_and_a_full_batch_changes_nothing() {
 
 #[test]
 fn capacity_rounds_down_to_whole_pages() {
-	let (_directory, database) = database(65536 + 4095);
+	let (_directory, database) = database(65536 + 4096 + 4095);
 	output(&database, &["CREATE TABLE t (b BLOB)"]);
 	assert_eq!(
 		database.execute(&input(&["INSERT INTO t VALUES (zeroblob(64000))"])),
 		Err(Unexecuted::StorageFull)
 	);
-	database.resize(65536 + 4096).unwrap();
+	database.resize(65536 + 2 * 4096).unwrap();
 	output(&database, &["INSERT INTO t VALUES (zeroblob(64000))"]);
 	assert!(database.resize(0).is_err());
 }

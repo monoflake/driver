@@ -62,6 +62,7 @@ pub(crate) fn error(declared: &[Reason], reason: &str, message: Option<String>) 
 		message: message
 			.or_else(|| contracts::message(reason).map(str::to_owned))
 			.unwrap_or_else(|| reason.to_owned()),
+		call: None,
 	}
 }
 

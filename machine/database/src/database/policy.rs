@@ -6,6 +6,9 @@ use rusqlite::{Error, ErrorCode};
 use crate::{Fault, Unexecuted};
 
 pub(super) fn authorize(context: AuthContext<'_>) -> Authorization {
+	if protected(context.action) {
+		return Authorization::Deny;
+	}
 	match context.action {
 		AuthAction::Attach { .. }
 		| AuthAction::Detach { .. }
@@ -49,6 +52,47 @@ pub(super) fn authorize(context: AuthContext<'_>) -> Authorization {
 		| AuthAction::Recursive => Authorization::Allow,
 		_ => Authorization::Deny,
 	}
+}
+
+fn protected(action: AuthAction<'_>) -> bool {
+	let (first, second) = match action {
+		AuthAction::CreateIndex { index_name, table_name }
+		| AuthAction::CreateTempIndex { index_name, table_name }
+		| AuthAction::DropIndex { index_name, table_name }
+		| AuthAction::DropTempIndex { index_name, table_name } => (index_name, table_name),
+		AuthAction::CreateTrigger { trigger_name, table_name }
+		| AuthAction::CreateTempTrigger { trigger_name, table_name }
+		| AuthAction::DropTrigger { trigger_name, table_name }
+		| AuthAction::DropTempTrigger { trigger_name, table_name } => (trigger_name, table_name),
+		AuthAction::CreateTable { table_name }
+		| AuthAction::CreateTempTable { table_name }
+		| AuthAction::Delete { table_name }
+		| AuthAction::DropTable { table_name }
+		| AuthAction::DropTempTable { table_name }
+		| AuthAction::Insert { table_name }
+		| AuthAction::Read { table_name, .. }
+		| AuthAction::Update { table_name, .. }
+		| AuthAction::AlterTable { table_name, .. }
+		| AuthAction::Analyze { table_name }
+		| AuthAction::CreateVtable { table_name, .. }
+		| AuthAction::DropVtable { table_name, .. } => (table_name, ""),
+		AuthAction::CreateView { view_name }
+		| AuthAction::CreateTempView { view_name }
+		| AuthAction::DropView { view_name }
+		| AuthAction::DropTempView { view_name } => (view_name, ""),
+		AuthAction::Reindex { index_name } => (index_name, ""),
+		AuthAction::Unknown { .. }
+		| AuthAction::Pragma { .. }
+		| AuthAction::Select
+		| AuthAction::Transaction { .. }
+		| AuthAction::Attach { .. }
+		| AuthAction::Detach { .. }
+		| AuthAction::Function { .. }
+		| AuthAction::Savepoint { .. }
+		| AuthAction::Recursive => ("", ""),
+		_ => ("", ""),
+	};
+	[first, second].iter().any(|name| name.eq_ignore_ascii_case("driver_calls"))
 }
 
 // The function lists in sqlite.org/lang_corefunc.html and its five linked families.

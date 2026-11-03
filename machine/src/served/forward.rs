@@ -50,7 +50,7 @@ fn refused(failure: Failure, reason: &str, message: String) -> Response {
 		Failure::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
 		Failure::Unknown => StatusCode::INTERNAL_SERVER_ERROR,
 	};
-	let error = Error { failure, reason: reason.to_owned(), message };
+	let error = Error { failure, reason: reason.to_owned(), message, call: None };
 	let json = Answer::<ObjectDeleted>::Error(error).to_json();
 	let mut response = Response::new(Body::from(json.to_string()));
 	*response.status_mut() = status;
