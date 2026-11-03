@@ -159,6 +159,41 @@ async fn a_storage_that_is_down_is_answered_unavailable() {
 	assert_eq!(answer["reason"], "unreachable");
 }
 
+/// A storage that takes each call's first bytes and closes before answering, as a crash would.
+fn dropping(directory: &Directory) -> PathBuf {
+	use tokio::io::AsyncReadExt;
+	let path = directory.0.join("drop.sock");
+	let listener = tokio::net::UnixListener::bind(&path).unwrap();
+	tokio::spawn(async move {
+		while let Ok((mut stream, _)) = listener.accept().await {
+			let mut first = [0u8; 64];
+			let _ = stream.read(&mut first).await;
+		}
+	});
+	path
+}
+
+#[tokio::test]
+async fn a_change_lost_after_it_was_sent_is_unknown_and_a_read_stays_unavailable() {
+	let directory = Directory::new();
+	let socket = slot(&directory, dropping(&directory));
+	let write = json!({ "content": "aGVsbG8", "extension": "txt" });
+	for (path, input) in
+		[("/storage/object_write", &write), ("/storage/object_delete", &json!({ "object": "aa" }))]
+	{
+		let (status, answer) = called(&socket, "POST", path, &[], input).await;
+		assert_eq!(status, 500, "{path} {answer}");
+		assert_eq!((&answer["failure"], &answer["reason"]), (&json!("unknown"), &json!("fault")));
+	}
+	let read = json!({ "object": "aa" });
+	let (status, answer) = called(&socket, "POST", "/storage/object_read", &[], &read).await;
+	assert_eq!(status, 503, "{answer}");
+	assert_eq!(
+		(&answer["failure"], &answer["reason"]),
+		(&json!("unavailable"), &json!("unreachable"))
+	);
+}
+
 #[tokio::test]
 async fn the_fake_refuses_a_data_call_that_did_not_come_through_the_forwarder() {
 	let directory = Directory::new();

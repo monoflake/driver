@@ -83,6 +83,9 @@ pub fn bucket_socket(slot: &str) -> String {
 /// forwards each `object_bucket` slot's calls to, RFC ahcrp.
 pub const STORAGE: &str = "storage";
 
+/// The compute component handed the entry's origin, RFC 49qyg.
+pub const COMPUTE: &str = "compute";
+
 /// Where the storage product listens for its data calls in its container, bound writable from
 /// [`stored`] into its container alone, so nothing but the driver reaches them.
 pub const STORED: &str = "/run/storage";
@@ -160,6 +163,11 @@ pub struct Bundle {
 /// A binding workerd gives a worker, by its name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Bound {
+	/// A text read from the container's environment under the same name.
+	Environment {
+		/// Its name in the worker and the environment.
+		name: String,
+	},
 	/// A text written in the configuration.
 	Text {
 		/// Its name.

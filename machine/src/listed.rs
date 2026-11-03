@@ -651,7 +651,7 @@ pub(crate) mod tests {
 		let room = 1024 + u64::try_from(driver_machine_object::MOST).unwrap();
 		assert_eq!(asked(&mount), [format!("volume buckets 1 {room}")]);
 		// Its capacity is the item's size.
-		let write = |n: usize| ObjectWrite { name: "a".into(), content: vec![1; n] };
+		let write = |n: usize| ObjectWrite { name: "a".into(), content: vec![1; n], call: None };
 		assert!(bucket.write(&write(2048)).is_err());
 		bucket.write(&write(1000)).unwrap();
 		apply(&mut listed, &mount, 2, vec![object(1, 4096)], 0).unwrap();
@@ -741,7 +741,7 @@ pub(crate) mod tests {
 		let mut listed = Listed::new(7);
 		apply(&mut listed, &mount, 1, vec![object(1, 1024), volume(2, 64)], 0).unwrap();
 		let (_, bucket) = listed.bucket.clone().unwrap();
-		bucket.write(&ObjectWrite { name: "a".into(), content: b"kept".to_vec() }).unwrap();
+		bucket.write(&ObjectWrite { name: "a".into(), content: b"kept".to_vec(), call: None }).unwrap();
 		drop(bucket);
 		let mut again = Listed::new(7);
 		again.items = listed.items.clone();

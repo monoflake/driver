@@ -5,8 +5,8 @@
 use envelope::contracts::{DeploymentDeploy, DeploymentHanded, DeploymentNetwork, DeploymentRuns};
 
 use crate::{
-	Bound, Bundle, Configure, DATA, FOOTING, Kind, MODULES, OBJECT, OBJECT_SOCKET, OBJECTS, PORT,
-	SOCKET, STORAGE, STORED, Worker,
+	Bound, Bundle, COMPUTE, Configure, DATA, FOOTING, Kind, MODULES, OBJECT, OBJECT_SOCKET, OBJECTS,
+	PORT, SOCKET, STORAGE, STORED, Worker,
 };
 
 mod bucket;
@@ -43,6 +43,11 @@ pub(crate) fn storage(runs: &DeploymentRuns) -> bool {
 		DeploymentRuns::Component { component, .. } => component == STORAGE,
 		DeploymentRuns::App { .. } => false,
 	}
+}
+
+/// Whether a deployment is its binding's compute component, RFC 49qyg.
+pub(crate) fn compute(runs: &DeploymentRuns) -> bool {
+	matches!(runs, DeploymentRuns::Component { component, .. } if component == COMPUTE)
 }
 
 /// The service a worker reaches out through, the internet where it may, the private network where
@@ -136,6 +141,7 @@ impl Configure for Worker {
 			bindings: std::iter::once(footing)
 				.chain(input.handed.iter().flatten().map(handed))
 				.chain(data.then_some(socket))
+				.chain(compute(&input.runs).then_some(Bound::Environment { name: "ENTRY".to_owned() }))
 				.chain(secrets)
 				.chain(slots)
 				.chain(buckets)
@@ -150,10 +156,13 @@ impl Configure for Worker {
 
 	fn capnp(&self) -> String {
 		// The fence of its namespace narrows the private network to the deployments it reaches.
-		let allowed: Vec<&str> = [(self.outbound, "\"public\""), (self.reaches, "\"private\"")]
-			.into_iter()
-			.filter_map(|(open, name)| open.then_some(name))
-			.collect();
+		let entry =
+			self.bindings.iter().any(|b| matches!(b, Bound::Environment { name } if name == "ENTRY"));
+		let allowed: Vec<&str> =
+			[(self.outbound, "\"public\""), (self.reaches || entry, "\"private\"")]
+				.into_iter()
+				.filter_map(|(open, name)| open.then_some(name))
+				.collect();
 		let network = match self.outbound {
 			true => format!("(allow = [{}], tlsOptions = (trustBrowserCas = true))", allowed.join(", ")),
 			false => format!("(allow = [{}])", allowed.join(", ")),
@@ -164,7 +173,11 @@ impl Configure for Worker {
 			.iter()
 			.filter_map(|b| match b {
 				Bound::Bucket { name } => Some(name.as_str()),
-				Bound::Text { .. } | Bound::Secret { .. } | Bound::Database { .. } | Bound::Object => None,
+				Bound::Environment { .. }
+				| Bound::Text { .. }
+				| Bound::Secret { .. }
+				| Bound::Database { .. }
+				| Bound::Object => None,
 			})
 			.collect();
 		let mut services = vec!["(name = \"main\", worker = .worker)".to_owned()];
@@ -219,6 +232,9 @@ impl Configure for Worker {
 			.iter()
 			.map(|b| match b {
 				Bound::Text { name, text } => format!("(name = {}, text = {})", quoted(name), quoted(text)),
+				Bound::Environment { name } => {
+					format!("(name = {}, fromEnvironment = {})", quoted(name), quoted(name))
+				}
 				Bound::Secret { name } => {
 					format!("(name = {}, text = embed {})", quoted(name), quoted(&format!("/{name}")))
 				}
@@ -234,7 +250,10 @@ impl Configure for Worker {
 		if self.reaches {
 			let platform = |b: &Bound| match b {
 				Bound::Text { name, .. } | Bound::Secret { name } => name.starts_with("MONOFLAKE_"),
-				Bound::Database { .. } | Bound::Bucket { .. } | Bound::Object => false,
+				Bound::Environment { .. }
+				| Bound::Database { .. }
+				| Bound::Bucket { .. }
+				| Bound::Object => false,
 			};
 			let at = self.bindings.iter().take_while(|b| platform(b)).count();
 			let reaching = quoted(REACHING);

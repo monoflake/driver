@@ -143,6 +143,26 @@ fn the_storage_component_alone_is_admitted_as_an_apps() {
 	assert_eq!(gate(0x0b), Gate::Hidden);
 }
 
+#[test]
+fn the_compute_component_reaches_its_own_binding_s_apps_alone() {
+	let mut compute = of_component("0000000c", "192.0.2.12:8080");
+	compute.labels.insert("driver.component".to_owned(), "compute".to_owned());
+	let mut storage = of_component("0000000d", "192.0.2.13:8080");
+	storage.labels.insert("driver.component".to_owned(), "storage".to_owned());
+	let mut other = of_component("0000000e", "192.0.2.14:8080");
+	other.labels.insert("driver.component".to_owned(), "stand-in".to_owned());
+	let mine = [compute, container("0000000a", "192.0.2.10:8080", ""), storage, other];
+	let net = subnet("192.0.2.0/24").unwrap();
+	let from =
+		|listed: &[Listed], id| allowed(listed, of(1, id), kind(listed, id), peer("192.0.2.12"), net);
+	// On its own binding, an app passes, and another component is no app of it.
+	assert_eq!(from(&mine, 0x0a), Gate::Pass);
+	assert_eq!(from(&mine, 0x0e), Gate::Refused);
+	// Another binding's list holds no compute container, so its apps refuse the same address.
+	let theirs = [container("0000000b", "192.0.2.11:8080", "")];
+	assert_eq!(from(&theirs, 0x0b), Gate::Refused);
+}
+
 /// containerd as the entry reads it, the containers given, or none to be had.
 struct Held(Option<Vec<Listed>>);
 

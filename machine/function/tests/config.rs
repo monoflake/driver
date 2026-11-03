@@ -37,6 +37,23 @@ fn the_configuration_made_for_a_sample_deployment_is_as_written() {
 }
 
 #[test]
+fn compute_reads_the_entry_from_the_environment_and_an_app_does_not() {
+	use envelope::contracts::DeploymentRuns;
+	let bundle = Bundle::unpack(&bundle("echo-modules")).unwrap();
+	let app = deployed();
+	let compute = DeploymentDeploy {
+		runs: DeploymentRuns::Component { component: "compute".into(), id: 1 },
+		..app.clone()
+	};
+	let from = "(name = \"ENTRY\", fromEnvironment = \"ENTRY\")";
+	let config = Worker::of(&compute, &bundle).capnp();
+	assert!(config.contains(from), "{config}");
+	assert!(config.contains("\"private\""), "{config}");
+	assert!(!config.contains("fromEnvironment = \"MONOFLAKE_REACHING\""));
+	assert!(!Worker::of(&app, &bundle).capnp().contains(from));
+}
+
+#[test]
 fn a_secret_is_named_and_never_written_and_a_network_not_given_is_not_reached() {
 	let bundle = Bundle::unpack(&bundle("counter-modules")).unwrap();
 	let input = DeploymentDeploy {
@@ -77,6 +94,7 @@ fn what_is_handed_follows_the_footing_by_its_reserved_name() {
 		.iter()
 		.map(|b| match b {
 			Bound::Text { name, .. }
+			| Bound::Environment { name }
 			| Bound::Secret { name }
 			| Bound::Database { name }
 			| Bound::Bucket { name } => name.as_str(),

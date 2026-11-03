@@ -204,6 +204,7 @@ let operationOf = (call: Interface.call) =>
   switch call {
   | Execute(_) => "execute"
   | Rewind(_) => "rewind"
+  | Status(_) => "status"
   }
 
 /** A call on the database, against the one `database` item the list holds. */
@@ -220,6 +221,14 @@ let answered = async (env, item, call: Interface.call, form) =>
       form,
       ~toJson=Contracts.DatabaseRewound.toJson,
       ~toCbor=Contracts.DatabaseRewound.toCbor,
+    )
+  | Status(_) =>
+    Answer.refused(
+      Answer.error(
+        "overloaded",
+        ~message="the Cloudflare home keeps no call records, thread fifth leaving it out of scope",
+      ),
+      form,
     )
   }
 

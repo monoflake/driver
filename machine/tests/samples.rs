@@ -62,7 +62,7 @@ fn resolved(step: usize, input: &Value, captured: &BTreeMap<String, Value>) -> V
 	}
 	if let Some(content) = bytes {
 		let name = input["name"].as_str().unwrap().to_owned();
-		input["content"] = ObjectWrite { name, content }.to_json()["content"].clone();
+		input["content"] = ObjectWrite { name, content, call: None }.to_json()["content"].clone();
 	}
 	input
 }

@@ -115,6 +115,8 @@ pub struct Hosted {
 	pub isolation: Vec<DeploymentIsolation>,
 	/// The directories of sockets on the machine it is given, each bound where it says, RFC rt6gi.
 	pub sockets: Vec<Sockets>,
+	/// Whether it is handed `ENTRY`, the entry's origin on its bridge, `http://<address>:<port>`.
+	pub entry: bool,
 }
 
 /// A directory of sockets on the machine and where in a container it is bound, read-only unless

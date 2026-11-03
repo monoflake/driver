@@ -166,6 +166,7 @@ let operationOf = (call: Interface.call) =>
   | Describe(_) => "describe"
   | Delete(_) => "delete"
   | List(_) => "list"
+  | Status(_) => "status"
   }
 
 /** A call on the bucket, against the one `object` item the list holds. */
@@ -200,6 +201,14 @@ let stored = async (env, item, call: Interface.call, form) =>
       form,
       ~toJson=Contracts.ObjectListed.toJson,
       ~toCbor=Contracts.ObjectListed.toCbor,
+    )
+  | Status(_) =>
+    Answer.refused(
+      Answer.error(
+        "overloaded",
+        ~message="the Cloudflare home keeps no call records, thread fifth leaving it out of scope",
+      ),
+      form,
     )
   }
 

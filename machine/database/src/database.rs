@@ -63,7 +63,13 @@ impl Statements for Database {
 				Ok(()) => Ok(DatabaseExecuted { results, behind: None }),
 				Err(error) => {
 					rollback(&connection)?;
-					Err(policy::error(error))
+					// A commit that failed may have reached the file, so busy at it is not certain.
+					let refused = policy::error(error);
+					Err(if let Unexecuted::Overloaded(words) = refused {
+						Unexecuted::Fault(Fault(words))
+					} else {
+						refused
+					})
 				}
 			},
 			Err(error) => {
@@ -76,7 +82,7 @@ impl Statements for Database {
 
 fn rollback(connection: &Connection) -> Result<(), Unexecuted> {
 	if !connection.is_autocommit() {
-		connection.execute_batch("ROLLBACK").map_err(policy::error)?;
+		connection.execute_batch("ROLLBACK").map_err(|e| Unexecuted::Fault(fault(e)))?;
 	}
 	Ok(())
 }

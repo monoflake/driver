@@ -25,6 +25,7 @@ fn own() -> Option<Architecture> {
 
 /// What a deploy asks, checked against what the host gives.
 pub(super) struct Wanted<'a> {
+	pub(super) entry: bool,
 	pub(super) runs: String,
 	pub(super) kind: &'static str,
 	pub(super) component: Option<String>,
@@ -135,6 +136,7 @@ impl<'a> Wanted<'a> {
 		let mut wanted =
 			Self::within(binding, input, hosted.runtime, hosted.isolation.clone(), hosted.port, files)?;
 		wanted.sockets = &hosted.sockets;
+		wanted.entry = hosted.entry;
 		wanted.fill = filled(input.bindings.as_ref(), wanted.sockets);
 		Ok(wanted)
 	}
@@ -165,6 +167,7 @@ impl<'a> Wanted<'a> {
 		let mut secrets = input.secrets.clone().unwrap_or_default();
 		secrets.extend(handed.secrets);
 		Ok(Self {
+			entry: false,
 			runs: labels::runs(&input.runs),
 			kind: labels::kind(&input.runs),
 			component: labels::component(&input.runs),

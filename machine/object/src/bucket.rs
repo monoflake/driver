@@ -378,7 +378,7 @@ mod tests {
 	}
 
 	fn write(bucket: &Bucket, name: &str, content: &[u8]) {
-		let input = ObjectWrite { name: name.into(), content: content.to_vec() };
+		let input = ObjectWrite { name: name.into(), content: content.to_vec(), call: None };
 		bucket.write(&input).unwrap();
 	}
 

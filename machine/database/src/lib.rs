@@ -34,6 +34,8 @@ pub enum Unexecuted {
 	BeyondRange(String),
 	/// `storage_full`, past the database's capacity or the file system's room.
 	StorageFull,
+	/// `overloaded`, another writer holding the file's lock, the batch rolled back, RFC 49qyg.
+	Overloaded(String),
 	/// Anything else.
 	Fault(Fault),
 }

@@ -379,6 +379,12 @@ fn faulted(fault: driver_machine_object::Fault) -> Refused {
 	Refused { reason: "fault", message: Some(fault.0) }
 }
 
+/// A call's status is answered once the stores record calls, thread fifth's steps 3 and 4.
+fn unrecorded<O: Operation>(form: Form) -> Served {
+	let message = "a machine records no call's steps until thread fifth's steps 3 and 4";
+	answered::<O>(Err(Refused { reason: "fault", message: Some(message.into()) }), form)
+}
+
 /// An object call on its binding's bucket, on a thread that may block, as SQLite and the file
 /// system do.
 async fn stored(driver: Arc<Driver>, binding: Binding, call: object::Call, form: Form) -> Served {
@@ -404,6 +410,7 @@ async fn stored(driver: Arc<Driver>, binding: Binding, call: object::Call, form:
 			object::Call::List(_) => {
 				answered::<object::List>(Ok(ObjectListed { objects: Vec::new(), next: None }), form)
 			}
+			object::Call::Status(_) => unrecorded::<object::Status>(form),
 		};
 	};
 	let ran = tokio::task::spawn_blocking(move || match call {
@@ -413,6 +420,7 @@ async fn stored(driver: Arc<Driver>, binding: Binding, call: object::Call, form:
 			answered::<object::Describe>(bucket.describe(&i).map_err(faulted), form)
 		}
 		object::Call::Delete(i) => answered::<object::Delete>(bucket.delete(&i).map_err(faulted), form),
+		object::Call::Status(_) => unrecorded::<object::Status>(form),
 		object::Call::List(i) => answered::<object::List>(bucket.list(&i).map_err(faulted), form),
 	})
 	.await;
@@ -434,6 +442,7 @@ fn unexecuted(refusal: Unexecuted) -> Refused {
 		Unexecuted::BeyondLimit(words) => ("beyond_limit", words),
 		Unexecuted::BeyondRange(words) => ("beyond_range", words),
 		Unexecuted::StorageFull => return Refused { reason: "storage_full", message: None },
+		Unexecuted::Overloaded(words) => ("overloaded", words),
 		Unexecuted::Fault(f) => ("fault", f.0),
 	};
 	Refused { reason, message: Some(message) }
@@ -448,6 +457,7 @@ async fn queried(
 ) -> Served {
 	let input = match call {
 		database::Call::Execute(input) => input,
+		database::Call::Status(_) => return unrecorded::<database::Status>(form),
 		database::Call::Rewind(_) => {
 			return answered::<database::Rewind>(
 				Err(Refused {

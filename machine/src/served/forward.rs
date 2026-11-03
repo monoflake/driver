@@ -99,15 +99,33 @@ async fn forwarded(
 	let sent = json.to_string();
 	match storage(&slot, operation, sent).await {
 		Ok(response) => response,
-		Err(why) => unreachable(&slot.data, why),
+		Err(Unsent(why)) => unreachable(&slot.data, why),
+		// A write sent may have reached storage, so whether it took effect is not known, RFC 49qyg.
+		Err(Sent(why)) if CHANGING.contains(&operation) => refused(
+			Failure::Unknown,
+			"fault",
+			format!("storage may have received the call, {} {why}", slot.data.display()),
+		),
+		Err(Sent(why)) => unreachable(&slot.data, why),
 	}
 }
 
+/// The operations that change a bucket, whose outcome a call lost after sending cannot tell.
+const CHANGING: [&str; 2] = ["object_write", "object_delete"];
+
+/// Where a call to storage failed: before anything was sent, or once it may have been received.
+enum Failed {
+	Unsent(String),
+	Sent(String),
+}
+use Failed::{Sent, Unsent};
+
 /// The call posted to the data socket, and storage's status, type and body as they came.
-async fn storage(slot: &Slot, operation: &str, body: String) -> Result<Response, String> {
-	let stream = tokio::net::UnixStream::connect(&slot.data).await.map_err(|e| e.to_string())?;
+async fn storage(slot: &Slot, operation: &str, body: String) -> Result<Response, Failed> {
+	let unsent = |e: &dyn std::fmt::Display| Unsent(e.to_string());
+	let stream = tokio::net::UnixStream::connect(&slot.data).await.map_err(|e| unsent(&e))?;
 	let (mut sender, connection) =
-		hyper::client::conn::http1::handshake(TokioIo::new(stream)).await.map_err(|e| e.to_string())?;
+		hyper::client::conn::http1::handshake(TokioIo::new(stream)).await.map_err(|e| unsent(&e))?;
 	tokio::spawn(async move {
 		let _ = connection.await;
 	});
@@ -116,8 +134,8 @@ async fn storage(slot: &Slot, operation: &str, body: String) -> Result<Response,
 		.header(header::CONTENT_TYPE, "application/json")
 		.header(CALLER, slot.caller.clone())
 		.body(Body::from(body))
-		.map_err(|e| e.to_string())?;
-	let answered = sender.send_request(request).await.map_err(|e| e.to_string())?;
+		.map_err(|e| unsent(&e))?;
+	let answered = sender.send_request(request).await.map_err(|e| Sent(e.to_string()))?;
 	let (parts, incoming) = answered.into_parts();
 	let mut response = Response::new(Body::new(incoming));
 	*response.status_mut() = parts.status;

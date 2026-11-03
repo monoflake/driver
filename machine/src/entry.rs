@@ -15,7 +15,7 @@ use axum::http::uri::{Authority, Scheme};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri, Version, header};
 use axum::response::{IntoResponse, Response};
 use driver_machine_container::{Containerd, Fault, Listed, Reached, Socket, Task};
-use driver_machine_function::STORAGE;
+use driver_machine_function::{COMPUTE, STORAGE};
 use driver_machine_management::Binding;
 use envelope::contracts::DeploymentRuns;
 use hyper_util::client::legacy::Client;
@@ -255,7 +255,13 @@ pub(crate) fn allowed(
 	let reaches = source
 		.and_then(|s| s.labels.get(REACHING))
 		.is_some_and(|reaching| reaching.split(',').any(|r| labeled(r) == Some(named.id)));
-	match reaches {
+	// The compute component reaches its own binding's apps, the source found among that binding's
+	// containers alone, until monoflake/driver's draft RFC 3txyw decides how.
+	let computes = source.is_some_and(|s| {
+		s.labels.get(KIND).map(String::as_str) == Some("component")
+			&& s.labels.get(COMPONENT).map(String::as_str) == Some(COMPUTE)
+	}) && matches!(kind, Some(Kind::App));
+	match reaches || computes {
 		true => Gate::Pass,
 		false => Gate::Refused,
 	}

@@ -20,6 +20,7 @@ fn hosted(driver: &Driver) -> Hosted {
 	let image = driver.state.join("workerd.tar");
 	std::fs::write(&image, b"workerd image").unwrap();
 	Hosted {
+		entry: false,
 		image,
 		cmd: vec!["serve".into(), "/worker/config.capnp".into()],
 		port: 8080,
@@ -89,4 +90,38 @@ async fn a_hosted_runtime_runs_in_a_container_of_the_binding_and_names_its_files
 	assert_eq!(driver.host(&binding(), modules, escaping).await.map_err(reason), Err("malformed"));
 	assert!(!driver.state.join("files/b1/escaped").exists());
 	assert!(driver.containerd.held.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_hosted_runtime_is_handed_and_fenced_to_the_entry_only_when_asked() {
+	for entry in [false, true] {
+		let (driver, _) =
+			driver(if entry { "hosted-entry" } else { "hosted-no-entry" }, shell(), false);
+		let runtime = Hosted { entry, ..hosted(&driver) };
+		let input = DeploymentDeploy { form: DeploymentForm::Modules, port: None, ..echo() };
+		driver.host(&binding(), input, runtime).await.unwrap();
+		let spec = spec_of(&driver);
+		let env = spec.runtime_spec["process"]["env"].as_array().unwrap();
+		let origins: Vec<_> =
+			env.iter().filter_map(|v| v.as_str()).filter(|v| v.starts_with("ENTRY=")).collect();
+		assert_eq!(origins, if entry { vec!["ENTRY=http://10.88.0.1:4321"] } else { vec![] });
+		let network = format!("b1-{}", spec.id);
+		let expected: Vec<std::net::SocketAddr> =
+			if entry { vec!["10.88.0.1:4321".parse().unwrap()] } else { vec![] };
+		assert_eq!(
+			driver.network.fences.lock().unwrap().get(&network).cloned().unwrap_or_default(),
+			expected
+		);
+		driver.stop(&binding(), of()).await.unwrap();
+		driver.network.fences.lock().unwrap().clear();
+		*driver.network.entry.lock().unwrap() = 9876;
+		driver.resume(&binding(), of()).await.unwrap();
+		assert_eq!(
+			driver.network.fences.lock().unwrap().get(&network).cloned().unwrap_or_default(),
+			expected
+		);
+		driver.stop(&binding(), of()).await.unwrap();
+		driver.delete(&binding(), of()).await.unwrap();
+		assert!(driver.network.fences.lock().unwrap().is_empty());
+	}
 }

@@ -75,7 +75,11 @@ fn container(binding: &Binding, into: Option<u32>) -> Result<u32, Refused> {
 fn command(worker: &Worker) -> Vec<String> {
 	let secret = worker.bindings.iter().any(|b| match b {
 		Bound::Secret { .. } => true,
-		Bound::Text { .. } | Bound::Database { .. } | Bound::Bucket { .. } | Bound::Object => false,
+		Bound::Environment { .. }
+		| Bound::Text { .. }
+		| Bound::Database { .. }
+		| Bound::Bucket { .. }
+		| Bound::Object => false,
 	});
 	let config = format!("{AT}/{CONFIG}");
 	let mut cmd: Vec<String> = ["serve", config.as_str(), "config"].map(str::to_owned).to_vec();
@@ -164,6 +168,7 @@ where
 			.iter()
 			.map(|b| match b {
 				Bound::Secret { name }
+				| Bound::Environment { name }
 				| Bound::Text { name, .. }
 				| Bound::Database { name }
 				| Bound::Bucket { name } => name.clone(),
@@ -174,6 +179,7 @@ where
 			held.into_iter().filter(|name| names.insert(name.clone())).map(|name| Bound::Secret { name }),
 		);
 		let hosted = Hosted {
+			entry: crate::config::compute(&input.runs),
 			image: self.workerd.clone(),
 			cmd: command(&worker),
 			port: PORT,

@@ -35,6 +35,9 @@ use wanted::Wanted;
 /// How long a task is given to stop on its signal before it is killed, in milliseconds.
 const GRACE: u64 = 10_000;
 
+/// Whether the hosted runtime was handed the entry's origin.
+const HANDED_ENTRY: &str = "driver.handed_entry";
+
 /// How long a container's address is given to accept a connection once its task is started, in
 /// milliseconds, before it is failed as unreachable.
 const REACHED: u64 = 30_000;
@@ -455,7 +458,7 @@ where
 		let holding = (!mine.is_empty()).then_some(&mut held);
 		if let Err(refused) = self.made(binding, &image, &wanted, &id, holding).await {
 			// What was made of it before the failure goes with it; the failure is what is answered.
-			let _ = self.removed(namespace, &id, !wanted.reaching.is_empty()).await;
+			let _ = self.removed(namespace, &id, wanted.entry || !wanted.reaching.is_empty()).await;
 			sockets::restore(&held).await?;
 			return Err(refused);
 		}
@@ -502,6 +505,9 @@ where
 		let names: Vec<String> =
 			wanted.targets.iter().map(|runs| handed::name(namespace, runs).1).collect();
 		let mut env = wanted.env.clone();
+		if wanted.entry {
+			env.push(format!("ENTRY=http://{}", attachment.entry));
+		}
 		env.extend(handed::reaching(namespace, &wanted.targets, attachment.entry.port()));
 		let hosts = match names.is_empty() {
 			true => None,
@@ -536,13 +542,17 @@ where
 			fill: wanted.fill.clone(),
 			sockets: wanted.sockets.iter().filter(|s| s.writable).map(|s| s.directory.clone()).collect(),
 		};
+		let mut labels = kept.write();
+		if wanted.entry {
+			labels.insert(HANDED_ENTRY.to_owned(), "true".to_owned());
+		}
 		let spec = Spec {
 			id: id.to_owned(),
 			image: image.name.clone(),
 			binary: self.runtimes.binary(Some(&wanted.runtime)).to_path_buf(),
 			snapshot: id.to_owned(),
 			runtime_spec,
-			labels: kept.write(),
+			labels,
 		};
 		let output = self.state.join("output").join(namespace).join(format!("{id}.log"));
 		sockets::prepare(&kept.sockets, user.uid, user.gid, held).await?;
@@ -551,7 +561,7 @@ where
 		roots::made(&self.roots, namespace, id, &spec.binary).await?;
 		self.containerd.start(namespace, id).await?;
 		// Once its task runs, so no element names a container that is not running.
-		if !wanted.reaching.is_empty() {
+		if wanted.entry || !wanted.reaching.is_empty() {
 			self.network.fence(&network, &[attachment.entry]).await?;
 		}
 		marks::started(&self.state, namespace, id, now()).await
@@ -573,7 +583,7 @@ where
 		sockets::prepare(&kept.sockets, kept.user.0, kept.user.1, None).await?;
 		self.containerd.start(&binding.namespace, &listed.id).await?;
 		// The entry it was made with, as its environment and hosts name it.
-		if !kept.reaching.is_empty() {
+		if listed.labels.contains_key(HANDED_ENTRY) || !kept.reaching.is_empty() {
 			let made = kept.entry.as_deref().and_then(|e| e.parse().ok());
 			self.network.fence(&network, &[made.unwrap_or(attachment.entry)]).await?;
 		}
@@ -583,7 +593,8 @@ where
 
 	/// A container listed removed with everything it held, as its labels say what it joined.
 	async fn gone(&self, namespace: &str, listed: &Listed) -> Result<(), Refused> {
-		let reaches = !labels::reaching(&listed.labels).is_empty();
+		let reaches =
+			listed.labels.contains_key(HANDED_ENTRY) || !labels::reaching(&listed.labels).is_empty();
 		self.removed(namespace, &listed.id, reaches).await
 	}
 

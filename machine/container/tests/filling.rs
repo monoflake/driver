@@ -93,6 +93,7 @@ fn hosted(driver: &Driver, sockets: Vec<Sockets>) -> Hosted {
 	let image = driver.state.join("workerd.tar");
 	std::fs::write(&image, b"workerd image").unwrap();
 	Hosted {
+		entry: false,
 		image,
 		cmd: vec!["serve".into()],
 		port: 8080,

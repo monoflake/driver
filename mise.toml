@@ -127,13 +127,14 @@ run = 'rescript build > /dev/null && node .github/release/versioned.res.mjs ${us
 
 # TLC over model/protocol through the workspace's shared runner, RFC w0w82.
 [tasks.protocol]
-description = "Run TLC over each specification and hold the fixture it exports: `protocol [--write] [--full]`"
+description = "Run TLC over each specification and hold the fixture it exports: `protocol [--write] [--full] [<spec>...]`"
 usage = '''
 flag "--write" help="Write the fixture TLC exports"
 flag "--full" help="Also check the temporal property and its switch"
+arg "[spec]..." help="The specs to run alone, every spec where none is named" var=#true
 '''
 depends = ["//:build"]
-run = 'rescript build > /dev/null && node {{env.WORKSPACE}}/scripts/protocol/protocol.res.mjs ${usage_write:+--write} ${usage_full:+--full}'
+run = 'rescript build > /dev/null && node {{env.WORKSPACE}}/scripts/protocol/protocol.res.mjs ${usage_write:+--write} ${usage_full:+--full} ${usage_spec:-}'
 
 [tasks.verify]
 description = "What a commit has to pass: everything formatted, the check, every block alone, the scripts' and the release's tests, the version guard refusing changed inputs without a raised version, and the crates' dependencies"
