@@ -7,10 +7,9 @@
 mod common;
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 use common::{Driver, Log, binding, driver, echo, lines, of, running, shell};
-use driver_machine_container::{Deployments, Host, Hosted};
+use driver_machine_container::{Deployments, Host, Hosted, Sockets};
 use envelope::contracts::{
 	AppBindings, DeploymentDeploy, DeploymentForm, DeploymentIsolation, DeploymentRuntime,
 };
@@ -90,7 +89,7 @@ async fn bindings_filling_nothing_are_the_same_as_none_and_write_no_label() {
 }
 
 /// A runtime of the machine's own, as the function kind hosts workerd, given sockets or none.
-fn hosted(driver: &Driver, sockets: Option<(PathBuf, String)>) -> Hosted {
+fn hosted(driver: &Driver, sockets: Vec<Sockets>) -> Hosted {
 	let image = driver.state.join("workerd.tar");
 	std::fs::write(&image, b"workerd image").unwrap();
 	Hosted {
@@ -109,8 +108,12 @@ fn hosted(driver: &Driver, sockets: Option<(PathBuf, String)>) -> Hosted {
 async fn a_hosted_runtime_given_sockets_it_was_not_given_before_is_made_anew() {
 	let (driver, log) = driver("filling-sockets", shell(), false);
 	let input = DeploymentDeploy { form: DeploymentForm::Modules, port: None, ..filled() };
-	driver.host(&binding(), input.clone(), hosted(&driver, None)).await.unwrap();
-	let sockets = Some((driver.state.join("slots/b1"), "/slots".to_owned()));
+	driver.host(&binding(), input.clone(), hosted(&driver, Vec::new())).await.unwrap();
+	let sockets = vec![Sockets {
+		directory: driver.state.join("slots/b1"),
+		at: "/slots".into(),
+		writable: false,
+	}];
 	driver.host(&binding(), input.clone(), hosted(&driver, sockets.clone())).await.unwrap();
 	assert_eq!(created(&log), 2, "{:#?}", lines(&log));
 	driver.host(&binding(), input, hosted(&driver, sockets)).await.unwrap();

@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use driver_machine_container::{Binding, Deployments, Host, Hosted, Refused, SECRETS};
+use driver_machine_container::{Binding, Deployments, Host, Hosted, Refused, SECRETS, Sockets};
 use envelope::contracts::{
 	DeploymentDeleted, DeploymentDeploy, DeploymentDescribed, DeploymentForm, DeploymentHanded,
 	DeploymentOf, DeploymentRuns, DeploymentRuntime,
@@ -148,7 +148,13 @@ where
 				.bindings
 				.iter()
 				.any(|b| matches!(b, Bound::Database { .. }))
-				.then(|| (slotted(&self.slots, &binding.namespace), SLOTS.to_owned())),
+				.then(|| Sockets {
+					directory: slotted(&self.slots, &binding.namespace),
+					at: SLOTS.to_owned(),
+					writable: false,
+				})
+				.into_iter()
+				.collect(),
 		};
 		self.containers.host(binding, input, hosted).await
 	}

@@ -67,7 +67,7 @@ spelled = ["MONOFLAKE_FOOTING", "MONOFLAKE_"]
 
 [[names.data]]
 file = "machine/function/src/lib.rs"
-spelled = ["MONOFLAKE_FOOTING"]
+spelled = ["MONOFLAKE_FOOTING", "MONOFLAKE_SOCKET"]
 
 [[names.data]]
 file = "machine/container/tests/deploying.rs"

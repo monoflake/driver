@@ -6,7 +6,7 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use crate::{Capacity, ImageConfig, Refused};
+use crate::{Capacity, ImageConfig, Refused, Sockets};
 
 /// Where a container's secrets are bound.
 const SECRETS: &str = super::secrets::INSIDE;
@@ -145,9 +145,10 @@ pub(super) struct Asked<'a> {
 	pub(super) files: Option<(&'a Path, &'a str)>,
 	/// Its hosts file on the host, bound read-only at `/etc/hosts`, where it reaches others.
 	pub(super) hosts: Option<&'a Path>,
-	/// A directory of sockets on the host and where it is bound, read-only, since a connect through
-	/// a read-only bind still reaches a socket, RFC rt6gi.
-	pub(super) sockets: Option<(&'a Path, &'a str)>,
+	/// The directories of sockets on the host and where each is bound, read-only unless the
+	/// container makes a socket there, since a connect through a read-only bind still reaches one,
+	/// RFC rt6gi.
+	pub(super) sockets: &'a [Sockets],
 }
 
 /// An environment with each of `over` set on it, the image's own entry of a name replaced.
@@ -251,12 +252,13 @@ pub(super) fn build(asked: &Asked<'_>) -> Result<Value, Refused> {
 			"options": ["rbind", "ro", "nosuid", "nodev", "noexec"],
 		}));
 	}
-	if let Some((sockets, at)) = asked.sockets {
+	for bound in asked.sockets {
+		let access = if bound.writable { "rw" } else { "ro" };
 		mounts.push(json!({
-			"destination": at,
+			"destination": bound.at,
 			"type": "bind",
-			"source": sockets,
-			"options": ["rbind", "ro", "nosuid", "nodev", "noexec"],
+			"source": bound.directory,
+			"options": ["rbind", access, "nosuid", "nodev", "noexec"],
 		}));
 	}
 	Ok(json!({
@@ -305,7 +307,7 @@ mod tests {
 	fn asked<'a>(
 		config: &'a ImageConfig,
 		capacity: &'a Capacity,
-		sockets: Option<(&'a Path, &'a str)>,
+		sockets: &'a [Sockets],
 	) -> Asked<'a> {
 		Asked {
 			id: "c",
@@ -330,7 +332,9 @@ mod tests {
 			spec["mounts"].as_array().unwrap().iter().find(|m| m["destination"] == "/run/slots").cloned()
 		};
 		let directory = Path::new("/run/driver-machine/slots/n");
-		let spec = build(&asked(&config, &capacity, Some((directory, "/run/slots")))).unwrap();
+		let sockets =
+			[Sockets { directory: directory.into(), at: "/run/slots".into(), writable: false }];
+		let spec = build(&asked(&config, &capacity, &sockets)).unwrap();
 		let bound = json!({
 			"destination": "/run/slots",
 			"type": "bind",
@@ -343,6 +347,6 @@ mod tests {
 		let run = mounts.iter().position(|m| m["destination"] == "/run").unwrap();
 		let slots = mounts.iter().position(|m| m["destination"] == "/run/slots").unwrap();
 		assert!(run < slots);
-		assert_eq!(at(&build(&asked(&config, &capacity, None)).unwrap()), None);
+		assert_eq!(at(&build(&asked(&config, &capacity, &[])).unwrap()), None);
 	}
 }

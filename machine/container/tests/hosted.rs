@@ -30,7 +30,7 @@ fn hosted(driver: &Driver) -> Hosted {
 		at: "/worker".into(),
 		runtime: DeploymentRuntime::Workerd,
 		isolation: vec![DeploymentIsolation::Isolate, DeploymentIsolation::Kernel],
-		sockets: None,
+		sockets: Vec::new(),
 	}
 }
 

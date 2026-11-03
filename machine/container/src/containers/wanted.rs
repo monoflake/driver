@@ -9,7 +9,7 @@ use envelope::contracts::{
 use sha2::{Digest as _, Sha256};
 
 use super::{handed, hex, labels, secrets};
-use crate::{Binding, Hosted, Refused};
+use crate::{Binding, Hosted, Refused, Sockets};
 
 /// The isolation every container of an image stands on.
 const ISOLATION: DeploymentIsolation = DeploymentIsolation::Kernel;
@@ -40,7 +40,7 @@ pub(super) struct Wanted<'a> {
 	/// What a hosted runtime is given, its files and where they are bound.
 	pub(super) files: Option<(&'a BTreeMap<String, Vec<u8>>, &'a str)>,
 	/// A directory of sockets a hosted runtime reaches, and where it is bound, RFC rt6gi.
-	pub(super) sockets: Option<(&'a std::path::Path, &'a str)>,
+	pub(super) sockets: &'a [Sockets],
 	/// The deployments it reaches, each as its label names it.
 	pub(super) reaching: Vec<String>,
 	/// The deployments it reaches, each named in its hosts and its origins.
@@ -51,10 +51,7 @@ pub(super) struct Wanted<'a> {
 
 /// What fills a deployment's slots, its bindings and the sockets it is given, as one hash in hex,
 /// none where nothing fills one, so a container labeled before reads as filled by nothing.
-pub(super) fn filled(
-	bindings: Option<&AppBindings>,
-	sockets: Option<(&std::path::Path, &str)>,
-) -> Option<String> {
+pub(super) fn filled(bindings: Option<&AppBindings>, sockets: &[Sockets]) -> Option<String> {
 	let typed = bindings
 		.map_or([None, None, None], |b| [b.app.as_ref(), b.database.as_ref(), b.bucket.as_ref()]);
 	let mut entries: Vec<serde_json::Value> = Vec::new();
@@ -63,8 +60,12 @@ pub(super) fn filled(
 			entries.push(serde_json::json!([kind, slot, id]));
 		}
 	}
-	if let Some((directory, at)) = sockets {
-		entries.push(serde_json::json!(["sockets", directory.to_string_lossy(), at]));
+	for bound in sockets {
+		let (directory, at) = (bound.directory.to_string_lossy(), &bound.at);
+		entries.push(match bound.writable {
+			true => serde_json::json!(["sockets", directory, at, "writable"]),
+			false => serde_json::json!(["sockets", directory, at]),
+		});
 	}
 	match entries.is_empty() {
 		true => None,
@@ -132,8 +133,7 @@ impl<'a> Wanted<'a> {
 		let files = Some((&hosted.files, hosted.at.as_str()));
 		let mut wanted =
 			Self::within(binding, input, hosted.runtime, hosted.isolation.clone(), hosted.port, files)?;
-		wanted.sockets =
-			hosted.sockets.as_ref().map(|(directory, at)| (directory.as_path(), at.as_str()));
+		wanted.sockets = &hosted.sockets;
 		wanted.fill = filled(input.bindings.as_ref(), wanted.sockets);
 		Ok(wanted)
 	}
@@ -175,10 +175,10 @@ impl<'a> Wanted<'a> {
 			env,
 			secrets,
 			files,
-			sockets: None,
+			sockets: &[],
 			reaching: input.reaching.iter().flatten().map(labels::runs).collect(),
 			targets: Vec::new(),
-			fill: filled(input.bindings.as_ref(), None),
+			fill: filled(input.bindings.as_ref(), &[]),
 		})
 	}
 }

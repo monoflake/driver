@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use driver_machine_container::Refused;
-use envelope::contracts::{DeploymentDeploy, DeploymentIsolation, ManifestSlot};
+use envelope::contracts::{DeploymentDeploy, DeploymentIsolation, DeploymentRuns, ManifestSlot};
 
 mod bundle;
 mod config;
@@ -44,6 +44,46 @@ pub const DATABASE: &str = "database.sock";
 pub fn slotted(slots: &Path, namespace: &str) -> PathBuf {
 	slots.join(namespace)
 }
+
+/// Where a deployment's own sockets lie in its container, one for each of its `object_bucket`
+/// slots, bound in from [`bucketed`] read-only.
+pub const BUCKETS: &str = "/run/buckets";
+
+/// A deployment's directory of its own sockets, `<slots>/apps/<namespace>/<runs>`, apart from the
+/// binding's, so no other deployment of the binding mounts it.
+pub fn bucketed(slots: &Path, namespace: &str, runs: &DeploymentRuns) -> PathBuf {
+	let named = match runs {
+		DeploymentRuns::App { id } => format!("{id:08x}"),
+		DeploymentRuns::Component { component, id } => format!("{component}-{id:08x}"),
+	};
+	slots.join("apps").join(namespace).join(named)
+}
+
+/// An `object_bucket` slot's socket within its deployment's directory, `<slot>.sock`.
+pub fn bucket_socket(slot: &str) -> String {
+	format!("{slot}.sock")
+}
+
+/// The component a binding's storage product is deployed as, `runs: Component`, which the driver
+/// forwards each `object_bucket` slot's calls to, RFC ahcrp.
+pub const STORAGE: &str = "storage";
+
+/// Where the storage product listens for its data calls in its container, bound writable from
+/// [`stored`] into its container alone, so nothing but the driver reaches them.
+pub const STORED: &str = "/run/storage";
+
+/// The storage product's data socket within [`STORED`].
+pub const DATA: &str = "data.sock";
+
+/// A binding's storage directory, `<slots>/storage/<namespace>`, the driver's forwarder connecting
+/// to [`DATA`] in it.
+pub fn stored(slots: &Path, namespace: &str) -> PathBuf {
+	slots.join("storage").join(namespace)
+}
+
+/// The text binding telling the storage product which listener a call came in on, `public` or
+/// `data`.
+pub const SOCKET: &str = "MONOFLAKE_SOCKET";
 
 /// The isolation workerd in a container stands on, RFC vr5lw.
 pub const STANDS: [DeploymentIsolation; 2] =

@@ -4,7 +4,7 @@
 
 use envelope::contracts::{DeploymentDeploy, DeploymentHanded, DeploymentNetwork};
 
-use crate::{Bound, Bundle, Configure, FOOTING, Kind, MODULES, PORT, Worker};
+use crate::{Bound, Bundle, Configure, FOOTING, Kind, MODULES, PORT, SOCKET, Worker};
 
 mod database;
 
@@ -24,7 +24,7 @@ const CERTIFICATE: &str = "MONOFLAKE_CERTIFICATE";
 const SIGNING_KEY: &str = "MONOFLAKE_SIGNING_KEY";
 
 /// Every name the driver binds a worker by of its own, which no slot may take.
-pub const RESERVED: [&str; 6] = [FOOTING, REACHING, ROOT, KEY, CERTIFICATE, SIGNING_KEY];
+pub const RESERVED: [&str; 7] = [FOOTING, REACHING, ROOT, KEY, CERTIFICATE, SIGNING_KEY, SOCKET];
 
 /// The service a worker reaches out through, the internet where it may, the private network where
 /// it reaches deployments, and nothing where neither.

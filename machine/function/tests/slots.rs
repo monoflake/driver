@@ -11,7 +11,7 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 use common::{binding, bundle, from_root, functions, hash, hex, json};
-use driver_machine_container::Deployments;
+use driver_machine_container::{Deployments, Sockets};
 use driver_machine_function::{Bound, Bundle, Configure, RESERVED, Unpack, Worker};
 use envelope::Called;
 use envelope::contracts::interface::deployments::Call;
@@ -213,7 +213,11 @@ async fn a_bundle_declaring_database_filled_by_database_deploys_as_before() {
 	functions.deploy(&binding(), input).await.unwrap();
 	let hosted = functions.containers.hosted.lock().unwrap();
 	let [(_, hosted)] = hosted.as_slice() else { panic!("hosted {}", hosted.len()) };
-	let sockets = Some(("/slots.invalid/b1".into(), "/run/slots".to_owned()));
+	let sockets = vec![Sockets {
+		directory: "/slots.invalid/b1".into(),
+		at: "/run/slots".to_owned(),
+		writable: false,
+	}];
 	assert_eq!(hosted.sockets, sockets);
 	let config = String::from_utf8(hosted.files["config.capnp"].clone()).unwrap();
 	assert!(config.contains("(name = \"database\", wrapped = (moduleName"), "{config}");
