@@ -2,13 +2,15 @@
 //! 4elqc. This file is its interface, the model's, `docs/code.md`.
 
 use std::path::Path;
-use std::sync::Mutex;
+use std::time::Duration;
 
 use envelope::contracts::{CallSteps, DatabaseExecute, DatabaseExecuted};
 
 mod database;
 
 mod calls;
+
+mod lock;
 
 pub use calls::{ID_LIFE, LOCK_HOLD, LOCK_WAIT, LOOKUP_DEADLINE, STATUS_RETENTION};
 
@@ -42,8 +44,12 @@ pub enum Unexecuted {
 	BeyondRange(String),
 	/// `storage_full`, past the database's capacity or the file system's room.
 	StorageFull,
-	/// `overloaded`, another writer holding the file's lock, the batch rolled back, RFC 49qyg.
+	/// `overloaded`, the lock still held by another writer past [`LOCK_WAIT`], nothing written,
+	/// RFC 49qyg.
 	Overloaded(String),
+	/// `aborted`, the batch holding the lock past [`LOCK_HOLD`], interrupted and rolled back, RFC
+	/// 49qyg.
+	Aborted(String),
 	/// Anything else.
 	Fault(Fault),
 }
@@ -52,7 +58,11 @@ pub enum Unexecuted {
 /// and one open at a time for a directory, which a volume of the machine's holds.
 #[derive(Debug)]
 pub struct Database {
-	connection: Mutex<rusqlite::Connection>,
+	connection: lock::Lock<rusqlite::Connection>,
+	/// How long a caller waits for the lock, [`LOCK_WAIT`].
+	wait: Duration,
+	/// How long a batch holds it, [`LOCK_HOLD`].
+	hold: Duration,
 }
 
 /// A database opened at its directory, made where nothing is there yet; implemented for

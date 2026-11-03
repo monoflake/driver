@@ -64,6 +64,7 @@ pub fn answer(database: &Database, input: &DatabaseExecute) -> Value {
 				Unexecuted::BeyondRange(_) => ("rejected", "beyond_range"),
 				Unexecuted::StorageFull => ("unavailable", "storage_full"),
 				Unexecuted::Overloaded(_) => ("unavailable", "overloaded"),
+				Unexecuted::Aborted(_) => ("unavailable", "aborted"),
 				Unexecuted::Fault(f) => panic!("unexpected fault {f:?}"),
 			};
 			json!({"failure": failure, "reason": reason})

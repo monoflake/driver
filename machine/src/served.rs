@@ -452,6 +452,7 @@ fn unexecuted(refusal: Unexecuted) -> Refused {
 		Unexecuted::BeyondRange(words) => ("beyond_range", words),
 		Unexecuted::StorageFull => return Refused { reason: "storage_full", message: None },
 		Unexecuted::Overloaded(words) => ("overloaded", words),
+		Unexecuted::Aborted(words) => ("aborted", words),
 		Unexecuted::Fault(f) => ("fault", f.0),
 	};
 	Refused { reason, message: Some(message) }

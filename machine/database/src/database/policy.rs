@@ -132,6 +132,8 @@ pub(super) fn error(failure: Error) -> Unexecuted {
 	match code {
 		Some(ErrorCode::DiskFull) => Unexecuted::StorageFull,
 		Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked) => Unexecuted::Overloaded(message),
+		// Only the progress handler interrupts, once a batch has held the lock past its hold.
+		Some(ErrorCode::OperationInterrupted) => Unexecuted::Aborted(message),
 		Some(ErrorCode::ConstraintViolation) => Unexecuted::Constraint(message),
 		Some(ErrorCode::TooBig) => Unexecuted::BeyondLimit(message),
 		Some(ErrorCode::Unknown)
