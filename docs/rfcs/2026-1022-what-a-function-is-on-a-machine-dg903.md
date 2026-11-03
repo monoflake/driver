@@ -30,9 +30,9 @@ the contract does not say, each answered by the code as the option below propose
 3. **What workerd gives a worker.** The contract carries the footing's address, the secrets and
    the networks it may reach, and names no binding to the platform's interfaces, `object`,
    `database` or another app's exports, RFC 49qyg, so a worker is given none of them. What a
-   worker sees of a slot is decided in monoflake/platform's RFC rt6gi, `env.<slot name>` speaking
-   the kind's own contract, no credential in the worker; how a deploy carries the slot's fill is
-   still open there.
+   worker sees of a slot is decided in monoflake/platform's RFC rt6gi, `env.<slot name>` with no
+   credential in the worker, speaking the contract of the product it reaches, RFC ahcrp; a deploy
+   carries the slot's fill as `bindings`.
 4. **How a secret reaches a worker.** vr5lw has secrets files on a tmpfs bound into the container,
    its configuration naming their paths alone.
 5. **What the networks allow.** workerd reaches out through one service, by `fetch` and by
