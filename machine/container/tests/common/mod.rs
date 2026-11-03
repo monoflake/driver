@@ -395,6 +395,7 @@ pub fn deploy(address: &str, bytes: &[u8]) -> DeploymentDeploy {
 		into: Some(3),
 		port: Some(8080),
 		ingress: None,
+		bindings: None,
 		handed: None,
 		reaching: None,
 	}

@@ -596,6 +596,7 @@ fn started(arguments: Arguments) -> Driver {
 				largest: arguments.largest,
 			},
 			workerd: arguments.workerd,
+			slots: state.join("slots"),
 		},
 	};
 	reload(&driver);

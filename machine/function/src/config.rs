@@ -137,6 +137,7 @@ impl Configure for Worker {
 				Bound::Secret { name } => {
 					format!("(name = {}, text = embed {})", quoted(name), quoted(&format!("/{name}")))
 				}
+				Bound::Database { .. } => todo!("dg903"),
 			})
 			.collect();
 		// What it reaches is read from workerd's environment, which the container kind sets as it
@@ -144,6 +145,7 @@ impl Configure for Worker {
 		if self.reaches {
 			let platform = |b: &Bound| match b {
 				Bound::Text { name, .. } | Bound::Secret { name } => name.starts_with("MONOFLAKE_"),
+				Bound::Database { .. } => false,
 			};
 			let at = self.bindings.iter().take_while(|b| platform(b)).count();
 			let reaching = quoted(REACHING);

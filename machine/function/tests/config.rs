@@ -76,7 +76,7 @@ fn what_is_handed_follows_the_footing_by_its_reserved_name() {
 		.bindings
 		.iter()
 		.map(|b| match b {
-			Bound::Text { name, .. } | Bound::Secret { name } => name.as_str(),
+			Bound::Text { name, .. } | Bound::Secret { name } | Bound::Database { name } => name.as_str(),
 		})
 		.collect();
 	assert_eq!(names, ["MONOFLAKE_FOOTING", "MONOFLAKE_KEY", "MONOFLAKE_CERTIFICATE", "TOKEN"]);

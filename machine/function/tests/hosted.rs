@@ -36,6 +36,7 @@ fn echo() -> DeploymentDeploy {
 		into: None,
 		port: None,
 		ingress: None,
+		bindings: None,
 		handed: None,
 		reaching: None,
 	}

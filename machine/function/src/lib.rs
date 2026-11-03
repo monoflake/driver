@@ -29,6 +29,13 @@ pub const METADATA: &str = "metadata.json";
 /// What names the footing's address to a worker, as the container kind names it to an image.
 pub const FOOTING: &str = "MONOFLAKE_FOOTING";
 
+/// Where each binding's sockets lie in a function's container, bound in from the driver's
+/// [`Functions::slots`], RFC rt6gi.
+pub const SLOTS: &str = "/run/slots";
+
+/// The socket a binding's database is served on, within its directory of sockets.
+pub const DATABASE: &str = "database.sock";
+
 /// The isolation workerd in a container stands on, RFC vr5lw.
 pub const STANDS: [DeploymentIsolation; 2] =
 	[DeploymentIsolation::Isolate, DeploymentIsolation::Kernel];
@@ -41,6 +48,8 @@ pub struct Functions<K> {
 	pub containers: K,
 	/// workerd's image, monoflake/runtime's OCI archive on the machine.
 	pub workerd: PathBuf,
+	/// Where the driver keeps each binding's sockets, `<slots>/<namespace>/`, RFC rt6gi.
+	pub slots: PathBuf,
 }
 
 /// A module's type, as workerd's configuration names it, read from its name's extension.
@@ -95,6 +104,12 @@ pub enum Bound {
 	/// A secret, its text read from its file among the container's secrets as workerd starts.
 	Secret {
 		/// Its name, its file's.
+		name: String,
+	},
+	/// A slot filled with the binding's database, reached as `env.<name>` speaking the `database`
+	/// contract through [`DATABASE`] under [`SLOTS`], RFC rt6gi.
+	Database {
+		/// The slot's name, as the build declares it.
 		name: String,
 	},
 }

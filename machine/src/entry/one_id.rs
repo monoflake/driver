@@ -127,6 +127,7 @@ fn deploy(runs: DeploymentRuns, reaching: Option<Vec<DeploymentRuns>>) -> Deploy
 		into: None,
 		port: Some(8080),
 		ingress: None,
+		bindings: None,
 		handed: None,
 		reaching,
 	}

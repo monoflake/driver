@@ -248,5 +248,6 @@ pub fn functions(served: BTreeMap<String, Vec<u8>>) -> driver_machine_function::
 	driver_machine_function::Functions {
 		containers: Fake { served, ..Fake::default() },
 		workerd: WORKERD.into(),
+		slots: "/slots.invalid".into(),
 	}
 }
