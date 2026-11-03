@@ -98,6 +98,9 @@ const FORWARDED_FOR: HeaderName = HeaderName::from_static("x-forwarded-for");
 const FORWARDED_PROTO: HeaderName = HeaderName::from_static("x-forwarded-proto");
 const FORWARDED_HOST: HeaderName = HeaderName::from_static("x-forwarded-host");
 
+/// The call compute forwards an app's request in, set by its binding's compute component alone.
+const CALL: HeaderName = HeaderName::from_static("call");
+
 /// The header families a proxy or an edge writes of a request or its client, by prefix, as the
 /// control's `reach.res` takes every `cf-` header for the edge's.
 const PROXIED_FAMILIES: [&str; 3] = ["cf-", "x-forwarded", "x-original-forwarded"];
@@ -261,17 +264,20 @@ pub(crate) fn allowed(
 		s.labels.get(KIND).map(String::as_str) == Some("component")
 			&& s.labels.get(COMPONENT).map(String::as_str) == Some(COMPUTE)
 	}) && matches!(kind, Some(Kind::App));
-	match reaches || computes {
-		true => Gate::Pass,
-		false => Gate::Refused,
+	match (computes, reaches) {
+		(true, _) => Gate::Called,
+		(false, true) => Gate::Pass,
+		(false, false) => Gate::Refused,
 	}
 }
 
 /// What the entry makes of who asks for a deployment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Gate {
-	/// Let through.
+	/// Let through, any `Call` it sends removed.
 	Pass,
+	/// Let through from its binding's compute component to an app, its `Call` kept.
+	Called,
 	/// A container asking for what its `reaching` does not hold, or a source no running container
 	/// of the binding holds.
 	Refused,
@@ -284,6 +290,9 @@ pub(crate) enum Gate {
 pub(crate) enum Found {
 	/// Running, at its address.
 	Running(SocketAddr),
+	/// An app running at its address, asked for by its binding's compute component, whose `Call`
+	/// alone reaches it.
+	Called(SocketAddr),
 	/// Held, and not running now.
 	Down,
 	/// Nothing deployed by the name.
@@ -308,8 +317,10 @@ impl Last {
 	fn found(&self, named: Named, kind: Option<Kind>, found: Found, at: Instant) {
 		let mut last = self.0.lock().unwrap_or_else(PoisonError::into_inner);
 		match (found, kind) {
-			(Found::Running(address), Some(Kind::App)) => last.insert(named, (address, at)),
-			(Found::Running(_), Some(Kind::Component) | None)
+			(Found::Running(address) | Found::Called(address), Some(Kind::App)) => {
+				last.insert(named, (address, at))
+			}
+			(Found::Running(_) | Found::Called(_), Some(Kind::Component) | None)
 			| (Found::Down | Found::Absent | Found::Refused, _) => last.remove(&named),
 		};
 	}
@@ -363,18 +374,20 @@ impl<C: Containerd + 'static> Find for Labels<C> {
 				if named.written == Written::App && kind == Some(Kind::Component) {
 					return Found::Absent;
 				}
-				match allowed(&listed, named, kind, peer, self.subnet) {
-					Gate::Pass => {}
-					Gate::Refused => return Found::Refused,
-					Gate::Hidden => return Found::Absent,
-				}
+				let running: fn(SocketAddr) -> Found =
+					match allowed(&listed, named, kind, peer, self.subnet) {
+						Gate::Pass => Found::Running,
+						Gate::Called => Found::Called,
+						Gate::Refused => return Found::Refused,
+						Gate::Hidden => return Found::Absent,
+					};
 				let id = named.id;
 				let runs = match kind {
 					Some(Kind::Component) => DeploymentRuns::Component { component: String::new(), id },
 					Some(Kind::App) | None => DeploymentRuns::App { id },
 				};
 				let found = match driver_machine_container::reached(&listed, &runs) {
-					Reached::Running(address) => address.parse().map_or(Found::Down, Found::Running),
+					Reached::Running(address) => address.parse().map_or(Found::Down, running),
 					Reached::Down => Found::Down,
 					Reached::Absent => Found::Absent,
 				};
@@ -451,10 +464,12 @@ fn host(request: &Request, peer: IpAddr, subnet: Subnet) -> Option<String> {
 }
 
 /// The request carried to the deployment at its address, as it came but for the headers of its
-/// connection, a container's forwarding headers and those added, and the answer carried back.
+/// connection, a container's forwarding headers, a `Call` its binding's compute did not send, and
+/// those added, and the answer carried back.
 async fn forwarded<F>(
 	entry: &Entry<F>,
 	address: SocketAddr,
+	called: bool,
 	peer: SocketAddr,
 	host: &str,
 	request: Request,
@@ -473,6 +488,9 @@ async fn forwarded<F>(
 	unhopped(headers);
 	if contained {
 		unproxied(headers);
+	}
+	if !called {
+		headers.remove(&CALL);
 	}
 	let before = headers.get(&FORWARDED_FOR).and_then(|v| v.to_str().ok());
 	let peer = peer.ip().to_string();
@@ -515,7 +533,8 @@ async fn entered<F: Find>(entry: &Entry<F>, peer: SocketAddr, request: Request) 
 		(Some(named), Some(host)) => {
 			let name = named.name();
 			let answer = match entry.find.find(named, peer.ip()).await {
-				Found::Running(address) => forwarded(entry, address, peer, &host, request).await,
+				Found::Running(address) => forwarded(entry, address, false, peer, &host, request).await,
+				Found::Called(address) => forwarded(entry, address, true, peer, &host, request).await,
 				Found::Down => own(StatusCode::SERVICE_UNAVAILABLE, "the deployment is not running\n"),
 				Found::Absent => own(StatusCode::NOT_FOUND, "nothing is deployed by this name\n"),
 				Found::Refused => {

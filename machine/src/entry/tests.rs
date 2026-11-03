@@ -156,7 +156,7 @@ fn the_compute_component_reaches_its_own_binding_s_apps_alone() {
 	let from =
 		|listed: &[Listed], id| allowed(listed, of(1, id), kind(listed, id), peer("192.0.2.12"), net);
 	// On its own binding, an app passes, and another component is no app of it.
-	assert_eq!(from(&mine, 0x0a), Gate::Pass);
+	assert_eq!(from(&mine, 0x0a), Gate::Called);
 	assert_eq!(from(&mine, 0x0e), Gate::Refused);
 	// Another binding's list holds no compute container, so its apps refuse the same address.
 	let theirs = [container("0000000b", "192.0.2.11:8080", "")];
@@ -768,3 +768,6 @@ async fn a_container_made_before_answers_by_both_names_and_its_reacher_reaches_i
 		assert!(head.starts_with("HTTP/1.1 201 "), "{host} {head}");
 	}
 }
+
+#[path = "call_tests.rs"]
+mod call;
