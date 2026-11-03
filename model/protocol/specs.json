@@ -1,0 +1,23 @@
+{
+	"specs": [
+		{
+			"name": "handover",
+			"module": "handover.tla",
+			"quick": "handover.cfg",
+			"inputs": ["model/protocol/handover.tla", "model/protocol/handover.cfg"],
+			"switches": [
+				{ "name": "OPEN_BEFORE_STOP", "breaks": "OneWriter" },
+				{ "name": "ACK_BEFORE_COMMIT", "breaks": "AckedKept" },
+				{ "name": "SERVE_BEFORE_STOP", "breaks": "ServesAfterStop" },
+				{ "name": "NEVER_SERVE", "breaks": "NewServes" }
+			],
+			"temporal": ["NewServes"],
+			"export": {
+				"command": ["node", "model/protocol/handover_runs.res.mjs", "{output}"],
+				"file": "model/protocol/handover-runs.jsonl",
+				"checks": ["Runs"],
+				"inputs": ["model/protocol/handover_runs.res.mjs"]
+			}
+		}
+	]
+}

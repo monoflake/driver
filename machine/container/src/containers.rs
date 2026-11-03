@@ -409,7 +409,7 @@ where
 		let namespace = binding.namespace.as_str();
 		let targets = self.targets(binding, input).await?;
 		wanted.targets = targets;
-		let mine = self.mine(binding, &input.runs).await?;
+		let mut mine = self.mine(binding, &input.runs).await?;
 		// The same one is of its version, what it reaches and what fills its slots, RFC 49qyg.
 		let same = mine.iter().find(|l| {
 			l.labels.get(labels::VERSION) == Some(&wanted.version)
@@ -417,7 +417,13 @@ where
 				&& l.labels.get(labels::FILL) == wanted.fill.as_ref()
 		});
 		if let Some(same) = same {
-			return self.told(binding, &input.runs, same).await;
+			let told = self.told(binding, &input.runs, same).await?;
+			// One of the same deployment that has exited is made again, never answered as it stands.
+			if !matches!(told.state, DeploymentState::Failed { .. }) {
+				return Ok(told);
+			}
+			self.gone(namespace, same).await?;
+			mine = self.mine(binding, &input.runs).await?;
 		}
 		if let Some(previous) = chosen(&mine) {
 			let places = self.places(namespace, &previous.id);

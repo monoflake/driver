@@ -125,6 +125,16 @@ description = "List the built archives at driver-machine's source version: `vers
 usage = 'flag "-n --dry-run" help="Say what would be written and write nothing"'
 run = 'rescript build > /dev/null && node .github/release/versioned.res.mjs ${usage_dry_run:+--dry-run}'
 
+# TLC over model/protocol through the workspace's shared runner, RFC w0w82.
+[tasks.protocol]
+description = "Run TLC over each specification and hold the fixture it exports: `protocol [--write] [--full]`"
+usage = '''
+flag "--write" help="Write the fixture TLC exports"
+flag "--full" help="Also check the temporal property and its switch"
+'''
+depends = ["//:build"]
+run = 'rescript build > /dev/null && node {{env.WORKSPACE}}/scripts/protocol/protocol.res.mjs ${usage_write:+--write} ${usage_full:+--full}'
+
 [tasks.verify]
 description = "What a commit has to pass: everything formatted, the check, every block alone, the scripts' and the release's tests, the version guard refusing changed inputs without a raised version, and the crates' dependencies"
 run = ["mise run formatted", "mise run check", "mise run blocks", "mise run test && node .github/release/verify.res.mjs", "cargo deny check"]

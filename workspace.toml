@@ -23,7 +23,7 @@ ids = "monoflake"
 # Suffixes this repository alone tracks, formatted by nothing, the workspace's
 # docs/toolchain/lint-format.md.
 [format]
-unformatted = [".capnp", ".sql"]
+unformatted = [".capnp", ".sql", ".jsonl"]
 # The readings a test reads, kept byte for byte, which neither the suffixes part nor a hook touches.
 test_data = [
 	"machine/management/tests/first/sys/fs/cgroup",

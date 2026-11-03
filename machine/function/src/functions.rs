@@ -10,8 +10,8 @@ use envelope::contracts::{
 };
 
 use crate::{
-	AT, BUCKETS, Bound, Bundle, CONFIG, Configure, Functions, MODULES, OBJECT, OBJECTS, PORT, SLOTS,
-	STANDS, STORED, Unpack, Worker, bucketed, objected, slots, slotted, stored,
+	AT, BUCKETS, Bound, Bundle, CONFIG, Configure, DATA, Functions, MODULES, OBJECT, OBJECTS, PORT,
+	SLOTS, STANDS, STORED, Unpack, Worker, bucketed, objected, slots, slotted, stored,
 };
 
 fn beyond(message: &str) -> Refused {
@@ -190,7 +190,18 @@ where
 		}
 		if worker.data {
 			opened(&objected(&self.slots, &binding.namespace), 0o755)?;
-			opened(&stored(&self.slots, &binding.namespace), 0o777)?;
+			let storage = stored(&self.slots, &binding.namespace);
+			opened(&storage, 0o777)?;
+			// workerd binds no path a socket already holds, and an earlier storage leaves its own.
+			match std::fs::remove_file(storage.join(DATA)) {
+				Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+					return Err(Refused {
+						reason: "fault",
+						message: Some(format!("its data socket stays, {e}")),
+					});
+				}
+				Ok(()) | Err(_) => {}
+			}
 		}
 		self.containers.host(binding, input, hosted).await
 	}
