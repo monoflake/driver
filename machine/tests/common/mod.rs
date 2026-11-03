@@ -29,28 +29,46 @@ pub struct Started {
 	pub address: SocketAddr,
 	lines: Receiver<String>,
 	directory: PathBuf,
+	state: PathBuf,
 	bindings: u32,
+}
+
+/// A directory of its own for a program to start in, its mount, its btrfs and a token file for
+/// each binding of 1 to `bindings`.
+fn prepared(name: &str, bindings: u32) -> PathBuf {
+	let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+	let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+		.join(format!("driver-machine-{name}-{}-{nanos}", std::process::id()));
+	std::fs::create_dir_all(&directory).unwrap();
+	// The workloads' mount, and a btrfs keeping each subvolume as a marked directory of it.
+	std::fs::create_dir_all(directory.join("data")).unwrap();
+	std::fs::write(directory.join("data/.subvolume"), b"").unwrap();
+	let btrfs = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("volume/tests/btrfs.sh");
+	std::fs::copy(btrfs, directory.join("btrfs")).unwrap();
+	let executable = std::os::unix::fs::PermissionsExt::from_mode(0o755);
+	std::fs::set_permissions(directory.join("btrfs"), executable).unwrap();
+	for binding in 1..=bindings {
+		let file = directory.join(format!("binding-{binding}"));
+		std::fs::write(&file, format!("{}\n", token(binding))).unwrap();
+	}
+	directory
 }
 
 impl Started {
 	/// Started with a token file for each binding of 1 to `bindings`.
 	pub fn with(name: &str, bindings: u32) -> Self {
-		let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-		let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-			.join(format!("driver-machine-{name}-{}-{nanos}", std::process::id()));
-		std::fs::create_dir_all(&directory).unwrap();
-		// The workloads' mount, and a btrfs keeping each subvolume as a marked directory of it.
-		std::fs::create_dir_all(directory.join("data")).unwrap();
-		std::fs::write(directory.join("data/.subvolume"), b"").unwrap();
-		let btrfs = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("volume/tests/btrfs.sh");
-		std::fs::copy(btrfs, directory.join("btrfs")).unwrap();
-		let executable = std::os::unix::fs::PermissionsExt::from_mode(0o755);
-		std::fs::set_permissions(directory.join("btrfs"), executable).unwrap();
-		for binding in 1..=bindings {
-			let file = directory.join(format!("binding-{binding}"));
-			std::fs::write(&file, format!("{}\n", token(binding))).unwrap();
-		}
-		Self::in_directory(directory, bindings)
+		let directory = prepared(name, bindings);
+		let state = directory.join("state");
+		Self::in_directory(directory, state, bindings)
+	}
+
+	/// Started as [`Started::with`] is, its state in a directory of a path short enough to hold a
+	/// Unix socket's below it, removed with the rest.
+	pub fn short(name: &str, bindings: u32) -> Self {
+		let directory = prepared(name, bindings);
+		let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().subsec_nanos();
+		let state = std::env::temp_dir().join(format!("dm{}-{nanos}", std::process::id()));
+		Self::in_directory(directory, state, bindings)
 	}
 
 	/// Stopped and started again on the same state and token files, as a restart of its service.
@@ -59,10 +77,11 @@ impl Started {
 		let _ = self.child.wait();
 		// The directory taken is the new one's, so dropping what it was removes none.
 		let directory = std::mem::take(&mut self.directory);
-		Self::in_directory(directory, self.bindings)
+		let state = std::mem::take(&mut self.state);
+		Self::in_directory(directory, state, self.bindings)
 	}
 
-	fn in_directory(directory: PathBuf, bindings: u32) -> Self {
+	fn in_directory(directory: PathBuf, state: PathBuf, bindings: u32) -> Self {
 		let mut command = Command::new(env!("CARGO_BIN_EXE_driver-machine"));
 		for binding in 1..=bindings {
 			command.arg("--bindings").arg(directory.join(format!("binding-{binding}")));
@@ -71,7 +90,7 @@ impl Started {
 		command
 			.arg("--listen")
 			.arg(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)).to_string())
-			.args(["--state".as_ref(), at("state").as_os_str()])
+			.args(["--state".as_ref(), state.as_os_str()])
 			.args(["--containerd".as_ref(), at("containerd.sock").as_os_str()])
 			.args(["--runc".as_ref(), at("runc").as_os_str()])
 			.args(["--crun".as_ref(), at("crun").as_os_str()])
@@ -95,10 +114,15 @@ impl Started {
 			}
 		});
 		let address = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
-		let mut started = Self { child, address, lines, directory, bindings };
+		let mut started = Self { child, address, lines, directory, state, bindings };
 		let listening = started.logged("listening on ");
 		started.address = listening.trim_start_matches("listening on ").parse().unwrap();
 		started
+	}
+
+	/// Where it keeps its own state.
+	pub fn state(&self) -> PathBuf {
+		self.state.clone()
 	}
 
 	/// The mount the workloads' btrfs lies on.
@@ -165,6 +189,9 @@ impl Drop for Started {
 		let _ = self.child.wait();
 		if !self.directory.as_os_str().is_empty() {
 			let _ = std::fs::remove_dir_all(&self.directory);
+		}
+		if !self.state.as_os_str().is_empty() {
+			let _ = std::fs::remove_dir_all(&self.state);
 		}
 	}
 }

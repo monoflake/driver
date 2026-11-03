@@ -10,7 +10,7 @@ use envelope::contracts::{
 };
 
 use crate::{
-	AT, Bound, Bundle, CONFIG, Configure, Functions, MODULES, PORT, STANDS, Unpack, Worker,
+	AT, Bound, Bundle, CONFIG, Configure, Functions, MODULES, PORT, SLOTS, STANDS, Unpack, Worker,
 };
 
 fn beyond(message: &str) -> Refused {
@@ -141,6 +141,12 @@ where
 			at: AT.to_owned(),
 			runtime: DeploymentRuntime::Workerd,
 			isolation: STANDS.to_vec(),
+			// A database slot reaches its binding's socket, whose directory the program keeps.
+			sockets: worker
+				.bindings
+				.iter()
+				.any(|b| matches!(b, Bound::Database { .. }))
+				.then(|| (self.slots.join(&binding.namespace), SLOTS.to_owned())),
 		};
 		self.containers.host(binding, input, hosted).await
 	}

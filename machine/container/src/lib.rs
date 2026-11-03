@@ -113,6 +113,9 @@ pub struct Hosted {
 	pub runtime: DeploymentRuntime,
 	/// The isolation it stands on.
 	pub isolation: Vec<DeploymentIsolation>,
+	/// A directory of sockets on the machine and where in it the directory is bound, read-only,
+	/// RFC rt6gi.
+	pub sockets: Option<(PathBuf, String)>,
 }
 
 /// What another kind asks of the containers, an artifact fetched as an image's is and a runtime of

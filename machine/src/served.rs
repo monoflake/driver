@@ -31,6 +31,7 @@ use envelope::contracts::{
 use envelope::{Called, Encoded, Operation};
 
 mod fence;
+mod slot;
 
 use crate::answer::{self, Form, Forms};
 use crate::{Arguments, Driver, Listed, Machine, Make, Manage, kept};
@@ -43,6 +44,16 @@ const LARGEST_OBJECT: usize = MOST.div_ceil(3) * 4 + LARGEST;
 
 /// The interfaces it serves, as a call names them.
 const SERVED: &str = "management, deployments, object, database";
+
+/// The one interface a binding's socket serves.
+const SLOTTED: &str = "database";
+
+/// Whose a call is, the binding its token names on the listener or the one its socket is.
+#[derive(Debug, Clone, Copy)]
+enum Caller {
+	Token,
+	Slot(Binding),
+}
 
 /// How long a call of nix-store making a root is waited on, a deploy's or a start's, before it is
 /// killed.
@@ -182,7 +193,7 @@ async fn managed(
 	let mut lists = driver.lists.lock().await;
 	// Every list is locked through btrfs and containerd and while its file is written, RFC 4elqc
 	// item 7, on a thread that may block.
-	tokio::task::block_in_place(|| {
+	let served = tokio::task::block_in_place(|| {
 		let listed = lists.entry(binding).or_insert_with(|| Listed::new(binding));
 		let make = &*driver;
 		let before = kept::written(listed);
@@ -213,7 +224,10 @@ async fn managed(
 				Served::of::<ManagementHeld>(Err(answer::error(&[], "fault", message)), form)
 			}
 		}
-	})
+	});
+	// The socket follows the database whatever the call made or unmade of it.
+	slot::kept(&driver, binding, lists.get(&binding).is_some_and(|l| l.database.is_some()));
+	served
 }
 
 /// One deployment of a binding, by what it runs as a label writes it.
@@ -275,7 +289,15 @@ async fn deployed(
 		Some(runs) => Some(TURNS.taken(deployment(binding, runs)).await),
 		None => None,
 	};
-	let holding = driver.lists.lock().await.get(&binding).and_then(|l| l.made.clone());
+	let listed =
+		driver.lists.lock().await.get(&binding).map(|l| (l.made.clone(), l.database.clone()));
+	let (holding, database) = listed.unwrap_or_default();
+	// A slot is held to what the binding holds before anything else of the deploy is asked.
+	if let deployments::Call::Deploy(i) = &call
+		&& let Err(refused) = slot::filled(i.bindings.as_ref(), database.map(|(id, _)| id))
+	{
+		return answered::<deployments::Deploy>(Err(refused), form);
+	}
 	let functions = &driver.functions;
 	let containers = &functions.containers;
 	let Some(made) = holding else {
@@ -460,20 +482,33 @@ async fn drained(body: Body) {
 	let _ = axum::body::to_bytes(body, LARGEST).await;
 }
 
-/// One call, authenticated first, so a call denied learns nothing of what it named.
+/// One call, its binding the socket's or else authenticated first, so a call denied learns nothing
+/// of what it named.
 async fn serve(
 	driver: Arc<Driver>,
+	caller: Caller,
 	method: Method,
 	path: &str,
 	headers: &HeaderMap,
 	body: Body,
 ) -> Served {
 	let forms = Forms::of(headers);
-	let authorization = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok());
-	let checked = driver.tokens.read().unwrap_or_else(PoisonError::into_inner).check(authorization);
-	let Ok(binding) = checked else {
-		drained(body).await;
-		return early(forms, answer::error(&[], "denied", None));
+	let binding = match caller {
+		Caller::Slot(binding) => binding,
+		Caller::Token => {
+			let authorization = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok());
+			let checked =
+				driver.tokens.read().unwrap_or_else(PoisonError::into_inner).check(authorization);
+			let Ok(binding) = checked else {
+				drained(body).await;
+				return early(forms, answer::error(&[], "denied", None));
+			};
+			binding
+		}
+	};
+	let (listened, interfaces) = match caller {
+		Caller::Token => (true, SERVED),
+		Caller::Slot(_) => (false, SLOTTED),
 	};
 	let parts = path.strip_prefix('/').and_then(|p| p.split_once('/'));
 	let (Some((interface, operation)), Method::POST) = (parts, method) else {
@@ -487,7 +522,7 @@ async fn serve(
 			answer::malformed("a call's body is application/json or application/cbor"),
 		);
 	};
-	let largest = if interface == "object" { LARGEST_OBJECT } else { LARGEST };
+	let largest = if listened && interface == "object" { LARGEST_OBJECT } else { LARGEST };
 	let Ok(bytes) = axum::body::to_bytes(body, largest).await else {
 		let message = Some(format!("a call's body is at most {largest} bytes"));
 		if interface == "database" && operation == "execute" {
@@ -497,15 +532,15 @@ async fn serve(
 	};
 	let reply = forms.answer;
 	match interface {
-		"management" => match read::<management::Call>(form, operation, &bytes) {
+		"management" if listened => match read::<management::Call>(form, operation, &bytes) {
 			Ok(call) => guarded(reply, managed(driver, binding, call, reply)).await,
 			Err(e) => early(forms, e),
 		},
-		"deployments" => match read::<deployments::Call>(form, operation, &bytes) {
+		"deployments" if listened => match read::<deployments::Call>(form, operation, &bytes) {
 			Ok(call) => guarded(reply, deployed(driver, binding, call, reply)).await,
 			Err(e) => early(forms, e),
 		},
-		"object" => match read::<object::Call>(form, operation, &bytes) {
+		"object" if listened => match read::<object::Call>(form, operation, &bytes) {
 			Ok(call) => guarded(reply, stored(driver, binding, call, reply)).await,
 			Err(e) => early(forms, e),
 		},
@@ -513,11 +548,11 @@ async fn serve(
 			Ok(call) => guarded(reply, queried(driver, binding, call, reply)).await,
 			Err(e) => early(forms, e),
 		},
-		other => early(forms, answer::malformed(format!("no interface {other}, one of {SERVED}"))),
+		other => early(forms, answer::malformed(format!("no interface {other}, one of {interfaces}"))),
 	}
 }
 
-/// Every request, whatever its method and path, answered and logged.
+/// Every request on the listener, whatever its method and path, answered and logged.
 async fn route(
 	State(driver): State<Arc<Driver>>,
 	method: Method,
@@ -525,9 +560,21 @@ async fn route(
 	headers: HeaderMap,
 	body: Body,
 ) -> Response {
+	routed(driver, Caller::Token, method, uri, headers, body).await
+}
+
+/// A request of either caller answered and logged.
+async fn routed(
+	driver: Arc<Driver>,
+	caller: Caller,
+	method: Method,
+	uri: Uri,
+	headers: HeaderMap,
+	body: Body,
+) -> Response {
 	let started = Instant::now();
 	let path = uri.path();
-	let served = serve(driver, method, path, &headers, body).await;
+	let served = serve(driver, caller, method, path, &headers, body).await;
 	let mut parts = path.trim_start_matches('/').splitn(2, '/');
 	let interface = parts.next().filter(|n| !n.is_empty()).unwrap_or("-");
 	let operation = parts.next().filter(|n| !n.is_empty()).unwrap_or("-");
@@ -659,6 +706,11 @@ pub(crate) async fn run(arguments: Arguments) -> ExitCode {
 		return ExitCode::FAILURE;
 	}
 	rooted(&driver).await;
+	let lists = driver.lists.lock().await;
+	for (binding, listed) in lists.iter() {
+		slot::kept(&driver, *binding, listed.database.is_some());
+	}
+	drop(lists);
 	tokio::spawn(restarted(Arc::clone(&driver)));
 	tokio::spawn(fence::kept(Arc::clone(&driver)));
 	let listener = match tokio::net::TcpListener::bind(listen).await {
@@ -683,107 +735,4 @@ pub(crate) async fn run(arguments: Arguments) -> ExitCode {
 }
 
 #[cfg(test)]
-mod tests {
-	use std::pin::pin;
-	use std::task::{Context, Poll, Waker};
-
-	use envelope::contracts::interface::deployments;
-	use envelope::contracts::{DeploymentOf, DeploymentRuns};
-
-	use super::{TURNS, deployed, deployment, started};
-	use crate::Arguments;
-	use crate::answer::Form;
-
-	/// A driver of nothing, reaching no containerd.
-	fn driver() -> super::Driver {
-		let nowhere = std::path::PathBuf::from("/nonexistent");
-		started(Arguments {
-			listen: crate::LISTEN,
-			bindings: Vec::new(),
-			state: nowhere.clone(),
-			containerd: nowhere.clone(),
-			runc: nowhere.clone(),
-			crun: nowhere.clone(),
-			youki: nowhere.clone(),
-			roots: nowhere.clone(),
-			nix_store: None,
-			plugins: nowhere.clone(),
-			bridge: "bridge".into(),
-			subnet: "10.88.0.0/16".into(),
-			entry: 4321,
-			mount: nowhere.clone(),
-			btrfs: nowhere.clone(),
-			local: None,
-			plain: None,
-			secrets: nowhere.clone(),
-			largest: 1,
-			workerd: nowhere,
-		})
-	}
-
-	#[tokio::test]
-	async fn a_call_on_a_deployment_waits_for_the_one_before_on_it_to_be_answered() {
-		let driver = std::sync::Arc::new(driver());
-		let runs = DeploymentRuns::App { id: 7 };
-		let held = TURNS.taken(deployment(7, &runs)).await;
-		let stop = deployments::Call::Stop(DeploymentOf { runs: runs.clone() });
-		let mut waiting = pin!(deployed(driver.clone(), 7, stop, Form::Json));
-		let mut context = Context::from_waker(Waker::noop());
-		assert!(waiting.as_mut().poll(&mut context).is_pending(), "it ran while the turn was held");
-		// Another deployment of the binding, or the same of another binding, is not held back.
-		let other = deployments::Call::Stop(DeploymentOf { runs: DeploymentRuns::App { id: 8 } });
-		let apart = pin!(deployed(driver.clone(), 7, other, Form::Json)).poll(&mut context);
-		assert!(matches!(apart, Poll::Ready(_)));
-		let elsewhere = deployments::Call::Stop(DeploymentOf { runs });
-		let apart = pin!(deployed(driver.clone(), 9, elsewhere, Form::Json)).poll(&mut context);
-		assert!(matches!(apart, Poll::Ready(_)));
-		drop(held);
-		assert_eq!(waiting.await.outcome, "error rejected not_found");
-	}
-
-	#[test]
-	fn a_database_refusal_keeps_its_reason_and_words() {
-		use driver_machine_database::{Fault, Unexecuted};
-		let cases = [
-			(Unexecuted::Invalid("syntax".into()), "invalid", Some("syntax")),
-			(Unexecuted::Constraint("unique".into()), "constraint", Some("unique")),
-			(Unexecuted::BeyondLimit("statement".into()), "beyond_limit", Some("statement")),
-			(Unexecuted::BeyondRange("integer".into()), "beyond_range", Some("integer")),
-			(Unexecuted::StorageFull, "storage_full", None),
-			(Unexecuted::Fault(Fault("disk".into())), "fault", Some("disk")),
-		];
-		for (refusal, reason, words) in cases {
-			let refused = super::unexecuted(refusal);
-			assert_eq!((refused.reason, refused.message.as_deref()), (reason, words));
-		}
-	}
-
-	#[test]
-	fn the_bridge_names_the_entry_at_the_port_the_driver_is_given() {
-		use clap::Parser as _;
-		let given = |entry: Option<&str>| {
-			let mut args =
-				vec!["driver-machine", "--state", "/nonexistent", "--containerd", "/nonexistent"];
-			args.extend(["--runc", "/r", "--crun", "/c", "--youki", "/y", "--plugins", "/p"]);
-			args.extend(["--bridge", "bridge", "--subnet", "192.0.2.0/24", "--mount", "/nonexistent"]);
-			args.extend(["--btrfs", "/b", "--secrets", "/nonexistent", "--largest", "1"]);
-			args.extend(["--workerd", "/nonexistent"]);
-			args.extend(entry.map(|e| ["--entry", e]).into_iter().flatten());
-			crate::Program::try_parse_from(args)
-		};
-		// The flag reaches the bridge, whatever port it names, and none is assumed without it.
-		for port in [4321u16, 4999] {
-			let program = given(Some(&port.to_string())).unwrap();
-			let arguments = program.driver.unwrap();
-			assert_eq!(started(arguments).functions.containers.network.entry, port);
-		}
-		assert!(given(None).is_err());
-	}
-
-	#[test]
-	fn a_component_takes_its_turn_by_its_id() {
-		let component = |name: &str, id| DeploymentRuns::Component { component: name.into(), id };
-		assert_eq!(deployment(7, &component("issuer", 3)), deployment(7, &component("renamed", 3)));
-		assert_ne!(deployment(7, &component("issuer", 3)), deployment(7, &component("issuer", 4)));
-	}
-}
+mod tests;

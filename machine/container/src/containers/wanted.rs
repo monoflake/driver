@@ -38,6 +38,8 @@ pub(super) struct Wanted<'a> {
 	pub(super) secrets: BTreeMap<String, Vec<u8>>,
 	/// What a hosted runtime is given, its files and where they are bound.
 	pub(super) files: Option<(&'a BTreeMap<String, Vec<u8>>, &'a str)>,
+	/// A directory of sockets a hosted runtime reaches, and where it is bound, RFC rt6gi.
+	pub(super) sockets: Option<(&'a std::path::Path, &'a str)>,
 	/// The deployments it reaches, each as its label names it.
 	pub(super) reaching: Vec<String>,
 	/// The deployments it reaches, each named in its hosts and its origins.
@@ -99,7 +101,11 @@ impl<'a> Wanted<'a> {
 		hosted: &'a Hosted,
 	) -> Result<Self, Refused> {
 		let files = Some((&hosted.files, hosted.at.as_str()));
-		Self::within(binding, input, hosted.runtime, hosted.isolation.clone(), hosted.port, files)
+		let mut wanted =
+			Self::within(binding, input, hosted.runtime, hosted.isolation.clone(), hosted.port, files)?;
+		wanted.sockets =
+			hosted.sockets.as_ref().map(|(directory, at)| (directory.as_path(), at.as_str()));
+		Ok(wanted)
 	}
 
 	/// What every deploy asks, checked against the binding, its container and its secrets' names.
@@ -139,6 +145,7 @@ impl<'a> Wanted<'a> {
 			env,
 			secrets,
 			files,
+			sockets: None,
 			reaching: input.reaching.iter().flatten().map(labels::runs).collect(),
 			targets: Vec::new(),
 		})

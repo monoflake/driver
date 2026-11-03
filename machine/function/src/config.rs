@@ -6,6 +6,8 @@ use envelope::contracts::{DeploymentDeploy, DeploymentHanded, DeploymentNetwork}
 
 use crate::{Bound, Bundle, Configure, FOOTING, Kind, MODULES, PORT, Worker};
 
+mod database;
+
 /// What the configuration opens with, its schema imported.
 const OPENING: &str = concat!(
 	"# workerd's configuration for one deployment, written by driver(machine)'s function kind.\n",
@@ -83,6 +85,11 @@ impl Configure for Worker {
 		let footing = Bound::Text { name: FOOTING.to_owned(), text: input.footing.clone() };
 		let secrets =
 			input.secrets.iter().flat_map(|s| s.keys()).map(|name| Bound::Secret { name: name.clone() });
+		let slots = input
+			.bindings
+			.iter()
+			.flat_map(|b| b.database.iter().flatten())
+			.map(|(name, _)| Bound::Database { name: name.clone() });
 		let outbound = input.network.iter().any(|n| match n {
 			DeploymentNetwork::Http | DeploymentNetwork::Tcp => true,
 			DeploymentNetwork::Udp | DeploymentNetwork::Icmp => false,
@@ -94,6 +101,7 @@ impl Configure for Worker {
 			bindings: std::iter::once(footing)
 				.chain(input.handed.iter().flatten().map(handed))
 				.chain(secrets)
+				.chain(slots)
 				.collect(),
 			port: PORT,
 			outbound,
@@ -111,10 +119,22 @@ impl Configure for Worker {
 			true => format!("(allow = [{}], tlsOptions = (trustBrowserCas = true))", allowed.join(", ")),
 			false => format!("(allow = [{}])", allowed.join(", ")),
 		};
-		let services = [
+		let slotted = self.bindings.iter().any(|b| match b {
+			Bound::Database { .. } => true,
+			Bound::Text { .. } | Bound::Secret { .. } => false,
+		});
+		let mut services = vec![
 			"(name = \"main\", worker = .worker)".to_owned(),
 			format!("(name = {}, network = {network})", quoted(OUTBOUND)),
 		];
+		// A deployment filling no slot is configured as one before slots were.
+		let extensions = match slotted {
+			true => {
+				services.push(database::service());
+				format!(",\n\textensions = {}", listed(&[database::extension()], "\t"))
+			}
+			false => String::new(),
+		};
 		let socket = format!(
 			"[(name = \"http\", address = {}, http = (), service = \"main\")]",
 			quoted(&format!("*:{}", self.port))
@@ -137,7 +157,7 @@ impl Configure for Worker {
 				Bound::Secret { name } => {
 					format!("(name = {}, text = embed {})", quoted(name), quoted(&format!("/{name}")))
 				}
-				Bound::Database { .. } => todo!("dg903"),
+				Bound::Database { name } => database::binding(name),
 			})
 			.collect();
 		// What it reaches is read from workerd's environment, which the container kind sets as it
@@ -155,7 +175,7 @@ impl Configure for Worker {
 			"{OPENING}
 const config :Workerd.Config = (
 	services = {},
-	sockets = {socket}
+	sockets = {socket}{extensions}
 );
 
 const worker :Workerd.Worker = (

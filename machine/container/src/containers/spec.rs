@@ -145,6 +145,9 @@ pub(super) struct Asked<'a> {
 	pub(super) files: Option<(&'a Path, &'a str)>,
 	/// Its hosts file on the host, bound read-only at `/etc/hosts`, where it reaches others.
 	pub(super) hosts: Option<&'a Path>,
+	/// A directory of sockets on the host and where it is bound, read-only, since a connect through
+	/// a read-only bind still reaches a socket, RFC rt6gi.
+	pub(super) sockets: Option<(&'a Path, &'a str)>,
 }
 
 /// An environment with each of `over` set on it, the image's own entry of a name replaced.
@@ -248,6 +251,14 @@ pub(super) fn build(asked: &Asked<'_>) -> Result<Value, Refused> {
 			"options": ["rbind", "ro", "nosuid", "nodev", "noexec"],
 		}));
 	}
+	if let Some((sockets, at)) = asked.sockets {
+		mounts.push(json!({
+			"destination": at,
+			"type": "bind",
+			"source": sockets,
+			"options": ["rbind", "ro", "nosuid", "nodev", "noexec"],
+		}));
+	}
 	Ok(json!({
 		"ociVersion": "1.2.0",
 		"process": {
@@ -285,4 +296,53 @@ pub(super) fn build(asked: &Asked<'_>) -> Result<Value, Refused> {
 			"readonlyPaths": READ_ONLY,
 		},
 	}))
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn asked<'a>(
+		config: &'a ImageConfig,
+		capacity: &'a Capacity,
+		sockets: Option<(&'a Path, &'a str)>,
+	) -> Asked<'a> {
+		Asked {
+			id: "c",
+			namespace: "n",
+			config,
+			user: User { uid: 0, gid: 0 },
+			env: &[],
+			capacity,
+			netns: Path::new("/run/netns/c"),
+			secrets: None,
+			files: None,
+			hosts: None,
+			sockets,
+		}
+	}
+
+	#[test]
+	fn a_directory_of_sockets_is_bound_read_only_where_it_is_asked_and_only_then() {
+		let config = ImageConfig { cmd: vec!["serve".into()], ..ImageConfig::default() };
+		let capacity = Capacity { millicores: 0, memory: 1 << 20 };
+		let at = |spec: &Value| {
+			spec["mounts"].as_array().unwrap().iter().find(|m| m["destination"] == "/run/slots").cloned()
+		};
+		let directory = Path::new("/run/driver-machine/slots/n");
+		let spec = build(&asked(&config, &capacity, Some((directory, "/run/slots")))).unwrap();
+		let bound = json!({
+			"destination": "/run/slots",
+			"type": "bind",
+			"source": "/run/driver-machine/slots/n",
+			"options": ["rbind", "ro", "nosuid", "nodev", "noexec"],
+		});
+		assert_eq!(at(&spec), Some(bound));
+		// After the tmpfs at /run, so the bind is not hidden beneath it.
+		let mounts = spec["mounts"].as_array().unwrap();
+		let run = mounts.iter().position(|m| m["destination"] == "/run").unwrap();
+		let slots = mounts.iter().position(|m| m["destination"] == "/run/slots").unwrap();
+		assert!(run < slots);
+		assert_eq!(at(&build(&asked(&config, &capacity, None)).unwrap()), None);
+	}
 }

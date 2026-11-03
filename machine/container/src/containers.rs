@@ -482,6 +482,7 @@ where
 			secrets: bound,
 			files: given.as_ref().map(|(directory, at)| (directory.as_path(), *at)),
 			hosts: hosts.as_deref(),
+			sockets: wanted.sockets,
 		})?;
 		let kept = Kept {
 			runs: wanted.runs.clone(),
