@@ -38,6 +38,12 @@ const OFFERED: [ManagementKind; 5] = [
 ];
 
 impl Listed {
+	/// The namespace the binding's containers are in, the one kept with what was made of it, or
+	/// the one a container would be made in, which its database socket's directory is named by.
+	pub(crate) fn namespaced(&self) -> String {
+		self.made.as_ref().map_or_else(|| namespace(self.binding), |m| m.namespace.clone())
+	}
+
 	/// A binding's list before anything is applied.
 	pub(crate) const fn new(binding: Binding) -> Self {
 		Self {

@@ -226,7 +226,9 @@ async fn managed(
 		}
 	});
 	// The socket follows the database whatever the call made or unmade of it.
-	slot::kept(&driver, binding, lists.get(&binding).is_some_and(|l| l.database.is_some()));
+	let listed = lists.get(&binding);
+	let namespace = listed.map_or_else(|| crate::listed::namespace(binding), Listed::namespaced);
+	slot::kept(&driver, binding, &namespace, listed.is_some_and(|l| l.database.is_some()));
 	served
 }
 
@@ -294,7 +296,7 @@ async fn deployed(
 	let (holding, database) = listed.unwrap_or_default();
 	// A slot is held to what the binding holds before anything else of the deploy is asked.
 	if let deployments::Call::Deploy(i) = &call
-		&& let Err(refused) = slot::filled(i.bindings.as_ref(), database.map(|(id, _)| id))
+		&& let Err(refused) = slot::filled(i.bindings.as_ref(), database.map(|(id, _)| id), i.form)
 	{
 		return answered::<deployments::Deploy>(Err(refused), form);
 	}
@@ -708,7 +710,7 @@ pub(crate) async fn run(arguments: Arguments) -> ExitCode {
 	rooted(&driver).await;
 	let lists = driver.lists.lock().await;
 	for (binding, listed) in lists.iter() {
-		slot::kept(&driver, *binding, listed.database.is_some());
+		slot::kept(&driver, *binding, &listed.namespaced(), listed.database.is_some());
 	}
 	drop(lists);
 	tokio::spawn(restarted(Arc::clone(&driver)));

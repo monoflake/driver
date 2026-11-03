@@ -3,9 +3,10 @@
 use std::collections::BTreeMap;
 
 use envelope::contracts::{
-	Architecture, DeploymentDeploy, DeploymentForm, DeploymentIsolation, DeploymentRuns,
+	AppBindings, Architecture, DeploymentDeploy, DeploymentForm, DeploymentIsolation, DeploymentRuns,
 	DeploymentRuntime,
 };
+use sha2::{Digest as _, Sha256};
 
 use super::{handed, hex, labels, secrets};
 use crate::{Binding, Hosted, Refused};
@@ -44,6 +45,34 @@ pub(super) struct Wanted<'a> {
 	pub(super) reaching: Vec<String>,
 	/// The deployments it reaches, each named in its hosts and its origins.
 	pub(super) targets: Vec<DeploymentRuns>,
+	/// What fills its slots as [`filled`] hashes it, none where nothing does.
+	pub(super) fill: Option<String>,
+}
+
+/// What fills a deployment's slots, its bindings and the sockets it is given, as one hash in hex,
+/// none where nothing fills one, so a container labeled before reads as filled by nothing.
+pub(super) fn filled(
+	bindings: Option<&AppBindings>,
+	sockets: Option<(&std::path::Path, &str)>,
+) -> Option<String> {
+	let typed = bindings
+		.map_or([None, None, None], |b| [b.app.as_ref(), b.database.as_ref(), b.bucket.as_ref()]);
+	let mut entries: Vec<serde_json::Value> = Vec::new();
+	for (kind, slots) in ["app", "database", "bucket"].into_iter().zip(typed) {
+		for (slot, id) in slots.into_iter().flatten() {
+			entries.push(serde_json::json!([kind, slot, id]));
+		}
+	}
+	if let Some((directory, at)) = sockets {
+		entries.push(serde_json::json!(["sockets", directory.to_string_lossy(), at]));
+	}
+	match entries.is_empty() {
+		true => None,
+		false => {
+			let whole = Sha256::digest(serde_json::Value::Array(entries).to_string().as_bytes());
+			Some(whole.iter().map(|b| format!("{b:02x}")).collect())
+		}
+	}
 }
 
 impl<'a> Wanted<'a> {
@@ -105,6 +134,7 @@ impl<'a> Wanted<'a> {
 			Self::within(binding, input, hosted.runtime, hosted.isolation.clone(), hosted.port, files)?;
 		wanted.sockets =
 			hosted.sockets.as_ref().map(|(directory, at)| (directory.as_path(), at.as_str()));
+		wanted.fill = filled(input.bindings.as_ref(), wanted.sockets);
 		Ok(wanted)
 	}
 
@@ -148,6 +178,7 @@ impl<'a> Wanted<'a> {
 			sockets: None,
 			reaching: input.reaching.iter().flatten().map(labels::runs).collect(),
 			targets: Vec::new(),
+			fill: filled(input.bindings.as_ref(), None),
 		})
 	}
 }

@@ -66,8 +66,11 @@ impl Started {
 	/// Unix socket's below it, removed with the rest.
 	pub fn short(name: &str, bindings: u32) -> Self {
 		let directory = prepared(name, bindings);
+		// The clock may read alike for two tests at once, so a count keeps their states apart.
+		static COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+		let count = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 		let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().subsec_nanos();
-		let state = std::env::temp_dir().join(format!("dm{}-{nanos}", std::process::id()));
+		let state = std::env::temp_dir().join(format!("dm{}-{nanos}-{count}", std::process::id()));
 		Self::in_directory(directory, state, bindings)
 	}
 

@@ -1,10 +1,12 @@
 //! A bundle read from its artifact, a tar archive of its modules and its metadata, RFC dg903.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::{Component, Path};
 
 use driver_machine_container::Refused;
+use envelope::Encoded;
+use envelope::contracts::ManifestSlot;
 use serde_json::Value;
 
 use crate::{Bundle, Kind, METADATA, Module, Unpack};
@@ -65,6 +67,25 @@ fn dated(date: &str) -> bool {
 			.all(|(at, c)| if at == 4 || at == 7 { c == '-' } else { c.is_ascii_digit() })
 }
 
+/// The slots a bundle's metadata declares, each a `manifest-slot` and each name once, RFC 49qyg.
+fn declared(slots: Option<&Value>) -> Result<Vec<ManifestSlot>, Refused> {
+	let Some(slots) = slots else { return Ok(Vec::new()) };
+	let listed =
+		slots.as_array().ok_or_else(|| malformed(format!("{METADATA}'s slots are a list")))?;
+	let mut names = BTreeSet::new();
+	let mut declared = Vec::new();
+	for slot in listed {
+		let slot = ManifestSlot::from_json(slot).map_err(|e| {
+			malformed(format!("{METADATA}'s slots are each a name and a type, {}", e.expected))
+		})?;
+		if !names.insert(slot.name.clone()) {
+			return Err(malformed(format!("{METADATA} declares the slot {} twice", slot.name)));
+		}
+		declared.push(slot);
+	}
+	Ok(declared)
+}
+
 /// Every file of the archive by its name, its directories passed over.
 fn files(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, Refused> {
 	let mut archive = tar::Archive::new(bytes);
@@ -112,6 +133,7 @@ impl Unpack for Bundle {
 				.and_then(|f| f.iter().map(|f| f.as_str().map(str::to_owned)).collect())
 				.ok_or_else(|| malformed(format!("{METADATA}'s compatibility_flags are strings")))?,
 		};
+		let slots = declared(metadata.get("slots"))?;
 		let first = files
 			.remove(main)
 			.ok_or_else(|| malformed(format!("the main module {main} is not in the bundle")))?;
@@ -119,6 +141,6 @@ impl Unpack for Bundle {
 		for (name, bytes) in files {
 			modules.push(module(name, bytes)?);
 		}
-		Ok(Self { modules, compatibility_date, compatibility_flags })
+		Ok(Self { modules, compatibility_date, compatibility_flags, slots })
 	}
 }

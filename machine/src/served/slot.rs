@@ -11,13 +11,12 @@ use axum::extract::State;
 use axum::http::{HeaderMap, Method, Uri};
 use axum::response::Response;
 use driver_machine_container::Refused;
-use driver_machine_function::DATABASE;
+use driver_machine_function::{DATABASE, slotted};
 use driver_machine_management::Binding;
-use envelope::contracts::AppBindings;
+use envelope::contracts::{AppBindings, DeploymentForm};
 
 use super::{Caller, routed};
 use crate::Driver;
-use crate::listed::namespace;
 
 /// Each socket served, by its path, and the task serving it.
 struct Sockets(std::sync::Mutex<BTreeMap<PathBuf, tokio::task::AbortHandle>>);
@@ -25,9 +24,9 @@ struct Sockets(std::sync::Mutex<BTreeMap<PathBuf, tokio::task::AbortHandle>>);
 /// The sockets of this process's one driver.
 static SOCKETS: Sockets = Sockets(std::sync::Mutex::new(BTreeMap::new()));
 
-/// A binding's database socket, `<slots>/<namespace>/database.sock`.
-pub(super) fn socket(slots: &Path, binding: Binding) -> PathBuf {
-	slots.join(namespace(binding)).join(DATABASE)
+/// A binding's database socket, `<slots>/<namespace>/database.sock`, in `Listed::namespaced`.
+pub(super) fn socket(slots: &Path, namespace: &str) -> PathBuf {
+	slotted(slots, namespace).join(DATABASE)
 }
 
 /// Every request on a binding's socket, answered as the binding's own and logged.
@@ -51,28 +50,36 @@ fn removed(path: &Path) -> std::io::Result<()> {
 
 /// The socket bound again in its own directory, one left from an earlier run replaced.
 fn bound(path: &Path) -> std::io::Result<tokio::net::UnixListener> {
+	use std::os::unix::fs::PermissionsExt;
+	// workerd runs as its image's user, not root, so it traverses the directory and writes the
+	// socket to connect, whatever the umask.
 	if let Some(directory) = path.parent() {
 		std::fs::create_dir_all(directory)?;
+		std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o755))?;
 	}
 	removed(path)?;
 	let listener = tokio::net::UnixListener::bind(path)?;
-	// workerd runs as its image's user, not root, and a connect needs write on the socket.
-	std::fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o666))?;
+	std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o666))?;
 	Ok(listener)
 }
 
-/// A binding's socket served while `holds`, its database held, and removed otherwise; each
-/// failure told on stderr.
-pub(super) fn kept(driver: &Arc<Driver>, binding: Binding, holds: bool) {
-	let path = socket(&driver.functions.slots, binding);
+/// A file removed, its failure told on stderr.
+fn told(path: &Path) {
+	if let Err(e) = removed(path) {
+		eprintln!("slot {}: {e}", path.display());
+	}
+}
+
+/// A binding's socket served in `namespace`, `Listed::namespaced`, while `holds`, its database
+/// held, and removed otherwise; each failure told on stderr.
+pub(super) fn kept(driver: &Arc<Driver>, binding: Binding, namespace: &str, holds: bool) {
+	let path = socket(&driver.functions.slots, namespace);
 	let mut sockets = SOCKETS.0.lock().unwrap_or_else(PoisonError::into_inner);
 	if !holds {
 		if let Some(task) = sockets.remove(&path) {
 			task.abort();
 		}
-		if let Err(e) = removed(&path) {
-			eprintln!("slot {}: {e}", path.display());
-		}
+		told(&path);
 		return;
 	}
 	if sockets.get(&path).is_some_and(|task| !task.is_finished()) {
@@ -95,11 +102,21 @@ pub(super) fn kept(driver: &Arc<Driver>, binding: Binding, holds: bool) {
 	sockets.insert(path, task.abort_handle());
 }
 
-/// A deploy's `bindings` within what the binding holds, each `database` slot its held item and no
-/// `app` or `bucket` slot, as nothing serves them yet.
-pub(super) fn filled(bindings: Option<&AppBindings>, held: Option<u32>) -> Result<(), Refused> {
+/// A deploy's `bindings` within what the binding holds, each `database` slot its held item, no
+/// `app` or `bucket` slot, as nothing serves them yet, and none on a form declaring no slot.
+pub(super) fn filled(
+	bindings: Option<&AppBindings>,
+	held: Option<u32>,
+	form: DeploymentForm,
+) -> Result<(), Refused> {
 	let Some(bindings) = bindings else { return Ok(()) };
 	let invalid = |message: String| Refused { reason: "invalid", message: Some(message) };
+	let named = [&bindings.app, &bindings.database, &bindings.bucket];
+	let first = named.into_iter().flatten().flat_map(|slots| slots.keys()).next();
+	if let (Some(name), DeploymentForm::Image | DeploymentForm::Component) = (first, form) {
+		let message = format!("the slot {name} is filled on a {form:?} deploy, which declares no slot");
+		return Err(invalid(message));
+	}
 	let unserved = [("app", &bindings.app), ("bucket", &bindings.bucket)];
 	for (kind, slots) in unserved {
 		if let Some(name) = slots.iter().flatten().map(|(name, _)| name).next() {
@@ -123,7 +140,7 @@ pub(super) fn filled(bindings: Option<&AppBindings>, held: Option<u32>) -> Resul
 mod tests {
 	use std::collections::BTreeMap;
 
-	use envelope::contracts::AppBindings;
+	use envelope::contracts::{AppBindings, DeploymentForm};
 
 	use super::filled;
 
@@ -134,16 +151,18 @@ mod tests {
 	#[test]
 	fn a_deploy_s_bindings_are_held_to_the_database_the_binding_holds() {
 		let database = |slots| AppBindings { app: None, database: named(slots), bucket: None };
-		assert!(filled(None, None).is_ok());
-		assert!(filled(Some(&database(&[])), None).is_ok());
-		assert!(filled(Some(&database(&[("database", 3)])), Some(3)).is_ok());
-		let refused = filled(Some(&database(&[("database", 4)])), Some(3)).unwrap_err();
+		assert!(filled(None, None, DeploymentForm::Modules).is_ok());
+		assert!(filled(Some(&database(&[])), None, DeploymentForm::Modules).is_ok());
+		assert!(filled(Some(&database(&[("database", 3)])), Some(3), DeploymentForm::Modules).is_ok());
+		let refused =
+			filled(Some(&database(&[("database", 4)])), Some(3), DeploymentForm::Modules).unwrap_err();
 		assert_eq!(refused.reason, "invalid");
 		assert_eq!(
 			refused.message.as_deref(),
 			Some("the slot database names the database 4, and the binding holds item 3's")
 		);
-		let refused = filled(Some(&database(&[("database", 4)])), None).unwrap_err();
+		let refused =
+			filled(Some(&database(&[("database", 4)])), None, DeploymentForm::Modules).unwrap_err();
 		assert_eq!(
 			refused.message.as_deref(),
 			Some("the slot database names the database 4, and the binding holds none")
@@ -153,15 +172,28 @@ mod tests {
 	#[test]
 	fn an_app_or_bucket_slot_is_refused_and_an_empty_map_is_not() {
 		let app = AppBindings { app: named(&[("peer", 1)]), database: None, bucket: None };
-		let refused = filled(Some(&app), None).unwrap_err();
+		let refused = filled(Some(&app), None, DeploymentForm::Modules).unwrap_err();
 		assert_eq!(refused.reason, "invalid");
 		assert_eq!(
 			refused.message.as_deref(),
 			Some("the slot peer is filled under app, which a machine serves not yet")
 		);
 		let bucket = AppBindings { app: None, database: None, bucket: named(&[("files", 1)]) };
-		assert_eq!(filled(Some(&bucket), None).unwrap_err().reason, "invalid");
+		assert_eq!(filled(Some(&bucket), None, DeploymentForm::Modules).unwrap_err().reason, "invalid");
 		let empty = AppBindings { app: named(&[]), database: None, bucket: named(&[]) };
-		assert!(filled(Some(&empty), None).is_ok());
+		assert!(filled(Some(&empty), None, DeploymentForm::Modules).is_ok());
+	}
+
+	#[test]
+	fn an_image_or_component_deploy_fills_no_slot() {
+		let database = AppBindings { app: None, database: named(&[("database", 3)]), bucket: None };
+		for form in [DeploymentForm::Image, DeploymentForm::Component] {
+			let refused = filled(Some(&database), Some(3), form).unwrap_err();
+			assert_eq!(refused.reason, "invalid");
+			assert!(refused.message.unwrap().starts_with("the slot database is filled on a "));
+		}
+		let empty = AppBindings { app: None, database: named(&[]), bucket: None };
+		assert!(filled(Some(&empty), None, DeploymentForm::Image).is_ok());
+		assert!(filled(None, None, DeploymentForm::Component).is_ok());
 	}
 }

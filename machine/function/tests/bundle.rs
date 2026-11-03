@@ -7,6 +7,7 @@ mod common;
 
 use common::bundle;
 use driver_machine_function::{Bundle, Kind, Unpack};
+use envelope::contracts::{ManifestSlot, SlotType};
 
 /// An archive of the files given, each by its name, as written.
 fn archived(files: &[(&str, &[u8])]) -> Vec<u8> {
@@ -43,6 +44,29 @@ fn a_bundle_is_its_main_module_first_then_the_rest_by_name() {
 	]);
 	let kinds: Vec<Kind> = Bundle::unpack(&typed).unwrap().modules.iter().map(|m| m.kind).collect();
 	assert_eq!(kinds, [Kind::Es, Kind::CommonJs, Kind::Text, Kind::Data, Kind::Json, Kind::Wasm]);
+}
+
+#[test]
+fn a_bundle_s_slots_are_read_from_its_metadata_and_none_where_it_names_none() {
+	assert!(Bundle::unpack(&bundle("echo-modules")).unwrap().slots.is_empty());
+	let read = Bundle::unpack(&bundle("database-modules")).unwrap();
+	let database = ManifestSlot { name: "database".into(), r#type: SlotType::Database };
+	assert_eq!(read.slots, [database]);
+	let declaring = |slots: &str| {
+		let metadata = format!(
+			r#"{{ "main_module": "main.js", "compatibility_date": "2026-10-21", "slots": {slots} }}"#
+		);
+		Bundle::unpack(&archived(&[("metadata.json", metadata.as_bytes()), ("main.js", b"")]))
+	};
+	let refused = |slots: &str| declaring(slots).map(|_| ()).map_err(|r| r.reason);
+	assert_eq!(refused(r#"{ "name": "a" }"#), Err("malformed"), "not a list");
+	assert_eq!(refused(r#"[{ "name": "a", "type": "queue" }]"#), Err("malformed"), "no such type");
+	assert_eq!(refused(r#"[{ "type": "database" }]"#), Err("malformed"), "no name");
+	let twice = r#"[{ "name": "a", "type": "database" }, { "name": "a", "type": "app" }]"#;
+	assert_eq!(refused(twice), Err("malformed"), "one name twice");
+	let both = r#"[{ "name": "a", "type": "database" }, { "name": "b", "type": "file_bucket" }]"#;
+	let types: Vec<SlotType> = declaring(both).unwrap().slots.iter().map(|s| s.r#type).collect();
+	assert_eq!(types, [SlotType::Database, SlotType::FileBucket]);
 }
 
 #[test]

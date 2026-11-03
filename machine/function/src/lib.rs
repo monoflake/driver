@@ -1,14 +1,15 @@
 //! `driver(machine)`'s function, modules run by workerd, one process for each deployment in a
 //! container of its binding's, RFC vr5lw. This file is its interface, the model's, `docs/code.md`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use driver_machine_container::Refused;
-use envelope::contracts::{DeploymentDeploy, DeploymentIsolation};
+use envelope::contracts::{DeploymentDeploy, DeploymentIsolation, ManifestSlot};
 
 mod bundle;
 mod config;
 mod functions;
+mod slots;
 
 /// The port workerd listens on in its container, which its deployment's address names.
 pub const PORT: u16 = 8080;
@@ -22,8 +23,8 @@ pub const CONFIG: &str = "config.capnp";
 /// The directory below [`AT`] holding each module by its name.
 pub const MODULES: &str = "modules";
 
-/// What names a bundle's main module and its compatibility, beside its modules in its archive,
-/// RFC dg903.
+/// What names a bundle's main module, its compatibility and the slots it declares, beside its
+/// modules in its archive, RFC dg903.
 pub const METADATA: &str = "metadata.json";
 
 /// What names the footing's address to a worker, as the container kind names it to an image.
@@ -35,6 +36,12 @@ pub const SLOTS: &str = "/run/slots";
 
 /// The socket a binding's database is served on, within its directory of sockets.
 pub const DATABASE: &str = "database.sock";
+
+/// A binding's directory of sockets, `<slots>/<namespace>`, bound at [`SLOTS`] in its containers,
+/// by the namespace its containers are in.
+pub fn slotted(slots: &Path, namespace: &str) -> PathBuf {
+	slots.join(namespace)
+}
 
 /// The isolation workerd in a container stands on, RFC vr5lw.
 pub const STANDS: [DeploymentIsolation; 2] =
@@ -81,7 +88,7 @@ pub struct Module {
 }
 
 /// A bundle of modules as its artifact holds it, RFC dg903.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Bundle {
 	/// Its modules, its main one first.
 	pub modules: Vec<Module>,
@@ -89,6 +96,8 @@ pub struct Bundle {
 	pub compatibility_date: String,
 	/// The flags of workerd's behavior it asks beyond its date.
 	pub compatibility_flags: Vec<String>,
+	/// The slots it declares, each a name once, none where its metadata names none, RFC 49qyg.
+	pub slots: Vec<ManifestSlot>,
 }
 
 /// A binding workerd gives a worker, by its name.

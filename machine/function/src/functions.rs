@@ -11,6 +11,7 @@ use envelope::contracts::{
 
 use crate::{
 	AT, Bound, Bundle, CONFIG, Configure, Functions, MODULES, PORT, SLOTS, STANDS, Unpack, Worker,
+	slots, slotted,
 };
 
 fn beyond(message: &str) -> Refused {
@@ -120,6 +121,7 @@ where
 		let bytes = self.containers.fetch(&binding.namespace, &input.artifact).await?;
 		let bundle = Bundle::unpack(&bytes)?;
 		let held = self.containers.secret_names(binding, &input.runs).await?;
+		slots::filled(&input, &bundle.slots, &held)?;
 		let mut worker = Worker::of(&input, &bundle);
 		let mut names: BTreeSet<String> = worker
 			.bindings
@@ -146,7 +148,7 @@ where
 				.bindings
 				.iter()
 				.any(|b| matches!(b, Bound::Database { .. }))
-				.then(|| (self.slots.join(&binding.namespace), SLOTS.to_owned())),
+				.then(|| (slotted(&self.slots, &binding.namespace), SLOTS.to_owned())),
 		};
 		self.containers.host(binding, input, hosted).await
 	}

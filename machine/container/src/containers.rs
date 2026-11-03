@@ -88,14 +88,25 @@ fn hex(hash: &[u8; 32]) -> String {
 }
 
 /// The containerd id within the namespace of what runs as one container, by the id of what it runs
-/// in 8 hex digits, the version's first digits, and a hash of what it reaches where it reaches any.
-fn container_id(runs: &DeploymentRuns, version: &str, reaching: &[String]) -> String {
+/// in 8 hex digits, the version's first digits, and a hash of what it reaches and what fills its
+/// slots where either is there, so one replacing another of its version never shares its id.
+fn container_id(
+	runs: &DeploymentRuns,
+	version: &str,
+	reaching: &[String],
+	fill: Option<&str>,
+) -> String {
 	let short: String = version.chars().take(12).collect();
 	let of = labels::runs(runs);
-	match reaching.is_empty() {
-		true => format!("{of}-{short}"),
-		false => {
-			let whole = Sha256::digest(reaching.join(",").as_bytes());
+	match (reaching.is_empty(), fill) {
+		(true, None) => format!("{of}-{short}"),
+		(_, fill) => {
+			let mut hashed = reaching.join(",");
+			if let Some(fill) = fill {
+				hashed.push(';');
+				hashed.push_str(fill);
+			}
+			let whole = Sha256::digest(hashed.as_bytes());
 			let reached: String = whole.iter().take(4).map(|b| format!("{b:02x}")).collect();
 			format!("{of}-{short}-{reached}")
 		}
@@ -399,9 +410,11 @@ where
 		let targets = self.targets(binding, input).await?;
 		wanted.targets = targets;
 		let mine = self.mine(binding, &input.runs).await?;
+		// The same one is of its version, what it reaches and what fills its slots, RFC 49qyg.
 		let same = mine.iter().find(|l| {
 			l.labels.get(labels::VERSION) == Some(&wanted.version)
 				&& labels::reaching(&l.labels) == wanted.reaching
+				&& l.labels.get(labels::FILL) == wanted.fill.as_ref()
 		});
 		if let Some(same) = same {
 			return self.told(binding, &input.runs, same).await;
@@ -418,7 +431,7 @@ where
 				wanted.secrets = held;
 			}
 		}
-		let id = container_id(&input.runs, &wanted.version, &wanted.reaching);
+		let id = container_id(&input.runs, &wanted.version, &wanted.reaching, wanted.fill.as_deref());
 		let image = self.imported(namespace, input, hosted).await?;
 		if let Err(refused) = self.made(binding, &image, &wanted, &id).await {
 			// What was made of it before the failure goes with it; the failure is what is answered.
@@ -496,6 +509,7 @@ where
 			isolation: wanted.isolation.clone(),
 			into: Some(wanted.into),
 			reaching: wanted.reaching.clone(),
+			fill: wanted.fill.clone(),
 		};
 		let spec = Spec {
 			id: id.to_owned(),

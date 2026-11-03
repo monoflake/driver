@@ -20,6 +20,8 @@ const INTO: &str = "driver.into";
 pub(super) const REACHING: &str = "driver.reaching";
 /// The entry a reacher reaches, the host's own address on the bridge and the entry's port.
 const ENTRY: &str = "driver.entry";
+/// What fills its slots, a hash in hex, absent where nothing does, RFC 49qyg.
+pub(super) const FILL: &str = "driver.fill";
 
 /// A deployment's runs as a label holds it, its id in 8 lowercase hex digits whatever its kind,
 /// as an id names one resource of a scope and carries its type, RFC b8f35.
@@ -120,6 +122,8 @@ pub(super) struct Kept {
 	pub(super) reaching: Vec<String>,
 	/// The entry it reaches, none on one labelled before it was.
 	pub(super) entry: Option<String>,
+	/// What fills its slots, none where nothing does or on one labeled before it was.
+	pub(super) fill: Option<String>,
 }
 
 /// The deployments a container's labels say it reaches, each read by [`named`].
@@ -156,6 +160,9 @@ impl Kept {
 		if let Some(entry) = &self.entry {
 			labels.insert(ENTRY.to_owned(), entry.clone());
 		}
+		if let Some(fill) = &self.fill {
+			labels.insert(FILL.to_owned(), fill.clone());
+		}
 
 		labels
 	}
@@ -189,6 +196,7 @@ impl Kept {
 				.transpose()?,
 			reaching: reaching(labels),
 			entry: labels.get(ENTRY).cloned(),
+			fill: labels.get(FILL).cloned(),
 		})
 	}
 }
