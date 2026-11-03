@@ -12,7 +12,7 @@ use std::process::{Command, Stdio};
 
 use common::{binding, bundle, from_root, functions, hash, hex, json};
 use driver_machine_container::Deployments;
-use driver_machine_function::{Bound, Bundle, Configure, FOOTING, Unpack, Worker};
+use driver_machine_function::{Bound, Bundle, Configure, RESERVED, Unpack, Worker};
 use envelope::Called;
 use envelope::contracts::interface::deployments::Call;
 use envelope::contracts::{AppBindings, DeploymentArtifact, DeploymentDeploy, DeploymentRuns};
@@ -167,12 +167,16 @@ fn declaring(slots: &str) -> Vec<u8> {
 
 /// Every bundle a deploy below names, by its address.
 fn served() -> BTreeMap<String, Vec<u8>> {
-	let footing = declaring(&format!(r#"[{{ "name": "{FOOTING}", "type": "database" }}]"#));
-	BTreeMap::from([
+	let mut served = BTreeMap::from([
 		("echo-modules".to_owned(), bundle("echo-modules")),
 		("database-modules".to_owned(), bundle("database-modules")),
-		("footing-modules".to_owned(), footing),
-	])
+	]);
+	// A bundle declaring each name the driver binds of its own as its one slot.
+	for name in RESERVED {
+		let slots = format!(r#"[{{ "name": "{name}", "type": "database" }}]"#);
+		served.insert(format!("{name}-modules"), declaring(&slots));
+	}
+	served
 }
 
 /// The first deploy of `deploys.json` of the bundle at `address`, its bindings as given.
@@ -228,14 +232,15 @@ async fn bindings_disagreeing_with_the_slots_declared_are_invalid_naming_the_slo
 }
 
 #[tokio::test]
-async fn a_slot_named_as_a_secret_or_the_footing_is_invalid_naming_the_slot() {
+async fn a_slot_named_as_a_secret_or_a_name_the_driver_binds_is_invalid_naming_the_slot() {
 	let database = || Some(filled(&[("database", "database")]));
 	let secrets = Some(BTreeMap::from([("database".to_owned(), b"hidden".to_vec())]));
 	let given =
 		DeploymentDeploy { secrets: secrets.clone(), ..deploying("database-modules", database()) };
 	refused(given, "database").await;
-	let footing = filled(&[("database", FOOTING)]);
-	refused(deploying("footing-modules", Some(footing)), FOOTING).await;
+	for name in RESERVED {
+		refused(deploying(&format!("{name}-modules"), Some(filled(&[("database", name)]))), name).await;
+	}
 	// A secret the deployment holds already is no slot's name either.
 	let functions = functions(served());
 	let runs = DeploymentRuns::App { id: 3 };

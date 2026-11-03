@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use driver_machine_container::Refused;
 use envelope::contracts::{DeploymentDeploy, ManifestSlot, SlotType};
 
-use crate::FOOTING;
+use crate::RESERVED;
 
 fn invalid(message: String) -> Refused {
 	Refused { reason: "invalid", message: Some(message) }
@@ -32,7 +32,7 @@ fn written(declared: SlotType) -> &'static str {
 }
 
 /// Each slot declared filled under its type and nothing else filled, and no slot named as a secret
-/// given or held or as the footing, refused `invalid` naming the slot.
+/// given or held or as a name the driver binds, refused `invalid` naming the slot.
 pub(crate) fn filled(
 	input: &DeploymentDeploy,
 	slots: &[ManifestSlot],
@@ -75,8 +75,8 @@ pub(crate) fn filled(
 		if secret || held.iter().any(|h| h == name) {
 			return Err(invalid(format!("the slot {name} is named as a secret of the deployment")));
 		}
-		if name == FOOTING {
-			return Err(invalid(format!("the slot {name} is named as the footing's address")));
+		if RESERVED.contains(&name) {
+			return Err(invalid(format!("the slot {name} is named as a name the driver binds")));
 		}
 	}
 	Ok(())

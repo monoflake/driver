@@ -17,6 +17,15 @@ const OPENING: &str = concat!(
 /// What names the origins of what a worker reaches, each by its id, RFC y2xd3.
 const REACHING: &str = "MONOFLAKE_REACHING";
 
+/// The reserved names a handed value is bound under, RFC y2xd3.
+const ROOT: &str = "MONOFLAKE_ROOT";
+const KEY: &str = "MONOFLAKE_KEY";
+const CERTIFICATE: &str = "MONOFLAKE_CERTIFICATE";
+const SIGNING_KEY: &str = "MONOFLAKE_SIGNING_KEY";
+
+/// Every name the driver binds a worker by of its own, which no slot may take.
+pub const RESERVED: [&str; 6] = [FOOTING, REACHING, ROOT, KEY, CERTIFICATE, SIGNING_KEY];
+
 /// The service a worker reaches out through, the internet where it may, the private network where
 /// it reaches deployments, and nothing where neither.
 const OUTBOUND: &str = "outbound";
@@ -30,10 +39,10 @@ fn handed(value: &DeploymentHanded) -> Bound {
 	};
 	let secret = |name: &str| Bound::Secret { name: name.to_owned() };
 	match value {
-		DeploymentHanded::Root { value } => text("MONOFLAKE_ROOT", value),
-		DeploymentHanded::Key { .. } => secret("MONOFLAKE_KEY"),
-		DeploymentHanded::Certificate { value } => text("MONOFLAKE_CERTIFICATE", value),
-		DeploymentHanded::SigningKey { .. } => secret("MONOFLAKE_SIGNING_KEY"),
+		DeploymentHanded::Root { value } => text(ROOT, value),
+		DeploymentHanded::Key { .. } => secret(KEY),
+		DeploymentHanded::Certificate { value } => text(CERTIFICATE, value),
+		DeploymentHanded::SigningKey { .. } => secret(SIGNING_KEY),
 	}
 }
 

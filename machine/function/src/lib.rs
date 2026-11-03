@@ -8,6 +8,8 @@ use envelope::contracts::{DeploymentDeploy, DeploymentIsolation, ManifestSlot};
 
 mod bundle;
 mod config;
+
+pub use config::RESERVED;
 mod functions;
 mod slots;
 
