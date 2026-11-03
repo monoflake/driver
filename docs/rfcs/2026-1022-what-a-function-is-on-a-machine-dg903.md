@@ -29,7 +29,10 @@ the contract does not say, each answered by the code as the option below propose
    without it and expect them running; an image is refused `malformed` without it.
 3. **What workerd gives a worker.** The contract carries the footing's address, the secrets and
    the networks it may reach, and names no binding to the platform's interfaces, `object`,
-   `database` or another app's exports, RFC 49qyg, so a worker is given none of them.
+   `database` or another app's exports, RFC 49qyg, so a worker is given none of them. What a
+   worker sees of a slot is decided in monoflake/platform's RFC rt6gi, `env.<slot name>` speaking
+   the kind's own contract, no credential in the worker; how a deploy carries the slot's fill is
+   still open there.
 4. **How a secret reaches a worker.** vr5lw has secrets files on a tmpfs bound into the container,
    its configuration naming their paths alone.
 5. **What the networks allow.** workerd reaches out through one service, by `fetch` and by
@@ -52,7 +55,7 @@ The agent's proposal, for the author to take, change or refuse.
   binding holding none answers `beyond_host`, as one without its list's making does now.
 - **A worker is given the footing's address as the text `MONOFLAKE_FOOTING`**, the name the
   container kind gives an image, and each secret as a text by its name; a binding to the
-  platform's interfaces waits on the contract naming one.
+  platform's interfaces is RFC rt6gi's, and waits on the contract naming one.
 - **A secret is embedded by its path**, `text = embed "/<name>"`, workerd given `--import-path
   /run/secrets`, so the configuration names its file and never its value.
 - **`http` or `tcp` lets a worker reach the public internet**, through a network service as
