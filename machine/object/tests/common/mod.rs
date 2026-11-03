@@ -70,6 +70,8 @@ pub fn call(bucket: &Bucket, operation: &str, input: &Value, bytes: Option<Vec<u
 			match bucket.write(&write) {
 				Ok(o) => success(&o),
 				Err(Unwritten::TooLarge) => error("rejected", "too_large", ""),
+				Err(Unwritten::Expired) => error("rejected", "expired", ""),
+				Err(Unwritten::Malformed(message)) => error("rejected", "malformed", &message),
 				Err(Unwritten::StorageFull) => error("unavailable", "storage_full", ""),
 				Err(Unwritten::Fault(f)) => fault(&f),
 			}

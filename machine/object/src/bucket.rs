@@ -13,9 +13,11 @@ use envelope::contracts::{
 use envelope::{Bounded as _, Uint53};
 use rusqlite::{Connection, TransactionBehavior};
 
+use crate::calls;
 use crate::index::{self, Failed, Start};
 use crate::{
-	Bucket, CONTENTS, Fault, INDEX, MOST, Objects, Open, PAGE, Unread, Unwritten, WRITING,
+	Bucket, CONTENTS, Fault, INDEX, MOST, ObjectStatusAnswer, Objects, Open, PAGE, Unread, Unwritten,
+	WRITING,
 };
 
 impl From<Failed> for Fault {
@@ -135,6 +137,7 @@ impl Open for Bucket {
 			fs::create_dir_all(&path).map_err(|e| failed("make", &path, &e))?;
 		}
 		let mut index = index::opened(&directory.join(INDEX))?;
+		calls::open(&index)?;
 		emptied(&directory.join(WRITING))?;
 		swept(&index, &directory.join(CONTENTS))?;
 		healed(&mut index, &directory.join(CONTENTS))?;
@@ -186,7 +189,27 @@ impl Bucket {
 }
 
 impl Objects for Bucket {
+	fn status(&self, id: &str) -> Result<ObjectStatusAnswer, Fault> {
+		let id = calls::id(id).map_err(Fault)?;
+		if calls::forgotten(id, calls::now()?)? {
+			return Ok(ObjectStatusAnswer::Forgotten);
+		}
+		calls::status(&self.index(), id)
+	}
+
 	fn write(&self, input: &ObjectWrite) -> Result<ObjectWritten, Unwritten> {
+		let now = calls::now().map_err(Unwritten::Fault)?;
+		let call = input
+			.call
+			.as_ref()
+			.map(|call| {
+				let id = calls::id(&call.id).map_err(Unwritten::Malformed)?;
+				if now > call.expires.get() {
+					return Err(Unwritten::Expired);
+				}
+				Ok((call, id))
+			})
+			.transpose()?;
 		if input.content.len() > MOST {
 			return Err(Unwritten::TooLarge);
 		}
@@ -194,8 +217,13 @@ impl Objects for Bucket {
 		let hash = *blake3::hash(&input.content).as_bytes();
 		let mut index = self.index();
 		let transaction = index.transaction_with_behavior(TransactionBehavior::Immediate)?;
+		if let Some((call, id)) = call {
+			calls::record(&transaction, call, id)?;
+		}
+		calls::sweep(&transaction, now).map_err(Unwritten::Fault)?;
 		let old = index::object(&transaction, &input.name)?;
 		if old.is_some_and(|(h, _)| h == hash) {
+			transaction.commit()?;
 			return Ok(ObjectWritten {});
 		}
 		let present = index::names(&transaction, &hash)?.is_some();

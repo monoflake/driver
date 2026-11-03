@@ -362,6 +362,8 @@ fn unwritten(refusal: Unwritten) -> Refused {
 	match refusal {
 		Unwritten::TooLarge => Refused { reason: "too_large", message: None },
 		Unwritten::StorageFull => Refused { reason: "storage_full", message: None },
+		Unwritten::Expired => Refused { reason: "expired", message: None },
+		Unwritten::Malformed(why) => Refused { reason: "malformed", message: Some(why) },
 		Unwritten::Fault(f) => faulted(f),
 	}
 }
@@ -377,12 +379,6 @@ fn unread(refusal: driver_machine_object::Unread) -> Refused {
 /// What a bucket could not do, answered `fault`.
 fn faulted(fault: driver_machine_object::Fault) -> Refused {
 	Refused { reason: "fault", message: Some(fault.0) }
-}
-
-/// A call's status is answered once the stores record calls, thread fifth's steps 3 and 4.
-fn unrecorded<O: Operation>(form: Form) -> Served {
-	let message = "a machine records no call's steps until thread fifth's steps 3 and 4";
-	answered::<O>(Err(Refused { reason: "fault", message: Some(message.into()) }), form)
 }
 
 /// An object call on its binding's bucket, on a thread that may block, as SQLite and the file
@@ -410,7 +406,10 @@ async fn stored(driver: Arc<Driver>, binding: Binding, call: object::Call, form:
 			object::Call::List(_) => {
 				answered::<object::List>(Ok(ObjectListed { objects: Vec::new(), next: None }), form)
 			}
-			object::Call::Status(_) => unrecorded::<object::Status>(form),
+			// A binding with no bucket recorded no name write of any call.
+			object::Call::Status(_) => {
+				answered::<object::Status>(Err(Refused { reason: "not_found", message: None }), form)
+			}
 		};
 	};
 	let ran = tokio::task::spawn_blocking(move || match call {
@@ -420,7 +419,15 @@ async fn stored(driver: Arc<Driver>, binding: Binding, call: object::Call, form:
 			answered::<object::Describe>(bucket.describe(&i).map_err(faulted), form)
 		}
 		object::Call::Delete(i) => answered::<object::Delete>(bucket.delete(&i).map_err(faulted), form),
-		object::Call::Status(_) => unrecorded::<object::Status>(form),
+		object::Call::Status(i) => {
+			use driver_machine_object::ObjectStatusAnswer;
+			let answer = bucket.status(&i.id).map_err(faulted).and_then(|answer| match answer {
+				ObjectStatusAnswer::Found(steps) => Ok(steps),
+				ObjectStatusAnswer::NotFound => Err(Refused { reason: "not_found", message: None }),
+				ObjectStatusAnswer::Forgotten => Err(Refused { reason: "forgotten", message: None }),
+			});
+			answered::<object::Status>(answer, form)
+		}
 		object::Call::List(i) => answered::<object::List>(bucket.list(&i).map_err(faulted), form),
 	})
 	.await;
