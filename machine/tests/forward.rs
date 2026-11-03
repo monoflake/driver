@@ -206,3 +206,57 @@ async fn the_fake_refuses_a_data_call_that_did_not_come_through_the_forwarder() 
 	assert_eq!(status, 201, "{answer}");
 	assert_eq!(received.lock().unwrap().len(), 2);
 }
+
+/// Compute's status socket at `<directory>/status.sock`, forwarding to `data` for compute 0x2b.
+fn status(directory: &Directory, data: PathBuf) -> PathBuf {
+	let path = directory.0.join("status.sock");
+	let compute = DeploymentRuns::Component { component: "compute".into(), id: 0x2b };
+	served(&path, forward::status(data, compute));
+	path
+}
+
+#[tokio::test]
+async fn compute_s_status_is_forwarded_with_no_bucket_and_compute_as_its_caller() {
+	let directory = Directory::new();
+	let (data, received) = storage(&directory);
+	let socket = status(&directory, data);
+	let forged = [("content-type", "application/json"), ("caller", "ffffffff")];
+	let input = json!({ "id": "call" });
+	let (status, answer) = called(&socket, "POST", "/storage/status", &forged, &input).await;
+	assert_eq!(status, 201, "{answer}");
+	let received = received.lock().unwrap().clone();
+	assert_eq!(received, vec![("/storage/status".to_owned(), Some("0000002b".to_owned()), input)]);
+}
+
+#[tokio::test]
+async fn compute_s_status_socket_refuses_every_other_path_before_forwarding() {
+	let directory = Directory::new();
+	let (data, received) = storage(&directory);
+	let socket = status(&directory, data);
+	let input = json!({ "id": "call" });
+	for (method, path) in [
+		("POST", "/storage/object_write"),
+		("POST", "/storage/object_read"),
+		("POST", "/storage/object_list"),
+		("POST", "/storage/status/more"),
+		("POST", "/object/status"),
+		("GET", "/storage/status"),
+	] {
+		let (status, answer) = called(&socket, method, path, &[], &input).await;
+		assert_eq!(status, 400, "{method} {path} {answer}");
+		assert_eq!((&answer["failure"], &answer["reason"]), (&json!("rejected"), &json!("malformed")));
+	}
+	assert!(received.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn an_app_s_slot_refuses_status_which_takes_no_bucket() {
+	let directory = Directory::new();
+	let (data, received) = storage(&directory);
+	let socket = slot(&directory, data);
+	let input = json!({ "id": "call" });
+	let (status, answer) = called(&socket, "POST", "/storage/status", &[], &input).await;
+	assert_eq!(status, 400, "{answer}");
+	assert_eq!((&answer["failure"], &answer["reason"]), (&json!("rejected"), &json!("malformed")));
+	assert!(received.lock().unwrap().is_empty());
+}

@@ -5,8 +5,8 @@
 use envelope::contracts::{DeploymentDeploy, DeploymentHanded, DeploymentNetwork, DeploymentRuns};
 
 use crate::{
-	Bound, Bundle, COMPUTE, Configure, DATA, FOOTING, Kind, MODULES, OBJECT, OBJECT_SOCKET, OBJECTS,
-	PORT, SOCKET, STORAGE, STORED, Worker,
+	APPS_DATABASE, BUCKETS, Bound, Bundle, COMPUTE, Configure, DATA, FOOTING, Kind, MODULES, OBJECT,
+	OBJECT_SOCKET, OBJECTS, PORT, SOCKET, STATUS_SOCKET, STORAGE, STORAGE_BINDING, STORED, Worker,
 };
 
 mod bucket;
@@ -28,7 +28,8 @@ const CERTIFICATE: &str = "MONOFLAKE_CERTIFICATE";
 const SIGNING_KEY: &str = "MONOFLAKE_SIGNING_KEY";
 
 /// Every name the driver binds a worker by of its own, which no slot may take.
-pub const RESERVED: [&str; 7] = [FOOTING, REACHING, ROOT, KEY, CERTIFICATE, SIGNING_KEY, OBJECT];
+pub const RESERVED: [&str; 8] =
+	[FOOTING, REACHING, ROOT, KEY, CERTIFICATE, SIGNING_KEY, OBJECT, STORAGE_BINDING];
 
 /// What [`SOCKET`] reads in each listener of the storage component.
 const PUBLIC: &str = "public";
@@ -36,6 +37,9 @@ const DATA_SOCKET: &str = "data";
 
 /// The service its storage component reaches the binding's object kind through.
 const OBJECT_SERVICE: &str = "object";
+
+/// The service the compute component reaches storage's call statuses through.
+const STORAGE_SERVICE: &str = "storage-status";
 
 /// Whether a deployment is its binding's storage component, RFC ahcrp.
 pub(crate) fn storage(runs: &DeploymentRuns) -> bool {
@@ -118,11 +122,13 @@ impl Configure for Worker {
 		let footing = Bound::Text { name: FOOTING.to_owned(), text: input.footing.clone() };
 		let secrets =
 			input.secrets.iter().flat_map(|s| s.keys()).map(|name| Bound::Secret { name: name.clone() });
-		let slots = input
-			.bindings
-			.iter()
-			.flat_map(|b| b.database.iter().flatten())
-			.map(|(name, id)| Bound::Database { name: name.clone(), id: *id });
+		let compute = compute(&input.runs);
+		let slots = input.bindings.iter().flat_map(|b| b.database.iter().flatten()).map(
+			|(name, id)| match compute && name == APPS_DATABASE {
+				true => Bound::DatabaseStatus { name: name.clone(), id: *id },
+				false => Bound::Database { name: name.clone(), id: *id },
+			},
+		);
 		let buckets = input
 			.bindings
 			.iter()
@@ -141,11 +147,12 @@ impl Configure for Worker {
 			bindings: std::iter::once(footing)
 				.chain(input.handed.iter().flatten().map(handed))
 				.chain(data.then_some(socket))
-				.chain(compute(&input.runs).then_some(Bound::Environment { name: "ENTRY".to_owned() }))
+				.chain(compute.then_some(Bound::Environment { name: "ENTRY".to_owned() }))
 				.chain(secrets)
 				.chain(slots)
 				.chain(buckets)
 				.chain(data.then_some(Bound::Object))
+				.chain(compute.then_some(Bound::Storage))
 				.collect(),
 			port: PORT,
 			data,
@@ -167,16 +174,19 @@ impl Configure for Worker {
 			true => format!("(allow = [{}], tlsOptions = (trustBrowserCas = true))", allowed.join(", ")),
 			false => format!("(allow = [{}])", allowed.join(", ")),
 		};
-		let databases: std::collections::BTreeSet<u32> = self
+		// Each item's service once, its whole socket and its status one apart.
+		let databases: std::collections::BTreeSet<(u32, bool)> = self
 			.bindings
 			.iter()
 			.filter_map(|b| match b {
-				Bound::Database { id, .. } => Some(*id),
+				Bound::Database { id, .. } => Some((*id, false)),
+				Bound::DatabaseStatus { id, .. } => Some((*id, true)),
 				Bound::Environment { .. }
 				| Bound::Text { .. }
 				| Bound::Secret { .. }
 				| Bound::Bucket { .. }
-				| Bound::Object => None,
+				| Bound::Object
+				| Bound::Storage => None,
 			})
 			.collect();
 		let buckets: Vec<&str> = self
@@ -188,7 +198,9 @@ impl Configure for Worker {
 				| Bound::Text { .. }
 				| Bound::Secret { .. }
 				| Bound::Database { .. }
-				| Bound::Object => None,
+				| Bound::DatabaseStatus { .. }
+				| Bound::Object
+				| Bound::Storage => None,
 			})
 			.collect();
 		let mut services = vec!["(name = \"main\", worker = .worker)".to_owned()];
@@ -199,7 +211,7 @@ impl Configure for Worker {
 		// A deployment filling no slot is configured as one before slots were.
 		let mut extensions = Vec::new();
 		if !databases.is_empty() {
-			services.extend(databases.iter().map(|id| database::service(*id)));
+			services.extend(databases.iter().map(|(id, status)| database::service(*id, *status)));
 			extensions.push(database::extension());
 		}
 		services.extend(buckets.iter().map(|slot| bucket::service(slot)));
@@ -209,6 +221,11 @@ impl Configure for Worker {
 		if self.bindings.contains(&Bound::Object) {
 			let address = quoted(&format!("unix:{OBJECTS}/{OBJECT_SOCKET}"));
 			let name = quoted(OBJECT_SERVICE);
+			services.push(format!("(name = {name}, external = (address = {address}, http = ()))"));
+		}
+		if self.bindings.contains(&Bound::Storage) {
+			let address = quoted(&format!("unix:{BUCKETS}/{STATUS_SOCKET}"));
+			let name = quoted(STORAGE_SERVICE);
 			services.push(format!("(name = {name}, external = (address = {address}, http = ()))"));
 		}
 		let extensions = match extensions.as_slice() {
@@ -249,10 +266,14 @@ impl Configure for Worker {
 				Bound::Secret { name } => {
 					format!("(name = {}, text = embed {})", quoted(name), quoted(&format!("/{name}")))
 				}
-				Bound::Database { name, id } => database::binding(name, *id),
+				Bound::Database { name, id } => database::binding(name, *id, false),
+				Bound::DatabaseStatus { name, id } => database::binding(name, *id, true),
 				Bound::Bucket { name } => bucket::binding(name),
 				Bound::Object => {
 					format!("(name = {}, service = {})", quoted(OBJECT), quoted(OBJECT_SERVICE))
+				}
+				Bound::Storage => {
+					format!("(name = {}, service = {})", quoted(STORAGE_BINDING), quoted(STORAGE_SERVICE))
 				}
 			})
 			.collect();
@@ -263,8 +284,10 @@ impl Configure for Worker {
 				Bound::Text { name, .. } | Bound::Secret { name } => name.starts_with("MONOFLAKE_"),
 				Bound::Environment { .. }
 				| Bound::Database { .. }
+				| Bound::DatabaseStatus { .. }
 				| Bound::Bucket { .. }
-				| Bound::Object => false,
+				| Bound::Object
+				| Bound::Storage => false,
 			};
 			let at = self.bindings.iter().take_while(|b| platform(b)).count();
 			let reaching = quoted(REACHING);

@@ -1,5 +1,6 @@
 //! One `object_bucket` slot's calls forwarded to its binding's storage product, the bucket the slot
-//! is filled with and the calling deployment set outside the Worker, RFC ahcrp.
+//! is filled with and the calling deployment set outside the Worker, RFC ahcrp; and the compute
+//! component's status calls, forwarded with no bucket, RFC 49qyg.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -17,6 +18,9 @@ use hyper_util::rt::TokioIo;
 const OPERATIONS: [&str; 5] =
 	["object_write", "object_read", "object_describe", "object_delete", "object_list"];
 
+/// The one operation the compute component's status socket forwards.
+const STATUS: &str = "status";
+
 /// The header naming the calling deployment, which the driver alone sets.
 const CALLER: &str = "caller";
 
@@ -26,15 +30,26 @@ const LARGEST: usize = MOST.div_ceil(3) * 4 + 2 * 1024 * 1024;
 /// What a refused body is read up to before its refusal, so its caller reads the answer.
 const DRAINED: usize = 2 * 1024 * 1024;
 
-/// What one slot's socket forwards with.
+/// What one socket forwards with, a slot's bucket, or none on the compute component's status one.
 struct Slot {
 	data: PathBuf,
-	bucket: u32,
+	bucket: Option<u32>,
 	caller: HeaderValue,
 }
 
 /// The router one slot's socket serves, forwarding to the storage product's data socket at `data`.
 pub(super) fn router(data: PathBuf, bucket: u32, caller: DeploymentRuns) -> axum::Router {
+	forwarding(data, Some(bucket), caller)
+}
+
+/// The router the compute component's status socket serves, `POST /storage/status` alone
+/// forwarded to `data` with no bucket.
+pub(super) fn status(data: PathBuf, caller: DeploymentRuns) -> axum::Router {
+	forwarding(data, None, caller)
+}
+
+/// A router forwarding to `data` as `caller`, its bucket set where one is given.
+fn forwarding(data: PathBuf, bucket: Option<u32>, caller: DeploymentRuns) -> axum::Router {
 	let id = match caller {
 		DeploymentRuns::App { id } | DeploymentRuns::Component { id, .. } => id,
 	};
@@ -70,19 +85,27 @@ fn unreachable(data: &std::path::Path, why: impl std::fmt::Display) -> Response 
 	refused(Failure::Unavailable, "unreachable", format!("{said}, {} {why}", data.display()))
 }
 
-/// Every request on a slot's socket, one of the five operations forwarded and the rest refused.
+/// Every request on a slot's socket, one of the five operations forwarded and the rest refused;
+/// on the status socket, status alone.
 async fn forwarded(
 	State(slot): State<Arc<Slot>>,
 	method: Method,
 	uri: Uri,
 	body: Body,
 ) -> Response {
-	let operation = uri.path().strip_prefix("/storage/").filter(|o| OPERATIONS.contains(o));
+	let operation = uri.path().strip_prefix("/storage/");
+	let operation = match slot.bucket {
+		Some(_) => operation.filter(|o| OPERATIONS.contains(o)),
+		None => operation.filter(|o| *o == STATUS),
+	};
 	let (Some(operation), Method::POST) = (operation, method) else {
 		// A body past the bound is the caller's to have sent, and its connection may then be reset.
 		let _ = axum::body::to_bytes(body, DRAINED).await;
 		let one = OPERATIONS.join(", ");
-		return malformed(format!("a slot's call is POST /storage/{{operation}}, one of {one}"));
+		return malformed(match slot.bucket {
+			Some(_) => format!("a slot's call is POST /storage/{{operation}}, one of {one}"),
+			None => format!("this socket takes POST /storage/{STATUS} alone"),
+		});
 	};
 	let Ok(bytes) = axum::body::to_bytes(body, LARGEST).await else {
 		let message = format!("a slot's call is at most {LARGEST} bytes");
@@ -95,7 +118,9 @@ async fn forwarded(
 	let Some(input) = json.as_object_mut() else {
 		return malformed("the body is a JSON object, the operation's input");
 	};
-	input.insert("bucket".to_owned(), serde_json::Value::from(slot.bucket));
+	if let Some(bucket) = slot.bucket {
+		input.insert("bucket".to_owned(), serde_json::Value::from(bucket));
+	}
 	let sent = json.to_string();
 	match storage(&slot, operation, sent).await {
 		Ok(response) => response,

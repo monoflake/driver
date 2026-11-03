@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 
 use common::{bundle, from_root, hash, here, hex, json};
 use driver_machine_function::{
-	Bound, Bundle, Configure, Kind, OBJECT, PORT, SLOTS, Unpack, Worker,
+	Bound, Bundle, Configure, Kind, OBJECT, PORT, SLOTS, STORAGE_BINDING, Unpack, Worker,
 };
 use envelope::Called;
 use envelope::contracts::interface::deployments::Call;
@@ -99,8 +99,10 @@ fn what_is_handed_follows_the_footing_by_its_reserved_name() {
 			| Bound::Environment { name }
 			| Bound::Secret { name }
 			| Bound::Database { name, .. }
+			| Bound::DatabaseStatus { name, .. }
 			| Bound::Bucket { name } => name.as_str(),
 			Bound::Object => OBJECT,
+			Bound::Storage => STORAGE_BINDING,
 		})
 		.collect();
 	assert_eq!(names, ["MONOFLAKE_FOOTING", "MONOFLAKE_KEY", "MONOFLAKE_CERTIFICATE", "TOKEN"]);
@@ -180,4 +182,41 @@ fn two_database_slots_share_one_item_service() {
 	assert_eq!(config.matches("external = (address = \"unix:").count(), 1, "{config}");
 	assert_eq!(config.matches("wrapped = (moduleName = \"slots:database\"").count(), 2, "{config}");
 	assert_eq!(config.matches("(modules = [(name = \"slots:database\"").count(), 1, "{config}");
+}
+
+#[test]
+fn compute_s_database_slot_reaches_its_item_s_status_socket_and_storage_its_own_status_socket() {
+	use envelope::contracts::DeploymentRuns;
+	let database = BTreeMap::from([("records".to_owned(), 0x8000_0001), ("database".to_owned(), 3)]);
+	let bindings = AppBindings { app: None, database: Some(database), bucket: None };
+	let app = DeploymentDeploy { bindings: Some(bindings), ..deployed() };
+	let runs = DeploymentRuns::Component { component: "compute".into(), id: 1 };
+	let compute = DeploymentDeploy { runs, ..app.clone() };
+	let bundle = Bundle::unpack(&bundle("echo-modules")).unwrap();
+	let worker = Worker::of(&compute, &bundle);
+	assert!(worker.bindings.contains(&Bound::Database { name: "records".into(), id: 0x8000_0001 }));
+	assert!(worker.bindings.contains(&Bound::DatabaseStatus { name: "database".into(), id: 3 }));
+	assert!(worker.bindings.contains(&Bound::Storage));
+	let config = worker.capnp();
+	database_entry(&config, "records", 0x8000_0001);
+	let service = format!(
+		"(name = \"database-00000003-status\", external = (address = \
+		 \"unix:{SLOTS}/database-00000003.status.sock\", http = ()))"
+	);
+	assert_eq!(config.matches(&service).count(), 1, "{config}");
+	let binding = "(name = \"database\", wrapped = (moduleName = \"slots:database\", innerBindings = \
+	               [(name = \"socket\", service = \"database-00000003-status\")]))";
+	assert_eq!(config.matches(binding).count(), 1, "{config}");
+	assert!(!config.contains("database-00000003.sock"), "{config}");
+	let storage = "(name = \"storage-status\", external = (address = \
+	               \"unix:/run/buckets/status.sock\", http = ()))";
+	assert!(config.contains(storage), "{config}");
+	assert!(config.contains("(name = \"STORAGE\", service = \"storage-status\")"), "{config}");
+	// An app's slot of the same name reaches the whole socket, and no app reaches storage's status.
+	let worker = Worker::of(&app, &bundle);
+	assert!(worker.bindings.contains(&Bound::Database { name: "database".into(), id: 3 }));
+	assert!(!worker.bindings.contains(&Bound::Storage));
+	let config = worker.capnp();
+	database_entry(&config, "database", 3);
+	assert!(!config.contains(".status.sock") && !config.contains("STORAGE"), "{config}");
 }

@@ -1,19 +1,20 @@
 //! Each `object_bucket` slot of an app's deployment served on a Unix socket of its own, made once
-//! its deploy is answered and removed with the deployment, the forwarder's router on it, RFC ahcrp.
+//! its deploy is answered and removed with the deployment, the forwarder's router on it, RFC ahcrp;
+//! and the compute component's status socket the same way, RFC 49qyg.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::PoisonError;
 
-use driver_machine_function::{DATA, bucket_socket, bucketed, stored};
+use driver_machine_function::{COMPUTE, DATA, STATUS_SOCKET, bucket_socket, bucketed, stored};
 use envelope::Encoded as _;
 use envelope::contracts::DeploymentRuns;
 
 use super::forward;
 
-/// Each slot's socket served, by its path, with the bucket it is filled with and the task serving
-/// it.
-struct Sockets(std::sync::Mutex<BTreeMap<PathBuf, (u32, tokio::task::AbortHandle)>>);
+/// Each slot's socket served, by its path, with the bucket it is filled with, none on compute's
+/// status socket, and the task serving it.
+struct Sockets(std::sync::Mutex<BTreeMap<PathBuf, (Option<u32>, tokio::task::AbortHandle)>>);
 
 /// The slot sockets of this process's one driver.
 static SOCKETS: Sockets = Sockets(std::sync::Mutex::new(BTreeMap::new()));
@@ -75,18 +76,30 @@ fn read(bytes: &[u8]) -> Result<(DeploymentRuns, BTreeMap<String, u32>), String>
 	Ok((runs, filled))
 }
 
+/// Whether a deployment is its binding's compute component, which reads storage's statuses.
+fn compute(runs: &DeploymentRuns) -> bool {
+	matches!(runs, DeploymentRuns::Component { component, .. } if component == COMPUTE)
+}
+
 /// An app deployment's sockets once its deploy is answered, one for each slot `bucket` fills, a
-/// slot no longer filled losing its own, and the fill kept beside them; a component's makes none.
+/// slot no longer filled losing its own, and the fill kept beside them; the compute component's
+/// its status socket alone, and any other component's none.
 pub(super) fn deployed(
 	slots: &Path,
 	namespace: &str,
 	runs: &DeploymentRuns,
 	bucket: Option<&BTreeMap<String, u32>>,
 ) {
-	let DeploymentRuns::App { .. } = runs else { return };
+	let compute = compute(runs);
+	if !compute && !matches!(runs, DeploymentRuns::App { .. }) {
+		return;
+	}
 	let directory = bucketed(slots, namespace, runs);
-	let named = bucket.cloned().unwrap_or_default();
-	let filled: BTreeMap<PathBuf, u32> = named
+	let named = match compute {
+		true => BTreeMap::new(),
+		false => bucket.cloned().unwrap_or_default(),
+	};
+	let mut filled: BTreeMap<PathBuf, Option<u32>> = named
 		.iter()
 		.filter_map(|(slot, id)| {
 			let path = directory.join(bucket_socket(slot));
@@ -94,9 +107,12 @@ pub(super) fn deployed(
 				eprintln!("bucket {slot}: socket path is outside {}", directory.display());
 				return None;
 			}
-			Some((path, *id))
+			Some((path, Some(*id)))
 		})
 		.collect();
+	if compute {
+		filled.insert(directory.join(STATUS_SOCKET), None);
+	}
 	let mut sockets = SOCKETS.0.lock().unwrap_or_else(PoisonError::into_inner);
 	let mut mine: BTreeSet<PathBuf> =
 		sockets.keys().filter(|p| p.starts_with(&directory)).cloned().collect();
@@ -133,7 +149,10 @@ pub(super) fn deployed(
 				continue;
 			}
 		};
-		let router = forward::router(data.clone(), id, runs.clone());
+		let router = match id {
+			Some(id) => forward::router(data.clone(), id, runs.clone()),
+			None => forward::status(data.clone(), runs.clone()),
+		};
 		let at = path.clone();
 		let task = tokio::spawn(async move {
 			if let Err(e) = axum::serve(listener, router).await {
@@ -168,9 +187,12 @@ pub(super) fn restored(slots: &Path, namespace: &str) {
 	}
 }
 
-/// An app deployment's sockets once its delete is answered, every one gone with its directory.
+/// An app deployment's sockets once its delete is answered, every one gone with its directory, and
+/// the compute component's status socket so.
 pub(super) fn deleted(slots: &Path, namespace: &str, runs: &DeploymentRuns) {
-	let DeploymentRuns::App { .. } = runs else { return };
+	if !compute(runs) && !matches!(runs, DeploymentRuns::App { .. }) {
+		return;
+	}
 	let directory = bucketed(slots, namespace, runs);
 	let mut sockets = SOCKETS.0.lock().unwrap_or_else(PoisonError::into_inner);
 	sockets.retain(|path, (_, task)| {
@@ -316,6 +338,31 @@ mod tests {
 		// A delete of a deployment never deployed is no failure.
 		deleted(&slots.0, NAMESPACE, &runs);
 		deleted(&slots.0, NAMESPACE, &other);
+	}
+
+	#[test]
+	fn compute_s_deploy_serves_its_status_socket_alone_again_at_a_start_until_its_delete() {
+		let slots = Directory::new();
+		let runs = DeploymentRuns::Component { component: "compute".into(), id: 7 };
+		let at = directory(&slots.0, &runs);
+		let runtime = || tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+		let ended = runtime();
+		ended.block_on(async {
+			// A bucket filled for compute makes no socket of its own.
+			deployed(&slots.0, NAMESPACE, &runs, Some(&filled(&[("a", 4)])));
+			assert_eq!(mode(&at), 0o755);
+			assert_eq!(mode(&at.join("status.sock")), 0o666);
+			assert!(!at.join("a.sock").exists());
+			assert!(answered(at.join("status.sock")).await.starts_with("HTTP/1.1 "));
+		});
+		drop(ended);
+		assert_eq!(read(&std::fs::read(at.join("fill.json")).unwrap()).unwrap().0, runs);
+		runtime().block_on(async {
+			restored(&slots.0, NAMESPACE);
+			assert!(answered(at.join("status.sock")).await.starts_with("HTTP/1.1 "));
+			deleted(&slots.0, NAMESPACE, &runs);
+		});
+		assert!(!at.exists());
 	}
 
 	#[test]

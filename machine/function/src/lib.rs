@@ -94,6 +94,18 @@ pub const STORAGE: &str = "storage";
 /// The compute component handed the entry's origin, RFC 49qyg.
 pub const COMPUTE: &str = "compute";
 
+/// The compute component's slot filled with its apps' database, reached through that item's
+/// [`database_status_socket`] so compute reads a call's status and never the data, RFC 49qyg.
+pub const APPS_DATABASE: &str = "database";
+
+/// The service binding the compute component reads storage's call statuses by, through
+/// [`STATUS_SOCKET`] in its own directory under [`BUCKETS`], RFC 49qyg.
+pub const STORAGE_BINDING: &str = "STORAGE";
+
+/// The socket the driver forwards compute's `POST /storage/status` alone on, in its own
+/// [`bucketed`] directory.
+pub const STATUS_SOCKET: &str = "status.sock";
+
 /// Where the storage product listens for its data calls in its container, bound writable from
 /// [`stored`] into its container alone, so nothing but the driver reaches them.
 pub const STORED: &str = "/run/storage";
@@ -196,6 +208,14 @@ pub enum Bound {
 		/// The database item the slot reaches.
 		id: u32,
 	},
+	/// The compute component's [`APPS_DATABASE`] slot, reached as `env.<name>` through its item's
+	/// [`database_status_socket`] under [`SLOTS`], which answers `status` alone.
+	DatabaseStatus {
+		/// The slot's name, as the build declares it.
+		name: String,
+		/// The database item the slot reads statuses of.
+		id: u32,
+	},
 	/// A slot filled with a bucket of the binding's storage product, reached as `env.<name>`
 	/// speaking its objects through [`bucket_socket`] under [`BUCKETS`], RFC ahcrp.
 	Bucket {
@@ -204,6 +224,8 @@ pub enum Bound {
 	},
 	/// The binding's object kind, reached by its storage component alone as [`OBJECT`].
 	Object,
+	/// Storage's call statuses, reached by the compute component alone as [`STORAGE_BINDING`].
+	Storage,
 }
 
 /// What workerd is configured with for one deployment, its bundle's modules, its bindings, its

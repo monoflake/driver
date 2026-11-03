@@ -32,8 +32,19 @@ fn plain() -> Vec<u8> {
 	declaring("[]")
 }
 
+/// A bundle declaring the compute component's two database slots, its own and its apps'.
+fn computing() -> Vec<u8> {
+	declaring(
+		r#"[{ "name": "records", "type": "database" }, { "name": "database", "type": "database" }]"#,
+	)
+}
+
 fn served() -> BTreeMap<String, Vec<u8>> {
-	BTreeMap::from([("slotted".to_owned(), slotted()), ("plain".to_owned(), plain())])
+	BTreeMap::from([
+		("slotted".to_owned(), slotted()),
+		("plain".to_owned(), plain()),
+		("compute".to_owned(), computing()),
+	])
 }
 
 /// A deploy of the bundle at `address`, run as `runs`, its bindings as given.
@@ -197,6 +208,29 @@ async fn the_storage_component_mounts_the_object_socket_and_listens_in_a_closed_
 	];
 	assert_eq!(hosted.sockets, sockets);
 	assert_eq!((mode(&slots.join("object/b1")), mode(&slots.join("storage/b1"))), (0o755, 0o700));
+	std::fs::remove_dir_all(&slots).unwrap();
+}
+
+#[tokio::test]
+async fn compute_mounts_the_binding_s_sockets_and_its_own_status_directory_read_only() {
+	let slots = scratch("compute");
+	let functions =
+		driver_machine_function::Functions { slots: slots.clone(), ..functions(served()) };
+	let database = BTreeMap::from([("records".to_owned(), 0x8000_0005), ("database".to_owned(), 3)]);
+	let bindings = AppBindings { app: None, database: Some(database), bucket: None };
+	let compute = DeploymentRuns::Component { component: "compute".into(), id: 5 };
+	functions.deploy(&binding(), deploying("compute", compute, Some(bindings))).await.unwrap();
+	let hosted = functions.containers.hosted.lock().unwrap();
+	let [(_, hosted)] = hosted.as_slice() else { panic!("hosted {}", hosted.len()) };
+	let own = slots.join("apps/b1/compute-00000005");
+	let sockets = vec![
+		Sockets { directory: slots.join("b1"), at: "/run/slots".into(), writable: false },
+		Sockets { directory: own.clone(), at: "/run/buckets".into(), writable: false },
+	];
+	assert_eq!(hosted.sockets, sockets);
+	assert!(hosted.entry);
+	assert_eq!(mode(&own), 0o755);
+	assert!(!slots.join("storage").exists() && !slots.join("object").exists());
 	std::fs::remove_dir_all(&slots).unwrap();
 }
 

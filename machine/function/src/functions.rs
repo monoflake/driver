@@ -11,7 +11,7 @@ use envelope::contracts::{
 
 use crate::{
 	AT, BUCKETS, Bound, Bundle, CONFIG, Configure, Functions, MODULES, OBJECT, OBJECTS, PORT, SLOTS,
-	STANDS, STORED, Unpack, Worker, bucketed, objected, slots, slotted, stored,
+	STANDS, STORAGE_BINDING, STORED, Unpack, Worker, bucketed, objected, slots, slotted, stored,
 };
 
 fn beyond(message: &str) -> Refused {
@@ -78,8 +78,10 @@ fn command(worker: &Worker) -> Vec<String> {
 		Bound::Environment { .. }
 		| Bound::Text { .. }
 		| Bound::Database { .. }
+		| Bound::DatabaseStatus { .. }
 		| Bound::Bucket { .. }
-		| Bound::Object => false,
+		| Bound::Object
+		| Bound::Storage => false,
 	});
 	let config = format!("{AT}/{CONFIG}");
 	let mut cmd: Vec<String> = ["serve", config.as_str(), "config"].map(str::to_owned).to_vec();
@@ -90,8 +92,8 @@ fn command(worker: &Worker) -> Vec<String> {
 }
 
 /// The directories of sockets a deployment is given, each where its worker reaches it, RFC ahcrp.
-/// A database slot reaches its binding's, a bucket slot its own, and the storage component the
-/// object kind's and the one it listens for data calls in.
+/// A database slot reaches its binding's, a bucket slot and the compute component's storage its
+/// own, and the storage component the object kind's and the one it listens for data calls in.
 fn sockets<K>(
 	functions: &Functions<K>,
 	namespace: &str,
@@ -101,10 +103,10 @@ fn sockets<K>(
 	let bound = |directory, at: &str, writable| Sockets { directory, at: at.to_owned(), writable };
 	let has = |wanted: fn(&Bound) -> bool| worker.bindings.iter().any(wanted);
 	let mut given = Vec::new();
-	if has(|b| matches!(b, Bound::Database { .. })) {
+	if has(|b| matches!(b, Bound::Database { .. } | Bound::DatabaseStatus { .. })) {
 		given.push(bound(slotted(&functions.slots, namespace), SLOTS, false));
 	}
-	if has(|b| matches!(b, Bound::Bucket { .. })) {
+	if has(owned) {
 		given.push(bound(bucketed(&functions.slots, namespace, runs), BUCKETS, false));
 	}
 	if worker.data {
@@ -112,6 +114,11 @@ fn sockets<K>(
 		given.push(bound(stored(&functions.slots, namespace), STORED, true));
 	}
 	given
+}
+
+/// Whether a binding reaches a socket in the deployment's own directory, [`bucketed`].
+fn owned(bound: &Bound) -> bool {
+	matches!(bound, Bound::Bucket { .. } | Bound::Storage)
 }
 
 /// A directory it mounts, made where absent before its container starts, at the mode given.
@@ -171,8 +178,10 @@ where
 				| Bound::Environment { name }
 				| Bound::Text { name, .. }
 				| Bound::Database { name, .. }
+				| Bound::DatabaseStatus { name, .. }
 				| Bound::Bucket { name } => name.clone(),
 				Bound::Object => OBJECT.to_owned(),
+				Bound::Storage => STORAGE_BINDING.to_owned(),
 			})
 			.collect();
 		worker.bindings.extend(
@@ -190,7 +199,7 @@ where
 			sockets: sockets(self, &binding.namespace, &worker, &input.runs),
 		};
 		// The driver's sockets come into them only once the deploy is answered.
-		if worker.bindings.iter().any(|b| matches!(b, Bound::Bucket { .. })) {
+		if worker.bindings.iter().any(owned) {
 			opened(&bucketed(&self.slots, &binding.namespace, &input.runs), 0o755)?;
 		}
 		if worker.data {
