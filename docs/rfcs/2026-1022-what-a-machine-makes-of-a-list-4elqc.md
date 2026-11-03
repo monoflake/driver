@@ -46,8 +46,10 @@ file in a volume at `<mount>/databases/<binding>/<item>`, one connection its one
 its capacity the item's size as `max_page_count`, its qgroup's limit that and `ROOM` for the WAL, its
 address the driver's, a second item `failed` with `beyond_host`. A machine serves `execute`, and
 `rewind` and copies wait, `machine-rewind-by-wal` in `model/plan.json`. A caller's SQL may reach no
-`ATTACH`, transaction control, `PRAGMA`, virtual table or function beyond SQLite's documented core,
-narrower than D1 reads, and a statement is at most 100,000 bytes, D1's own, RFC nrs5v.
+`ATTACH`, transaction control or `PRAGMA`, create no virtual table, and call no function beyond
+SQLite's documented core and what `ALTER TABLE` calls, narrower than D1 reads, while one already
+compiled in as `json_each`, `dbstat` or `fts3tokenize` may be read. A statement is at most 100,000
+bytes, D1's own, RFC nrs5v, and a call's body 2 MiB where D1's is 100,000,000 bytes.
 What is still unbounded is `machine-database-bounds`.
 
 The questions, each as it was asked:

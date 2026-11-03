@@ -61,7 +61,11 @@ fn functions() -> impl Iterator<Item = &'static str> {
 		 total_changes trim typeof unhex unicode unistr unistr_quote unlikely upper zeroblob",
 		"avg count group_concat median percentile percentile_cont percentile_disc string_agg sum total",
 		"row_number rank dense_rank percent_rank cume_dist ntile lag lead first_value last_value nth_value",
-		"date time datetime julianday unixepoch strftime timediff",
+		"current_date current_time current_timestamp date time datetime julianday unixepoch strftime \
+		 timediff",
+		// What ALTER TABLE calls in its nested SQL, which a caller's own SQL cannot call.
+		"sqlite_drop_column sqlite_rename_column sqlite_rename_quotefix sqlite_rename_table \
+		 sqlite_rename_test",
 		"acos acosh asin asinh atan atan2 atanh ceil ceiling cos cosh degrees exp floor ln log log10 \
 		 log2 mod pi pow power radians sin sinh sqrt tan tanh trunc",
 		"json jsonb json_array jsonb_array json_array_insert jsonb_array_insert json_array_length \

@@ -17,9 +17,9 @@
 		},
 		{
 			"id": "machine-database-bounds",
-			"says": "A machine bounds a `database` item's temp storage and gives each query a deadline, due before any other tenant's SQL runs, since temp tables lie in memory outside its capacity and no query ends by itself. Found by reading and not run: parked calls may stall tokio's blocking pool machine-wide, and removing an item may hang `subvolume sync` under the `lists` lock of every binding. A batch dirtying more than `ROOM` meets EDQUOT and answers `fault`, not `storage_full`, and the bound counts `size` while the qgroup is `size + ROOM`",
+			"says": "A machine bounds a `database` item's temp storage and gives each query a deadline, due before any other tenant's SQL runs, since temp tables and temp triggers lie in memory outside its capacity, kept across batches and lost at a restart, no query ends by itself, and nothing bounds the memory of `rows`, the encoded answer or `randomblob`. Found by reading and not run: parked calls may stall tokio's blocking pool machine-wide, and removing an item may hang `subvolume sync` under the `lists` lock of every binding. A batch dirtying more than `ROOM` meets EDQUOT and answers `fault`, not `storage_full`, and the bound counts `size` while the qgroup is `size + ROOM`",
 			"holds": {
-				"owes": "the authorizer or a heap limit on temp storage and a progress handler in machine/database, its deadline a value the author fixes; `ROOM` and the bound as they are until then"
+				"owes": "the authorizer or a heap limit on temp storage, a bound on what a query's answer holds in Rust as well as in SQLite's heap, and a progress handler in machine/database, its deadline a value the author fixes; `ROOM` and the bound as they are until then"
 			}
 		},
 		{

@@ -48,6 +48,26 @@ fn tenant_cannot_control_files_transactions_or_connection() {
 	}
 }
 
+#[test]
+fn time_keywords_and_alter_table_run_past_the_allow_list() {
+	let (_directory, database) = database(1024 * 1024);
+	output(&database, &["SELECT CURRENT_TIMESTAMP, CURRENT_DATE, CURRENT_TIME"]);
+	output(&database, &["CREATE TABLE t (a, b, c)"]);
+	output(&database, &["ALTER TABLE t RENAME COLUMN a TO d"]);
+	output(&database, &["ALTER TABLE t DROP COLUMN b"]);
+	output(&database, &["ALTER TABLE t RENAME TO u"]);
+	let kept = output(&database, &["INSERT INTO u (d, c) VALUES (1, 2)", "SELECT d, c FROM u"]);
+	assert_eq!(kept["results"][1]["columns"], json!(["d", "c"]));
+	for sql in [
+		"SELECT sqlite_rename_table('main', 'u', 'table', 'u', 'x', 'y', 0)",
+		"SELECT sqlite_rename_test('main', 'x', 0, 0, 0, '', 0)",
+		"SELECT sqlite_drop_column(0, 'x', 0)",
+	] {
+		let refused = database.execute(&input(&[sql]));
+		assert!(matches!(refused, Err(Unexecuted::Invalid(_))), "{sql}: {refused:?}");
+	}
+}
+
 fn tokenizer_refused(sql: &str, parameters: serde_json::Value) {
 	let (_directory, database) = database(1024 * 1024);
 	let call =
