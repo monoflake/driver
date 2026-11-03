@@ -47,6 +47,12 @@ pub fn database_socket(slots: &Path, namespace: &str, id: u32) -> PathBuf {
 	slotted(slots, namespace).join(format!("database-{id:08x}.sock"))
 }
 
+/// A database item's socket answering `status` alone, beside its whole one, so the compute
+/// component reads whether a call's batches committed and never the app's data, RFC 49qyg.
+pub fn database_status_socket(slots: &Path, namespace: &str, id: u32) -> PathBuf {
+	slotted(slots, namespace).join(format!("database-{id:08x}.status.sock"))
+}
+
 /// Where a binding's object socket lies in its storage component's container, read-only.
 pub const OBJECTS: &str = "/run/object";
 

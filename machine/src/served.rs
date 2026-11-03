@@ -618,6 +618,23 @@ async fn serve(
 			}
 			Err(e) => early(forms, e),
 		},
+		// A status socket answers a call's status alone, so its caller never reads the data.
+		"database" if interfaces == "database-status" => {
+			match read::<database::Call>(form, operation, &bytes) {
+				Ok(call @ database::Call::Status(_)) => {
+					let item = match caller {
+						Caller::Slot(_, _, item) => item,
+						Caller::Token => None,
+					};
+					guarded(reply, queried(driver, binding, item, call, reply)).await
+				}
+				Ok(_) => early(
+					forms,
+					answer::error(&[], "denied", Some("this socket answers status alone".into())),
+				),
+				Err(e) => early(forms, e),
+			}
+		}
 		other => early(forms, answer::malformed(format!("no interface {other}, one of {interfaces}"))),
 	}
 }

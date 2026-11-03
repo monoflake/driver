@@ -12,7 +12,9 @@ use axum::extract::State;
 use axum::http::{HeaderMap, Method, Uri};
 use axum::response::Response;
 use driver_machine_container::Refused;
-use driver_machine_function::{OBJECT_SOCKET, database_socket, objected, slotted};
+use driver_machine_function::{
+	OBJECT_SOCKET, database_socket, database_status_socket, objected, slotted,
+};
 use driver_machine_management::Binding;
 use envelope::contracts::{AppBindings, DeploymentForm};
 
@@ -96,8 +98,13 @@ fn told(path: &Path) {
 pub(super) fn kept(driver: &Arc<Driver>, binding: Binding, namespace: &str, held: Held) {
 	let slots = &driver.functions.slots;
 	let directory = slotted(slots, namespace);
-	let paths: Vec<_> =
-		held.databases.iter().map(|id| database_socket(slots, namespace, *id)).collect();
+	let paths: Vec<_> = held
+		.databases
+		.iter()
+		.flat_map(|id| {
+			[database_socket(slots, namespace, *id), database_status_socket(slots, namespace, *id)]
+		})
+		.collect();
 	let stale: Vec<_> = std::fs::read_dir(&directory)
 		.into_iter()
 		.flatten()
@@ -116,6 +123,8 @@ pub(super) fn kept(driver: &Arc<Driver>, binding: Binding, namespace: &str, held
 	}
 	for id in held.databases {
 		served(driver, binding, database_socket(slots, namespace, id), "database", Some(id), true);
+		let status = database_status_socket(slots, namespace, id);
+		served(driver, binding, status, "database-status", Some(id), true);
 	}
 	served(driver, binding, object_socket(slots, namespace), "object", None, held.bucket.is_some());
 }

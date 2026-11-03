@@ -76,6 +76,24 @@ fn an_execute_on_the_binding_s_socket_is_answered_with_no_token() {
 }
 
 #[test]
+fn a_status_socket_answers_a_call_s_status_and_refuses_its_data() {
+	let driver = Started::short("slot-status", 1);
+	apply(&driver, 1, vec![item(1)]);
+	let status_socket =
+		driver_machine_function::database_status_socket(&driver.state().join("slots"), "b00000001", 1);
+	let (status, answer) = execute(&status_socket);
+	assert_eq!(status, 403, "{answer}");
+	assert_eq!(answer["reason"], "denied", "{answer}");
+	let (status, answer) =
+		called(&status_socket, "database", "status", &json!({ "id": "7fffffffffff0001" }));
+	assert_eq!(status, 404, "{answer}");
+	assert_eq!(answer["reason"], "not_found", "{answer}");
+	// The whole socket beside it still answers the app's data.
+	let (status, answer) = execute(&socket(&driver));
+	assert_eq!(status, 200, "{answer}");
+}
+
+#[test]
 fn database_items_answer_on_separate_sockets_and_keep_separate_rows() {
 	let driver = Started::short("slot-databases", 1);
 	apply(&driver, 1, vec![item(1), item(2)]);

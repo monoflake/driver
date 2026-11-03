@@ -69,9 +69,11 @@ impl Started {
 		// The clock may read alike for two tests at once, so a count keeps their states apart.
 		static COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 		let count = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-		// Hex and a short clock leave room for an app's bucket socket below, macOS's 103 bytes.
+		// Under /tmp, as macOS's own temporary directory is long, hex and a short clock leave room
+		// below for the longest socket, a database's status one, within macOS's 103 bytes.
 		let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().subsec_nanos() % 4096;
-		let state = std::env::temp_dir().join(format!("dm{:x}{count:x}-{nanos:x}", std::process::id()));
+		let state =
+			PathBuf::from("/tmp").join(format!("dm{:x}{count:x}-{nanos:x}", std::process::id()));
 		Self::in_directory(directory, state, bindings)
 	}
 

@@ -70,8 +70,9 @@ fn a_deploy_filling_no_database_slot_is_configured_as_before() {
 	assert!(!none.capnp().contains("extensions"));
 }
 
-/// What node prints running the configuration's module against a fake fetch answering `answer`.
-fn ran(answer: &str) -> String {
+/// What node prints running the configuration's module against a fake fetch answering `answer`,
+/// the module called as `called`.
+fn ran_as(answer: &str, called: &str) -> String {
 	let bundle = Bundle::unpack(&bundle("echo-modules")).unwrap();
 	let config = Worker::of(&filling(&[("database", 1)]), &bundle).capnp();
 	let at = config.find("esModule = ").unwrap() + "esModule = ".len();
@@ -85,7 +86,7 @@ const socket = {{ fetch: async (url, init) => {{
 	return new Response({answer:?});
 }} }};
 let result;
-try {{ result = {{ data: await made({{ socket }}).execute({{ statements: [] }}) }}; }}
+try {{ result = {{ data: await made({{ socket }}).{called} }}; }}
 catch (error) {{ result = {{ thrown: error instanceof Error, message: error.message }}; }}
 console.log(JSON.stringify({{ asked, result }}));"
 	);
@@ -99,6 +100,29 @@ console.log(JSON.stringify({{ asked, result }}));"
 	let out = node.wait_with_output().unwrap();
 	assert!(out.status.success(), "node failed");
 	String::from_utf8(out.stdout).unwrap()
+}
+
+/// The module run with an execute of no statements.
+fn ran(answer: &str) -> String {
+	ran_as(answer, "execute({ statements: [] })")
+}
+
+#[test]
+fn status_posts_the_id_and_answers_the_call_s_steps() {
+	let steps = "{\"committed\":[0,1],\"expires\":60000,\"finished\":true}";
+	let out = json_of(&ran_as(
+		&format!("{{\"status\":\"success\",\"data\":{steps}}}"),
+		"status('7fffffffffff0001')",
+	));
+	let asked = &out["asked"][0];
+	assert_eq!(asked["url"], "http://database/database/status");
+	let call = serde_json::json!({
+		"interface": "database",
+		"operation": "status",
+		"input": { "id": "7fffffffffff0001" },
+	});
+	assert_eq!(asked["body"], call);
+	assert_eq!(out["result"]["data"]["committed"], serde_json::json!([0, 1]));
 }
 
 #[test]

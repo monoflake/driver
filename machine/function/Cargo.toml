@@ -1,6 +1,6 @@
 [package]
 name = "driver-machine-function"
-version = "0.1.15"
+version = "0.1.16"
 description = "driver(machine)'s function: modules run by workerd, one process for each deployment in a container of its binding's, RFC vr5lw"
 edition.workspace = true
 publish.workspace = true
