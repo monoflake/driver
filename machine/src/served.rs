@@ -30,6 +30,7 @@ use envelope::contracts::{
 };
 use envelope::{Called, Encoded, Operation};
 
+mod bucket;
 mod fence;
 mod forward;
 mod slot;
@@ -292,6 +293,7 @@ async fn deployed(
 	};
 	let listed = driver.lists.lock().await.get(&binding).map(|l| (l.made.clone(), slot::held(l)));
 	let (holding, held) = listed.unwrap_or_default();
+	let slots = &driver.functions.slots;
 	// A slot is held to what the binding holds before anything else of the deploy is asked.
 	if let deployments::Call::Deploy(i) = &call
 		&& let Err(refused) = slot::filled(i.bindings.as_ref(), held, i.form)
@@ -314,7 +316,8 @@ async fn deployed(
 			deployments::Call::Stop(_) => answered::<deployments::Stop>(Err(none()), form),
 			deployments::Call::Resume(_) => answered::<deployments::Resume>(Err(none()), form),
 			deployments::Call::Describe(_) => answered::<deployments::Describe>(Err(none()), form),
-			deployments::Call::Delete(_) => {
+			deployments::Call::Delete(i) => {
+				bucket::deleted(slots, &crate::listed::namespace(binding), &i.runs);
 				answered::<deployments::Delete>(Ok(DeploymentDeleted {}), form)
 			}
 		};
@@ -322,11 +325,16 @@ async fn deployed(
 	match call {
 		deployments::Call::Deploy(i) => {
 			let workerd = matches!(i.runtime, None | Some(DeploymentRuntime::Workerd));
+			let filling = (i.runs.clone(), i.bindings.as_ref().and_then(|b| b.bucket.clone()));
 			let deployed = match (i.form, workerd) {
 				(DeploymentForm::Modules, true) => functions.deploy(&made, i).await,
 				(DeploymentForm::Modules, false)
 				| (DeploymentForm::Component | DeploymentForm::Image, _) => containers.deploy(&made, i).await,
 			};
+			// Each slot's socket is made once the deploy is answered, RFC ahcrp.
+			if deployed.is_ok() {
+				bucket::deployed(slots, &made.namespace, &filling.0, filling.1.as_ref());
+			}
 			answered::<deployments::Deploy>(deployed, form)
 		}
 		deployments::Call::Stop(i) => {
@@ -339,7 +347,12 @@ async fn deployed(
 			answered::<deployments::Describe>(containers.describe(&made, i).await, form)
 		}
 		deployments::Call::Delete(i) => {
-			answered::<deployments::Delete>(containers.delete(&made, i).await, form)
+			let runs = i.runs.clone();
+			let deleted = containers.delete(&made, i).await;
+			if deleted.is_ok() {
+				bucket::deleted(slots, &made.namespace, &runs);
+			}
+			answered::<deployments::Delete>(deleted, form)
 		}
 	}
 }
@@ -709,7 +722,9 @@ pub(crate) async fn run(arguments: Arguments) -> ExitCode {
 	rooted(&driver).await;
 	let lists = driver.lists.lock().await;
 	for (binding, listed) in lists.iter() {
-		slot::kept(&driver, *binding, &listed.namespaced(), slot::held(listed));
+		let namespace = listed.namespaced();
+		slot::kept(&driver, *binding, &namespace, slot::held(listed));
+		bucket::restored(&driver.functions.slots, &namespace);
 	}
 	drop(lists);
 	tokio::spawn(restarted(Arc::clone(&driver)));

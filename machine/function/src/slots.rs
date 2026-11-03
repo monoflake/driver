@@ -31,8 +31,8 @@ fn written(declared: SlotType) -> &'static str {
 	}
 }
 
-/// Each slot declared filled under its type and nothing else filled, and no slot named as a secret
-/// given or held or as a name the driver binds, refused `invalid` naming the slot.
+/// Each slot declared filled under its type and nothing else filled, no slot a file bucket, and no
+/// slot named as a secret given or held or as a name the driver binds, refused `invalid` naming it.
 pub(crate) fn filled(
 	input: &DeploymentDeploy,
 	slots: &[ManifestSlot],
@@ -64,6 +64,11 @@ pub(crate) fn filled(
 	}
 	for slot in slots {
 		let name = slot.name.as_str();
+		if matches!(slot.r#type, SlotType::FileBucket) {
+			let message =
+				format!("the slot {name} is a file_bucket, and a machine serves no file bucket yet");
+			return Err(invalid(message));
+		}
 		let map = under(slot.r#type);
 		let filling = maps.iter().find(|(m, _)| *m == map).and_then(|(_, names)| *names);
 		if !filling.is_some_and(|names| names.contains_key(name)) {

@@ -69,8 +69,9 @@ impl Started {
 		// The clock may read alike for two tests at once, so a count keeps their states apart.
 		static COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 		let count = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-		let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().subsec_nanos();
-		let state = std::env::temp_dir().join(format!("dm{}-{nanos}-{count}", std::process::id()));
+		// Hex and a short clock leave room for an app's bucket socket below, macOS's 103 bytes.
+		let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().subsec_nanos() % 4096;
+		let state = std::env::temp_dir().join(format!("dm{:x}{count:x}-{nanos:x}", std::process::id()));
 		Self::in_directory(directory, state, bindings)
 	}
 

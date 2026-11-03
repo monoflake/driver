@@ -251,3 +251,39 @@ pub fn functions(served: BTreeMap<String, Vec<u8>>) -> driver_machine_function::
 		slots: "/slots.invalid".into(),
 	}
 }
+
+/// A Cap'n Proto string read back from where it opens, its escapes undone.
+pub fn unquoted(from: &str) -> String {
+	let mut bytes = Vec::new();
+	let mut chars = from.strip_prefix('"').unwrap().chars();
+	while let Some(c) = chars.next() {
+		match c {
+			'"' => return String::from_utf8(bytes).unwrap(),
+			'\\' => match chars.next().unwrap() {
+				'x' => {
+					let hex: String = chars.by_ref().take(2).collect();
+					bytes.push(u8::from_str_radix(&hex, 16).unwrap());
+				}
+				escaped => bytes.extend(escaped.to_string().bytes()),
+			},
+			c => bytes.extend(c.to_string().bytes()),
+		}
+	}
+	panic!("a string left open")
+}
+
+/// An archive of a main module and metadata declaring the slots given, as a builder would.
+pub fn declaring(slots: &str) -> Vec<u8> {
+	let metadata = format!(
+		r#"{{ "main_module": "index.js", "compatibility_date": "2026-10-21", "slots": {slots} }}"#
+	);
+	let mut archive = tar::Builder::new(Vec::new());
+	for (name, bytes) in [("metadata.json", metadata.as_bytes()), ("index.js", b"".as_slice())] {
+		let mut header = tar::Header::new_ustar();
+		header.set_size(u64::try_from(bytes.len()).unwrap());
+		header.set_mode(0o644);
+		header.set_cksum();
+		archive.append_data(&mut header, name, bytes).unwrap();
+	}
+	archive.into_inner().unwrap()
+}

@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use common::{binding, bundle, from_root, functions, hash, hex, json};
+use common::{binding, bundle, declaring, from_root, functions, hash, hex, json, unquoted};
 use driver_machine_container::{Deployments, Sockets};
 use driver_machine_function::{Bound, Bundle, Configure, RESERVED, Unpack, Worker};
 use envelope::Called;
@@ -32,26 +32,6 @@ fn filling(slots: &[(&str, u32)]) -> DeploymentDeploy {
 		slots.iter().map(|(n, id)| ((*n).to_owned(), *id)).collect();
 	let bindings = AppBindings { app: None, database: Some(database), bucket: None };
 	DeploymentDeploy { bindings: Some(bindings), ..input }
-}
-
-/// A Cap'n Proto string read back from where it opens, its escapes undone.
-fn unquoted(from: &str) -> String {
-	let mut bytes = Vec::new();
-	let mut chars = from.strip_prefix('"').unwrap().chars();
-	while let Some(c) = chars.next() {
-		match c {
-			'"' => return String::from_utf8(bytes).unwrap(),
-			'\\' => match chars.next().unwrap() {
-				'x' => {
-					let hex: String = chars.by_ref().take(2).collect();
-					bytes.push(u8::from_str_radix(&hex, 16).unwrap());
-				}
-				escaped => bytes.extend(escaped.to_string().bytes()),
-			},
-			c => bytes.extend(c.to_string().bytes()),
-		}
-	}
-	panic!("a string left open")
 }
 
 #[test]
@@ -147,22 +127,6 @@ fn a_refusal_is_thrown_with_its_reason_and_message() {
 
 fn json_of(text: &str) -> serde_json::Value {
 	serde_json::from_str(text.trim()).unwrap()
-}
-
-/// An archive of a main module and metadata declaring the slots given, as a builder would.
-fn declaring(slots: &str) -> Vec<u8> {
-	let metadata = format!(
-		r#"{{ "main_module": "index.js", "compatibility_date": "2026-10-21", "slots": {slots} }}"#
-	);
-	let mut archive = tar::Builder::new(Vec::new());
-	for (name, bytes) in [("metadata.json", metadata.as_bytes()), ("index.js", b"".as_slice())] {
-		let mut header = tar::Header::new_ustar();
-		header.set_size(u64::try_from(bytes.len()).unwrap());
-		header.set_mode(0o644);
-		header.set_cksum();
-		archive.append_data(&mut header, name, bytes).unwrap();
-	}
-	archive.into_inner().unwrap()
 }
 
 /// Every bundle a deploy below names, by its address.

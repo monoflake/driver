@@ -9,7 +9,7 @@ mod common;
 use std::collections::BTreeMap;
 
 use common::{bundle, from_root, hash, here, hex, json};
-use driver_machine_function::{Bound, Bundle, Configure, Kind, PORT, Unpack, Worker};
+use driver_machine_function::{Bound, Bundle, Configure, Kind, OBJECT, PORT, Unpack, Worker};
 use envelope::Called;
 use envelope::contracts::interface::deployments::Call;
 use envelope::contracts::{DeploymentDeploy, DeploymentHanded, DeploymentNetwork};
@@ -76,7 +76,11 @@ fn what_is_handed_follows_the_footing_by_its_reserved_name() {
 		.bindings
 		.iter()
 		.map(|b| match b {
-			Bound::Text { name, .. } | Bound::Secret { name } | Bound::Database { name } => name.as_str(),
+			Bound::Text { name, .. }
+			| Bound::Secret { name }
+			| Bound::Database { name }
+			| Bound::Bucket { name } => name.as_str(),
+			Bound::Object => OBJECT,
 		})
 		.collect();
 	assert_eq!(names, ["MONOFLAKE_FOOTING", "MONOFLAKE_KEY", "MONOFLAKE_CERTIFICATE", "TOKEN"]);

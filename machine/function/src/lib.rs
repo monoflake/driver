@@ -51,6 +51,10 @@ pub const OBJECTS: &str = "/run/object";
 /// The socket a binding's bucket is served on, within its object directory.
 pub const OBJECT_SOCKET: &str = "object.sock";
 
+/// The service binding its storage component reaches the binding's object kind by, through
+/// [`OBJECT_SOCKET`] under [`OBJECTS`], RFC ahcrp.
+pub const OBJECT: &str = "OBJECT";
+
 /// A binding's object directory, `<slots>/object/<namespace>`, its storage component's alone.
 pub fn objected(slots: &Path, namespace: &str) -> PathBuf {
 	slots.join("object").join(namespace)
@@ -94,7 +98,7 @@ pub fn stored(slots: &Path, namespace: &str) -> PathBuf {
 
 /// The text binding telling the storage product which listener a call came in on, `public` or
 /// `data`.
-pub const SOCKET: &str = "MONOFLAKE_SOCKET";
+pub const SOCKET: &str = "SOCKET";
 
 /// The isolation workerd in a container stands on, RFC vr5lw.
 pub const STANDS: [DeploymentIsolation; 2] =
@@ -174,6 +178,14 @@ pub enum Bound {
 		/// The slot's name, as the build declares it.
 		name: String,
 	},
+	/// A slot filled with a bucket of the binding's storage product, reached as `env.<name>`
+	/// speaking its objects through [`bucket_socket`] under [`BUCKETS`], RFC ahcrp.
+	Bucket {
+		/// The slot's name, as the build declares it.
+		name: String,
+	},
+	/// The binding's object kind, reached by its storage component alone as [`OBJECT`].
+	Object,
 }
 
 /// What workerd is configured with for one deployment, its bundle's modules, its bindings, its
@@ -190,6 +202,9 @@ pub struct Worker {
 	pub bindings: Vec<Bound>,
 	/// The port it listens on, at every address of its container's.
 	pub port: u16,
+	/// Whether it listens for data calls as well, on [`DATA`] under [`STORED`], as a second worker
+	/// of the same modules and bindings, as the storage component alone does.
+	pub data: bool,
 	/// Whether it may reach the internet, as its deployment's `http` or `tcp` network allows.
 	pub outbound: bool,
 	/// Whether it reaches deployments of its binding, the private network opened to it and its

@@ -10,8 +10,8 @@ use envelope::contracts::{
 };
 
 use crate::{
-	AT, Bound, Bundle, CONFIG, Configure, Functions, MODULES, PORT, SLOTS, STANDS, Unpack, Worker,
-	slots, slotted,
+	AT, BUCKETS, Bound, Bundle, CONFIG, Configure, Functions, MODULES, OBJECT, OBJECTS, PORT, SLOTS,
+	STANDS, STORED, Unpack, Worker, bucketed, objected, slots, slotted, stored,
 };
 
 fn beyond(message: &str) -> Refused {
@@ -75,7 +75,7 @@ fn container(binding: &Binding, into: Option<u32>) -> Result<u32, Refused> {
 fn command(worker: &Worker) -> Vec<String> {
 	let secret = worker.bindings.iter().any(|b| match b {
 		Bound::Secret { .. } => true,
-		Bound::Text { .. } | Bound::Database { .. } => false,
+		Bound::Text { .. } | Bound::Database { .. } | Bound::Bucket { .. } | Bound::Object => false,
 	});
 	let config = format!("{AT}/{CONFIG}");
 	let mut cmd: Vec<String> = ["serve", config.as_str(), "config"].map(str::to_owned).to_vec();
@@ -83,6 +83,43 @@ fn command(worker: &Worker) -> Vec<String> {
 		cmd.extend(["--import-path", SECRETS].map(str::to_owned));
 	}
 	cmd
+}
+
+/// The directories of sockets a deployment is given, each where its worker reaches it, RFC ahcrp.
+/// A database slot reaches its binding's, a bucket slot its own, and the storage component the
+/// object kind's and the one it listens for data calls in.
+fn sockets<K>(
+	functions: &Functions<K>,
+	namespace: &str,
+	worker: &Worker,
+	runs: &DeploymentRuns,
+) -> Vec<Sockets> {
+	let bound = |directory, at: &str, writable| Sockets { directory, at: at.to_owned(), writable };
+	let has = |wanted: fn(&Bound) -> bool| worker.bindings.iter().any(wanted);
+	let mut given = Vec::new();
+	if has(|b| matches!(b, Bound::Database { .. })) {
+		given.push(bound(slotted(&functions.slots, namespace), SLOTS, false));
+	}
+	if has(|b| matches!(b, Bound::Bucket { .. })) {
+		given.push(bound(bucketed(&functions.slots, namespace, runs), BUCKETS, false));
+	}
+	if worker.data {
+		given.push(bound(objected(&functions.slots, namespace), OBJECTS, false));
+		given.push(bound(stored(&functions.slots, namespace), STORED, true));
+	}
+	given
+}
+
+/// A directory it mounts, made where absent before its container starts, at the mode given.
+/// The one the storage component listens in is open to every user, workerd running as its image's.
+fn opened(directory: &std::path::Path, mode: u32) -> Result<(), Refused> {
+	use std::os::unix::fs::PermissionsExt;
+	let failed = |e: std::io::Error| Refused {
+		reason: "fault",
+		message: Some(format!("{}: {e}", directory.display())),
+	};
+	std::fs::create_dir_all(directory).map_err(failed)?;
+	std::fs::set_permissions(directory, std::fs::Permissions::from_mode(mode)).map_err(failed)
 }
 
 /// What workerd is given, its configuration and each module below [`MODULES`].
@@ -127,9 +164,11 @@ where
 			.bindings
 			.iter()
 			.map(|b| match b {
-				Bound::Secret { name } | Bound::Text { name, .. } | Bound::Database { name } => {
-					name.clone()
-				}
+				Bound::Secret { name }
+				| Bound::Text { name, .. }
+				| Bound::Database { name }
+				| Bound::Bucket { name } => name.clone(),
+				Bound::Object => OBJECT.to_owned(),
 			})
 			.collect();
 		worker.bindings.extend(
@@ -143,19 +182,16 @@ where
 			at: AT.to_owned(),
 			runtime: DeploymentRuntime::Workerd,
 			isolation: STANDS.to_vec(),
-			// A database slot reaches its binding's socket, whose directory the program keeps.
-			sockets: worker
-				.bindings
-				.iter()
-				.any(|b| matches!(b, Bound::Database { .. }))
-				.then(|| Sockets {
-					directory: slotted(&self.slots, &binding.namespace),
-					at: SLOTS.to_owned(),
-					writable: false,
-				})
-				.into_iter()
-				.collect(),
+			sockets: sockets(self, &binding.namespace, &worker, &input.runs),
 		};
+		// The driver's sockets come into them only once the deploy is answered.
+		if worker.bindings.iter().any(|b| matches!(b, Bound::Bucket { .. })) {
+			opened(&bucketed(&self.slots, &binding.namespace, &input.runs), 0o755)?;
+		}
+		if worker.data {
+			opened(&objected(&self.slots, &binding.namespace), 0o755)?;
+			opened(&stored(&self.slots, &binding.namespace), 0o777)?;
+		}
 		self.containers.host(binding, input, hosted).await
 	}
 
