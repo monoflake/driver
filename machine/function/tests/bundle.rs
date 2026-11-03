@@ -70,6 +70,28 @@ fn a_bundle_s_slots_are_read_from_its_metadata_and_none_where_it_names_none() {
 }
 
 #[test]
+fn slot_names_are_identifiers_of_at_most_sixty_four_ascii_bytes() {
+	let declaring = |name: &str| {
+		let metadata = serde_json::json!({
+			"main_module": "main.js",
+			"compatibility_date": "2026-10-21",
+			"slots": [{ "name": name, "type": "database" }]
+		})
+		.to_string();
+		Bundle::unpack(&archived(&[("metadata.json", metadata.as_bytes()), ("main.js", b"")]))
+	};
+	for name in ["../x", "a/b", "", "2objects", "a-b", "é", &"a".repeat(65)] {
+		let refused = declaring(name).unwrap_err();
+		assert_eq!(refused.reason, "malformed", "{name}");
+		assert!(refused.message.unwrap().contains(name), "{name}");
+	}
+	for name in ["database", "objects_2", "_", &"a".repeat(64)] {
+		let read = declaring(name).unwrap();
+		assert_eq!(read.slots[0].name, name);
+	}
+}
+
+#[test]
 fn what_is_no_bundle_is_malformed() {
 	let refused = |files: &[(&str, &[u8])]| Bundle::unpack(&archived(files)).map_err(|r| r.reason);
 	assert_eq!(refused(&[("main.js", b"")]), Err("malformed"), "no metadata");

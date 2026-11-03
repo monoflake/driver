@@ -126,6 +126,23 @@ fn a_deployments_kind_is_read_from_its_containers_labels() {
 	assert_eq!(kind(&listed, 3), None);
 }
 
+#[test]
+fn the_storage_component_alone_is_admitted_as_an_apps() {
+	let named = |runs: &str, component: &str| {
+		let mut listed = of_component(runs, "192.0.2.8:8080");
+		listed.labels.insert("driver.component".to_owned(), component.to_owned());
+		listed
+	};
+	let listed = [named("0000000a", "storage"), named("0000000b", "stand-in")];
+	assert_eq!(kind(&listed, 0x0a), Some(Kind::App));
+	assert_eq!(kind(&listed, 0x0b), Some(Kind::Component));
+	// From outside the subnet, so from the gateway's tunnel, storage passes and another is hidden.
+	let net = subnet("192.0.2.0/24").unwrap();
+	let gate = |id| allowed(&listed, of(1, id), kind(&listed, id), peer("127.0.0.1"), net);
+	assert_eq!(gate(0x0a), Gate::Pass);
+	assert_eq!(gate(0x0b), Gate::Hidden);
+}
+
 /// containerd as the entry reads it, the containers given, or none to be had.
 struct Held(Option<Vec<Listed>>);
 

@@ -15,6 +15,7 @@ use axum::http::uri::{Authority, Scheme};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri, Version, header};
 use axum::response::{IntoResponse, Response};
 use driver_machine_container::{Containerd, Fault, Listed, Reached, Socket, Task};
+use driver_machine_function::STORAGE;
 use driver_machine_management::Binding;
 use envelope::contracts::DeploymentRuns;
 use hyper_util::client::legacy::Client;
@@ -203,6 +204,7 @@ pub(crate) const RUNS: &str = "driver.runs";
 pub(crate) const ADDRESS: &str = "driver.address";
 pub(crate) const REACHING: &str = "driver.reaching";
 const KIND: &str = "driver.kind";
+const COMPONENT: &str = "driver.component";
 
 /// The id a label of what a container runs or reaches names, written in 8 hex digits, or as an
 /// app's was before, `app/<id>` in decimal, a scaffold retired with platform RFC 8yl4b.
@@ -215,6 +217,11 @@ pub(crate) fn labeled(label: &str) -> Option<u32> {
 pub(crate) fn kind(listed: &[Listed], id: u32) -> Option<Kind> {
 	let mine = listed.iter().find(|l| l.labels.get(RUNS).and_then(|r| labeled(r)) == Some(id))?;
 	match mine.labels.get(KIND).map(String::as_str) {
+		// The storage component is admitted on an app's provisional path, so the organization's
+		// gateway reaches it, until monoflake/driver's draft RFC 3txyw decides how.
+		Some("component") if mine.labels.get(COMPONENT).map(String::as_str) == Some(STORAGE) => {
+			Some(Kind::App)
+		}
 		Some("component") => Some(Kind::Component),
 		// No kind label is an app's, a scaffold retired with platform RFC 8yl4b.
 		Some(_) | None => Some(Kind::App),

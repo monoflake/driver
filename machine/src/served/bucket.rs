@@ -86,8 +86,17 @@ pub(super) fn deployed(
 	let DeploymentRuns::App { .. } = runs else { return };
 	let directory = bucketed(slots, namespace, runs);
 	let named = bucket.cloned().unwrap_or_default();
-	let filled: BTreeMap<PathBuf, u32> =
-		named.iter().map(|(slot, id)| (directory.join(bucket_socket(slot)), *id)).collect();
+	let filled: BTreeMap<PathBuf, u32> = named
+		.iter()
+		.filter_map(|(slot, id)| {
+			let path = directory.join(bucket_socket(slot));
+			if path.parent() != Some(directory.as_path()) {
+				eprintln!("bucket {slot}: socket path is outside {}", directory.display());
+				return None;
+			}
+			Some((path, *id))
+		})
+		.collect();
 	let mut sockets = SOCKETS.0.lock().unwrap_or_else(PoisonError::into_inner);
 	let mut mine: BTreeSet<PathBuf> =
 		sockets.keys().filter(|p| p.starts_with(&directory)).cloned().collect();

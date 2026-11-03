@@ -10,8 +10,8 @@ use envelope::contracts::{
 };
 
 use crate::{
-	AT, BUCKETS, Bound, Bundle, CONFIG, Configure, DATA, Functions, MODULES, OBJECT, OBJECTS, PORT,
-	SLOTS, STANDS, STORED, Unpack, Worker, bucketed, objected, slots, slotted, stored,
+	AT, BUCKETS, Bound, Bundle, CONFIG, Configure, Functions, MODULES, OBJECT, OBJECTS, PORT, SLOTS,
+	STANDS, STORED, Unpack, Worker, bucketed, objected, slots, slotted, stored,
 };
 
 fn beyond(message: &str) -> Refused {
@@ -111,7 +111,6 @@ fn sockets<K>(
 }
 
 /// A directory it mounts, made where absent before its container starts, at the mode given.
-/// The one the storage component listens in is open to every user, workerd running as its image's.
 fn opened(directory: &std::path::Path, mode: u32) -> Result<(), Refused> {
 	use std::os::unix::fs::PermissionsExt;
 	let failed = |e: std::io::Error| Refused {
@@ -191,17 +190,7 @@ where
 		if worker.data {
 			opened(&objected(&self.slots, &binding.namespace), 0o755)?;
 			let storage = stored(&self.slots, &binding.namespace);
-			opened(&storage, 0o777)?;
-			// workerd binds no path a socket already holds, and an earlier storage leaves its own.
-			match std::fs::remove_file(storage.join(DATA)) {
-				Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-					return Err(Refused {
-						reason: "fault",
-						message: Some(format!("its data socket stays, {e}")),
-					});
-				}
-				Ok(()) | Err(_) => {}
-			}
+			opened(&storage, 0o700)?;
 		}
 		self.containers.host(binding, input, hosted).await
 	}

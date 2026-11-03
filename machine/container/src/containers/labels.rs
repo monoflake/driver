@@ -1,6 +1,7 @@
 //! What the driver keeps of a container, written on it as labels, so a restart reads it back.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use envelope::contracts::{DeploymentIsolation, DeploymentRuns, DeploymentRuntime};
 
@@ -8,12 +9,15 @@ use envelope::contracts::{DeploymentIsolation, DeploymentRuns, DeploymentRuntime
 pub(super) const RUNS: &str = "driver.runs";
 /// Its deployment's kind, `app` or `component`, which the entry shows or hides by.
 const KIND: &str = "driver.kind";
+/// A component's name, as its runs names it, which the entry admits the storage component by.
+const COMPONENT: &str = "driver.component";
 /// The version, its hash in hex.
 pub(super) const VERSION: &str = "driver.version";
 const RUNTIME: &str = "driver.runtime";
 const ADDRESS: &str = "driver.address";
 const PORT: &str = "driver.port";
 const USER: &str = "driver.user";
+const SOCKETS: &str = "driver.sockets";
 const ISOLATION: &str = "driver.isolation";
 const INTO: &str = "driver.into";
 /// The deployments it reaches, each as [`runs`] writes it, apart by commas.
@@ -36,6 +40,14 @@ pub(super) fn kind(runs: &DeploymentRuns) -> &'static str {
 	match runs {
 		DeploymentRuns::App { .. } => "app",
 		DeploymentRuns::Component { .. } => "component",
+	}
+}
+
+/// A component's name as its label holds it, none for an app.
+pub(super) fn component(runs: &DeploymentRuns) -> Option<String> {
+	match runs {
+		DeploymentRuns::App { .. } => None,
+		DeploymentRuns::Component { component, .. } => Some(component.clone()),
 	}
 }
 
@@ -108,6 +120,8 @@ pub(super) struct Kept {
 	pub(super) runs: String,
 	/// Its deployment's kind, none on one labeled before it was.
 	pub(super) kind: Option<String>,
+	/// Its component's name, none for an app or on one labeled before it was.
+	pub(super) component: Option<String>,
 	pub(super) version: String,
 	pub(super) runtime: DeploymentRuntime,
 	pub(super) address: String,
@@ -124,6 +138,8 @@ pub(super) struct Kept {
 	pub(super) entry: Option<String>,
 	/// What fills its slots, none where nothing does or on one labeled before it was.
 	pub(super) fill: Option<String>,
+	/// The writable socket directories prepared before each start.
+	pub(super) sockets: Vec<PathBuf>,
 }
 
 /// The deployments a container's labels say it reaches, each read by [`named`].
@@ -151,6 +167,9 @@ impl Kept {
 		if let Some(kind) = &self.kind {
 			labels.insert(KIND.to_owned(), kind.clone());
 		}
+		if let Some(component) = &self.component {
+			labels.insert(COMPONENT.to_owned(), component.clone());
+		}
 		if let Some(into) = self.into {
 			labels.insert(INTO.to_owned(), into.to_string());
 		}
@@ -163,6 +182,9 @@ impl Kept {
 		if let Some(fill) = &self.fill {
 			labels.insert(FILL.to_owned(), fill.clone());
 		}
+		if !self.sockets.is_empty() {
+			labels.insert(SOCKETS.to_owned(), serde_json::json!(self.sockets).to_string());
+		}
 
 		labels
 	}
@@ -173,6 +195,7 @@ impl Kept {
 		Ok(Self {
 			runs: get(RUNS)?.clone(),
 			kind: labels.get(KIND).cloned(),
+			component: labels.get(COMPONENT).cloned(),
 			version: get(VERSION)?.clone(),
 			runtime: runtime_named(get(RUNTIME)?)
 				.ok_or_else(|| format!("the label {RUNTIME} names no runtime"))?,
@@ -197,6 +220,11 @@ impl Kept {
 			reaching: reaching(labels),
 			entry: labels.get(ENTRY).cloned(),
 			fill: labels.get(FILL).cloned(),
+			sockets: labels
+				.get(SOCKETS)
+				.map(|value| serde_json::from_str(value).map_err(|e| format!("the label {SOCKETS} {e}")))
+				.transpose()?
+				.unwrap_or_default(),
 		})
 	}
 }

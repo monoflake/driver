@@ -78,6 +78,14 @@ fn declared(slots: Option<&Value>) -> Result<Vec<ManifestSlot>, Refused> {
 		let slot = ManifestSlot::from_json(slot).map_err(|e| {
 			malformed(format!("{METADATA}'s slots are each a name and a type, {}", e.expected))
 		})?;
+		let name = slot.name.as_bytes();
+		let leads = name.first().is_some_and(|first| first.is_ascii_alphabetic() || *first == b'_');
+		if !leads
+			|| name.len() > 64
+			|| !name.iter().all(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+		{
+			return Err(malformed(format!("{METADATA} declares an invalid slot name {}", slot.name)));
+		}
 		if !names.insert(slot.name.clone()) {
 			return Err(malformed(format!("{METADATA} declares the slot {} twice", slot.name)));
 		}

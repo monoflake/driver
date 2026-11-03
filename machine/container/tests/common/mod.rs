@@ -102,6 +102,23 @@ impl Containerd for Machine {
 		let mut held = self.held.lock().unwrap();
 		let held =
 			held.get_mut(&(namespace.into(), id.into())).ok_or_else(|| Fault("no container".into()))?;
+		for mount in held.spec.runtime_spec["mounts"].as_array().unwrap() {
+			if mount["type"] != "bind"
+				|| !mount["options"].as_array().unwrap().iter().any(|option| option == "rw")
+			{
+				continue;
+			}
+			use std::os::unix::fs::MetadataExt;
+			let directory = Path::new(mount["source"].as_str().unwrap());
+			let metadata = std::fs::metadata(directory).unwrap();
+			let user = &held.spec.runtime_spec["process"]["user"];
+			assert_eq!(u64::from(metadata.uid()), user["uid"].as_u64().unwrap());
+			assert_eq!(u64::from(metadata.gid()), user["gid"].as_u64().unwrap());
+			assert_eq!(metadata.mode() & 0o7777, 0o700);
+			for entry in std::fs::read_dir(directory).unwrap() {
+				assert_ne!(entry.unwrap().path().extension(), Some(std::ffi::OsStr::new("sock")));
+			}
+		}
 		held.task = Some(Task::Running);
 		Ok(42)
 	}

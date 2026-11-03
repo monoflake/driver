@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use common::{ECHO_TWO, binding, cleared, deploy, driver, echo, hash, lines, of, shell, spec_of};
-use driver_machine_container::{Deployments, Host};
+use driver_machine_container::{Deployments, Host, Task};
 use envelope::contracts::{DeploymentDeploy, DeploymentRuns};
 
 struct Cleanup(PathBuf);
@@ -22,6 +22,31 @@ impl Drop for Cleanup {
 			.status()
 			.unwrap();
 		assert!(removed.success());
+	}
+}
+
+#[tokio::test]
+async fn a_failed_same_version_keeps_its_secrets_and_accepts_overrides() {
+	for secrets in [None, Some(BTreeMap::from([("TOKEN".into(), b"changed".to_vec())]))] {
+		let name = if secrets.is_none() { "env-failed-same" } else { "env-failed-overlay" };
+		let (driver, _) = driver(name, shell(), false);
+		let _cleanup = Cleanup(driver.state.clone());
+		let first = DeploymentDeploy {
+			secrets: Some(BTreeMap::from([
+				("TOKEN".into(), b"hidden".to_vec()),
+				("KEEP".into(), b"retained".to_vec()),
+			])),
+			..echo()
+		};
+		driver.deploy(&binding(), first).await.unwrap();
+		for held in driver.containerd.held.lock().unwrap().values_mut() {
+			held.task = Some(Task::Stopped(1));
+		}
+		let expected = if secrets.is_none() { b"hidden".as_slice() } else { b"changed".as_slice() };
+		driver.deploy(&binding(), DeploymentDeploy { secrets, ..echo() }).await.unwrap();
+		let open = driver.secrets.join("b1").join(spec_of(&driver).id);
+		assert_eq!(std::fs::read(open.join("TOKEN")).unwrap(), expected);
+		assert_eq!(std::fs::read(open.join("KEEP")).unwrap(), b"retained");
 	}
 }
 

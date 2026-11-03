@@ -8,6 +8,7 @@
 			"switches": [
 				{ "name": "OPEN_BEFORE_STOP", "breaks": "OneWriter" },
 				{ "name": "ACK_BEFORE_COMMIT", "breaks": "AckedKept" },
+				{ "name": "OPEN_STALE_COPY", "breaks": "AckedKept" },
 				{ "name": "SERVE_BEFORE_STOP", "breaks": "ServesAfterStop" },
 				{ "name": "NEVER_SERVE", "breaks": "NewServes" }
 			],

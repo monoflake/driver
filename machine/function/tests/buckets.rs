@@ -184,7 +184,7 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 #[tokio::test]
-async fn the_storage_component_mounts_the_object_socket_and_listens_in_an_open_directory() {
+async fn the_storage_component_mounts_the_object_socket_and_listens_in_a_closed_directory() {
 	let slots = scratch("storage");
 	let functions =
 		driver_machine_function::Functions { slots: slots.clone(), ..functions(served()) };
@@ -196,7 +196,7 @@ async fn the_storage_component_mounts_the_object_socket_and_listens_in_an_open_d
 		Sockets { directory: slots.join("storage/b1"), at: "/run/storage".into(), writable: true },
 	];
 	assert_eq!(hosted.sockets, sockets);
-	assert_eq!((mode(&slots.join("object/b1")), mode(&slots.join("storage/b1"))), (0o755, 0o777));
+	assert_eq!((mode(&slots.join("object/b1")), mode(&slots.join("storage/b1"))), (0o755, 0o700));
 	std::fs::remove_dir_all(&slots).unwrap();
 }
 

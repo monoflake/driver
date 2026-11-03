@@ -84,7 +84,7 @@ fn a_restart_serves_again_each_deployment_s_sockets_its_fill_keeps() {
 	let apps = driver.state().join("slots/apps/b00000001");
 	let runs = DeploymentRuns::App { id: 1 }.to_json();
 	std::fs::create_dir_all(apps.join("00000001")).unwrap();
-	let fill = json!({ "runs": runs, "bucket": { "a": 4, "b": 5 } });
+	let fill = json!({ "runs": runs, "bucket": { "a": 4, "b": 5, "../x": 6, "a/b": 7 } });
 	std::fs::write(apps.join("00000001/fill.json"), fill.to_string()).unwrap();
 	std::fs::create_dir_all(apps.join("00000002")).unwrap();
 	std::fs::write(apps.join("00000002/fill.json"), b"{").unwrap();
@@ -93,6 +93,8 @@ fn a_restart_serves_again_each_deployment_s_sockets_its_fill_keeps() {
 		assert!(answered(&apps.join("00000001").join(socket)).starts_with("HTTP/1.1 "));
 	}
 	assert!(!apps.join("00000002/a.sock").exists());
+	assert!(!apps.join("x.sock").exists());
+	assert!(!apps.join("00000001/a").exists());
 	// Served again by every start, the sockets the last run left replaced.
 	let driver = driver.restarted();
 	assert!(answered(&apps.join("00000001/a.sock")).starts_with("HTTP/1.1 "));

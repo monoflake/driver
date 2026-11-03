@@ -7,6 +7,7 @@ mod labels;
 mod marks;
 mod roots;
 mod secrets;
+mod sockets;
 mod spec;
 mod wanted;
 
@@ -422,6 +423,16 @@ where
 			if !matches!(told.state, DeploymentState::Failed { .. }) {
 				return Ok(told);
 			}
+			let places = self.places(namespace, &same.id);
+			if tokio::fs::try_exists(&places.sealed)
+				.await
+				.map_err(|e| Refused::new("fault", e.to_string()))?
+			{
+				let seal = KeyFile::of(&self.state).await?;
+				let mut held = secrets::read(&places, &seal).await?;
+				held.extend(wanted.secrets);
+				wanted.secrets = held;
+			}
 			self.gone(namespace, same).await?;
 			mine = self.mine(binding, &input.runs).await?;
 		}
@@ -506,6 +517,7 @@ where
 		let kept = Kept {
 			runs: wanted.runs.clone(),
 			kind: Some(wanted.kind.to_owned()),
+			component: wanted.component.clone(),
 			version: wanted.version.clone(),
 			runtime: wanted.runtime,
 			address: attachment.address.to_string(),
@@ -516,6 +528,7 @@ where
 			into: Some(wanted.into),
 			reaching: wanted.reaching.clone(),
 			fill: wanted.fill.clone(),
+			sockets: wanted.sockets.iter().filter(|s| s.writable).map(|s| s.directory.clone()).collect(),
 		};
 		let spec = Spec {
 			id: id.to_owned(),
@@ -526,6 +539,7 @@ where
 			labels: kept.write(),
 		};
 		let output = self.state.join("output").join(namespace).join(format!("{id}.log"));
+		sockets::prepare(&kept.sockets, user.uid, user.gid).await?;
 		self.containerd.create(namespace, &spec, &mounts, &output).await?;
 		// Once it is made, so the roots a start reads first never hold one of a container not listed.
 		roots::made(&self.roots, namespace, id, &spec.binary).await?;
@@ -550,6 +564,7 @@ where
 		// and a reacher let reach the entry again.
 		let network = network_id(&binding.namespace, &listed.id);
 		let attachment = self.network.attach(&network, kept.port).await?;
+		sockets::prepare(&kept.sockets, kept.user.0, kept.user.1).await?;
 		self.containerd.start(&binding.namespace, &listed.id).await?;
 		// The entry it was made with, as its environment and hosts name it.
 		if !kept.reaching.is_empty() {

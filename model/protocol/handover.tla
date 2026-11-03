@@ -1,10 +1,14 @@
 ---- MODULE handover ----
 \* A binding keeps its database and object bucket across container crashes and redeploys.
-EXTENDS Naturals, Sequences, TLC
+EXTENDS Naturals, Sequences, FiniteSets, TLC
 
-CONSTANTS Faults, OPEN_BEFORE_STOP, ACK_BEFORE_COMMIT, SERVE_BEFORE_STOP, NEVER_SERVE
-VARIABLES old, new, serving, request, kept, acked, crashes, steps, last, done
-vars == <<old, new, serving, request, kept, acked, crashes, steps, last, done>>
+CONSTANTS Faults, OPEN_BEFORE_STOP, ACK_BEFORE_COMMIT, SERVE_BEFORE_STOP, NEVER_SERVE,
+	OPEN_STALE_COPY
+VARIABLES old, new, serving, request, storage, database, bucket, acked, crashes, steps,
+	last, done
+vars == <<old, new, serving, request, storage, database, bucket, acked, crashes,
+	steps, last, done>>
+kept == Cardinality(database) + Cardinality(bucket)
 None == [steps |-> <<>>]
 
 Init ==
@@ -12,38 +16,42 @@ Init ==
 	/\ new = "absent"
 	/\ serving = "old"
 	/\ request = "unasked"
-	/\ kept = 0
+	/\ storage = "none"
+	/\ database = {}
+	/\ bucket = {}
 	/\ acked = 0
 	/\ crashes = 0
 	/\ steps = <<>>
 	/\ last = None
 	/\ done = FALSE
 
-Write ==
+Write(target) ==
 	/\ ~done /\ serving = "old" /\ old = "open" /\ request = "unasked"
 	/\ request' = "pending"
+	/\ storage' = target
 	/\ steps' = Append(steps, "request:write")
-	/\ UNCHANGED <<old, new, serving, kept, acked, crashes, last, done>>
+	/\ UNCHANGED <<old, new, serving, database, bucket, acked, crashes, last, done>>
 
 Commit ==
 	/\ ~done /\ old = "open" /\ request = "pending"
 	/\ request' = "committed"
-	/\ kept' = 1
+	/\ database' = IF storage = "row" THEN {"request"} ELSE database
+	/\ bucket' = IF storage = "object" THEN {"request"} ELSE bucket
 	/\ steps' = Append(steps, "old:commit")
-	/\ UNCHANGED <<old, new, serving, acked, crashes, last, done>>
+	/\ UNCHANGED <<old, new, serving, storage, acked, crashes, last, done>>
 
 Ack ==
 	/\ ~done /\ acked = 0
 	/\ request = "committed" \/ (ACK_BEFORE_COMMIT /\ request = "pending")
 	/\ acked' = 1
 	/\ steps' = Append(steps, "request:ack")
-	/\ UNCHANGED <<old, new, serving, request, kept, crashes, last, done>>
+	/\ UNCHANGED <<old, new, serving, request, storage, database, bucket, crashes, last, done>>
 
 Start ==
 	/\ ~done /\ new = "absent"
 	/\ new' = "started"
 	/\ steps' = Append(steps, "new:start")
-	/\ UNCHANGED <<old, serving, request, kept, acked, crashes, last, done>>
+	/\ UNCHANGED <<old, serving, request, storage, database, bucket, acked, crashes, last, done>>
 
 Stop ==
 	/\ ~done /\ old = "open"
@@ -51,13 +59,18 @@ Stop ==
 	/\ serving' = IF serving = "old" THEN "none" ELSE serving
 	/\ request' = IF request \in {"unasked", "pending"} THEN "lost" ELSE request
 	/\ steps' = Append(steps, "old:stop")
-	/\ UNCHANGED <<new, kept, acked, crashes, last, done>>
+	/\ UNCHANGED <<new, storage, database, bucket, acked, crashes, last, done>>
 
-Open ==
+OpenCopy(stale) ==
 	/\ ~done /\ new = "started" /\ (old = "stopped" \/ OPEN_BEFORE_STOP)
+	/\ ~stale \/ OPEN_STALE_COPY
 	/\ new' = "open"
+	/\ database' = IF stale THEN {} ELSE database
+	/\ bucket' = IF stale THEN {} ELSE bucket
 	/\ steps' = Append(steps, "new:open")
-	/\ UNCHANGED <<old, serving, request, kept, acked, crashes, last, done>>
+	/\ UNCHANGED <<old, serving, request, storage, acked, crashes, last, done>>
+
+Open == \E stale \in BOOLEAN : OpenCopy(stale)
 
 Serve ==
 	/\ ~done /\ ~NEVER_SERVE /\ serving /= "new"
@@ -65,7 +78,7 @@ Serve ==
 	/\ old = "stopped" \/ SERVE_BEFORE_STOP
 	/\ serving' = "new"
 	/\ steps' = Append(steps, "new:serve")
-	/\ UNCHANGED <<old, new, request, kept, acked, crashes, last, done>>
+	/\ UNCHANGED <<old, new, request, storage, database, bucket, acked, crashes, last, done>>
 
 Crash(actor) ==
 	/\ ~done /\ crashes < Faults
@@ -77,7 +90,7 @@ Crash(actor) ==
 		THEN "lost" ELSE request
 	/\ crashes' = crashes + 1
 	/\ steps' = Append(steps, "env:crash")
-	/\ UNCHANGED <<kept, acked, last, done>>
+	/\ UNCHANGED <<storage, database, bucket, acked, last, done>>
 
 \* Completion keeps the last run without adding a synthetic step.
 Done ==
@@ -86,9 +99,10 @@ Done ==
 	/\ done' = TRUE
 	/\ last' = [crashes |-> crashes, steps |-> steps,
 		serving |-> serving, acked |-> acked, kept |-> kept]
-	/\ UNCHANGED <<old, new, serving, request, kept, acked, crashes, steps>>
+	/\ UNCHANGED <<old, new, serving, request, storage, database, bucket, acked, crashes, steps>>
 
-Next == Write \/ Commit \/ Ack \/ Start \/ Stop \/ Open \/ Serve
+Next == (\E target \in {"row", "object"} : Write(target))
+	\/ Commit \/ Ack \/ Start \/ Stop \/ Open \/ Serve
 	\/ (\E actor \in {"old", "new"} : Crash(actor)) \/ Done
 Spec == Init /\ [][Next]_vars /\ WF_vars(Stop) /\ WF_vars(Start)
 	/\ WF_vars(Open) /\ WF_vars(Serve)
@@ -98,6 +112,8 @@ TypeOK ==
 	/\ new \in {"absent", "started", "open"}
 	/\ serving \in {"old", "new", "none"}
 	/\ request \in {"unasked", "pending", "committed", "lost"}
+	/\ storage \in {"none", "row", "object"}
+	/\ database \subseteq {"request"} /\ bucket \subseteq {"request"}
 	/\ kept \in 0..1 /\ acked \in 0..1 /\ crashes \in 0..Faults
 	/\ done \in BOOLEAN
 OneWriter == ~(old = "open" /\ new = "open")

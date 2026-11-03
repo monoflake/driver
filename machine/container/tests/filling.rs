@@ -9,7 +9,7 @@ mod common;
 use std::collections::BTreeMap;
 
 use common::{Driver, Log, binding, driver, echo, lines, of, running, shell};
-use driver_machine_container::{Deployments, Host, Hosted, Sockets};
+use driver_machine_container::{Deployments, Host, Hosted, Restart, Sockets};
 use envelope::contracts::{
 	AppBindings, DeploymentDeploy, DeploymentForm, DeploymentIsolation, DeploymentRuntime,
 };
@@ -119,4 +119,50 @@ async fn a_hosted_runtime_given_sockets_it_was_not_given_before_is_made_anew() {
 	driver.host(&binding(), input, hosted(&driver, sockets)).await.unwrap();
 	assert_eq!(created(&log), 2, "{:#?}", lines(&log));
 	assert_eq!(ids(&driver).len(), 1);
+}
+
+#[tokio::test]
+async fn writable_sockets_are_prepared_before_deploy_and_restart_and_read_only_ones_are_untouched()
+{
+	use std::os::unix::fs::{MetadataExt, PermissionsExt};
+	let (mut driver, _) = driver("filling-writable-sockets", shell(), false);
+	let owner = std::fs::metadata(&driver.state).unwrap();
+	driver.containerd.config.user = Some(format!("{}:{}", owner.uid(), owner.gid()));
+	let writable = driver.state.join("writable");
+	let readonly = driver.state.join("readonly");
+	for directory in [&writable, &readonly] {
+		std::fs::create_dir_all(directory).unwrap();
+		std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o755)).unwrap();
+		std::fs::write(directory.join("stale.sock"), b"stale").unwrap();
+		std::fs::write(directory.join("keep"), b"kept").unwrap();
+	}
+	let sockets = vec![
+		Sockets { directory: writable.clone(), at: "/write".into(), writable: true },
+		Sockets { directory: readonly.clone(), at: "/read".into(), writable: false },
+	];
+	let input = DeploymentDeploy { form: DeploymentForm::Modules, port: None, ..filled() };
+	driver.host(&binding(), input, hosted(&driver, sockets)).await.unwrap();
+	assert!(!writable.join("stale.sock").exists());
+	std::fs::write(writable.join("again.sock"), b"stale").unwrap();
+	std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o777)).unwrap();
+	for held in driver.containerd.held.lock().unwrap().values_mut() {
+		held.task = None;
+	}
+	assert_eq!(driver.restarted(&binding()).await.unwrap().len(), 1);
+	assert!(!writable.join("again.sock").exists());
+	assert_eq!(std::fs::read(writable.join("keep")).unwrap(), b"kept");
+	assert_eq!(std::fs::read(readonly.join("stale.sock")).unwrap(), b"stale");
+	assert_eq!(std::fs::read(readonly.join("keep")).unwrap(), b"kept");
+	let untouched = std::fs::metadata(&readonly).unwrap();
+	assert_eq!((untouched.uid(), untouched.gid()), (owner.uid(), owner.gid()));
+	assert_eq!(untouched.mode() & 0o7777, 0o755);
+	common::cleared(&driver.state);
+	assert!(
+		std::process::Command::new("node")
+			.args(["-e", "require('node:fs').rmSync(process.argv[1], {recursive:true, force:true})"])
+			.arg(&driver.state)
+			.status()
+			.unwrap()
+			.success()
+	);
 }

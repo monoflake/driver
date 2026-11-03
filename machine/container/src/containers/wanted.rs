@@ -27,6 +27,7 @@ fn own() -> Option<Architecture> {
 pub(super) struct Wanted<'a> {
 	pub(super) runs: String,
 	pub(super) kind: &'static str,
+	pub(super) component: Option<String>,
 	pub(super) version: String,
 	pub(super) runtime: DeploymentRuntime,
 	pub(super) isolation: Vec<DeploymentIsolation>,
@@ -166,6 +167,7 @@ impl<'a> Wanted<'a> {
 		Ok(Self {
 			runs: labels::runs(&input.runs),
 			kind: labels::kind(&input.runs),
+			component: labels::component(&input.runs),
 			version: hex(&input.version),
 			runtime,
 			isolation,
