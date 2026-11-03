@@ -56,8 +56,8 @@ switch Base.args->Array.get(2) {
   Base.process->Base.setExitCode(status != 0 || Base.failed.contents ? 1 : 0)
 | Some("brief") => Tree.brief(Filling.tree(), given)
 | Some("accept") => Tree.accept(Filling.tree(), given)
-| Some("built") => Tree.built(Filling.tree())
+| Some("built") => Tree.built(Filling.tree(), ~packages=given)
 | _ =>
-  Console.error("tasks check | brief <package> | accept <package> | built")
+  Console.error("tasks check | brief <package> | accept <package> | built [<package>...]")
   Base.process->Base.setExitCode(2)
 }

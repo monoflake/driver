@@ -30,6 +30,61 @@ test_data = [
 	"machine/management/tests/second/sys/fs/cgroup",
 ]
 
+# The verify parts each path covers, so a check runs those a change touches, the workspace's
+# docs/agents/checking.md; a path no row matches runs the whole verify. A crate's row names the
+# crates using it, as Cargo.toml and package.json have them, and the release's version guard.
+[[check.touched]]
+paths = ["*.md", "docs/**"]
+parts = ["format"]
+
+[[check.touched]]
+paths = ["docs/rfcs/**"]
+parts = ["format", "model"]
+
+[[check.touched]]
+paths = ["model/**"]
+parts = ["model"]
+
+[[check.touched]]
+paths = ["scripts/**"]
+parts = ["format", "test"]
+
+[[check.touched]]
+paths = [".github/**"]
+parts = ["format", "release"]
+
+[[check.touched]]
+paths = ["machine/**"]
+parts = ["machine", "release"]
+
+[[check.touched]]
+paths = ["machine/volume/**"]
+parts = ["volume", "container", "function", "machine", "release"]
+
+[[check.touched]]
+paths = ["machine/container/**"]
+parts = ["container", "function", "machine", "release"]
+
+[[check.touched]]
+paths = ["machine/function/**"]
+parts = ["function", "machine", "release"]
+
+[[check.touched]]
+paths = ["machine/database/**"]
+parts = ["database", "machine", "release"]
+
+[[check.touched]]
+paths = ["machine/management/**"]
+parts = ["management", "machine", "release"]
+
+[[check.touched]]
+paths = ["machine/object/**"]
+parts = ["object", "machine", "release"]
+
+[[check.touched]]
+paths = ["cloudflare/**"]
+parts = ["cloudflare", "release"]
+
 # What the workspace's scripts/release takes, the built.json the release workflow writes and the
 # notes' columns, RFC 8c0rg.
 [release]

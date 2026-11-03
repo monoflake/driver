@@ -137,4 +137,58 @@ run = 'rescript build > /dev/null && node {{env.WORKSPACE}}/scripts/protocol/pro
 
 [tasks.verify]
 description = "What a commit has to pass: everything formatted, the check, every block alone, the scripts' and the release's tests, the version guard refusing changed inputs without a raised version, and the crates' dependencies"
-run = ["mise run formatted", "mise run check", "mise run blocks", "mise run test && node .github/release/verify.res.mjs", "cargo deny check"]
+run = ["mise run verify:format", "mise run verify:model", "mise run blocks", "mise run verify:test && mise run verify:release", "mise run verify:deny"]
+
+# Verify's parts, each run alone where workspace.toml's `[[check.touched]]` rows name it, the
+# workspace's docs/agents/checking.md; a block's part builds that block alone.
+[tasks."verify:format"]
+description = "The ReScript, the docs and the JSON formatted"
+run = "mise run formatted"
+
+[tasks."verify:model"]
+description = "monoflake/platform's check with the drivers filled, this repository's blocks held"
+run = "mise run check"
+
+[tasks."verify:test"]
+description = "The scripts tested, wrangler faked"
+run = "mise run test"
+
+[tasks."verify:release"]
+description = "The release's tests and the version guard refusing changed inputs without a raised version"
+run = "rescript build > /dev/null && node .github/release/verify.res.mjs"
+
+[tasks."verify:deny"]
+description = "The crates' dependencies and licenses"
+run = "cargo deny check"
+
+[tasks."verify:machine"]
+description = "driver-machine built alone"
+run = "rescript build > /dev/null && node model/tasks.res.mjs built driver-machine"
+
+[tasks."verify:container"]
+description = "driver-machine-container built alone"
+run = "rescript build > /dev/null && node model/tasks.res.mjs built driver-machine-container"
+
+[tasks."verify:database"]
+description = "driver-machine-database built alone"
+run = "rescript build > /dev/null && node model/tasks.res.mjs built driver-machine-database"
+
+[tasks."verify:function"]
+description = "driver-machine-function built alone"
+run = "rescript build > /dev/null && node model/tasks.res.mjs built driver-machine-function"
+
+[tasks."verify:management"]
+description = "driver-machine-management built alone"
+run = "rescript build > /dev/null && node model/tasks.res.mjs built driver-machine-management"
+
+[tasks."verify:object"]
+description = "driver-machine-object built alone"
+run = "rescript build > /dev/null && node model/tasks.res.mjs built driver-machine-object"
+
+[tasks."verify:volume"]
+description = "driver-machine-volume built alone"
+run = "rescript build > /dev/null && node model/tasks.res.mjs built driver-machine-volume"
+
+[tasks."verify:cloudflare"]
+description = "driver(cloudflare)'s blocks, each built alone"
+run = "rescript build > /dev/null && node model/tasks.res.mjs built driver-cloudflare driver-cloudflare-function driver-cloudflare-management driver-cloudflare-database driver-cloudflare-object"
