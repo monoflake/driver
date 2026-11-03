@@ -1,4 +1,6 @@
 // A database slot as a worker sees it, its calls posted to its binding's socket, RFC rt6gi.
+import { called } from 'slots:call';
+
 export default function database(env) {
 	const call = async (operation, input) => {
 		const body = JSON.stringify({ interface: 'database', operation, input });
@@ -14,7 +16,8 @@ export default function database(env) {
 		throw new Error(`${answer.reason}: ${answer.message ?? 'the database refused it'}`);
 	};
 	return {
-		execute: (input) => call('execute', input),
+		// Its call's step added outside the app, `last` where the app passes it, RFC 49qyg.
+		execute: (input, options) => call('execute', called(input, options)),
 		// What became of a call's batches by its id, RFC 49qyg.
 		status: (id) => call('status', { id }),
 	};

@@ -234,9 +234,12 @@ pub enum Bound {
 pub struct Worker {
 	/// Each module's name and type, its main one first.
 	pub modules: Vec<(String, Kind)>,
+	/// Whether its main module is wrapped so each store call carries the step of the call its
+	/// request came in with, as an app's is where it fills a database or bucket slot, RFC 49qyg.
+	pub entered: bool,
 	/// Its bundle's compatibility date.
 	pub compatibility_date: String,
-	/// Its bundle's compatibility flags.
+	/// Its bundle's compatibility flags, `nodejs_als` added where it is entered.
 	pub compatibility_flags: Vec<String>,
 	/// Its bindings, the footing's address first.
 	pub bindings: Vec<Bound>,

@@ -1,4 +1,6 @@
 // A bucket slot as a worker sees it, the storage product posted to its own socket, RFC ahcrp.
+import { called } from 'slots:call';
+
 const encoder = new TextEncoder();
 
 // Bytes as the envelope writes them in JSON, base64url unpadded.
@@ -40,8 +42,9 @@ export default function bucket(env) {
 		throw new Error(`${answer.reason}: ${answer.message ?? 'the bucket refused it'}`);
 	};
 	return {
-		write: (content, extension) =>
-			call('object_write', given({ content: encoded(content), extension })),
+		// Its call's step added outside the app, `last` where the app passes it, RFC 49qyg.
+		write: (content, extension, options) =>
+			call('object_write', called(given({ content: encoded(content), extension }), options)),
 		read: async (object, range) =>
 			decoded((await call('object_read', given({ object, range }))).content),
 		describe: (object) => call('object_describe', { object }),

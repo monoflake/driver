@@ -10,6 +10,7 @@ use crate::{
 };
 
 mod bucket;
+mod call;
 mod database;
 
 /// What the configuration opens with, its schema imported.
@@ -140,20 +141,30 @@ impl Configure for Worker {
 			DeploymentNetwork::Http | DeploymentNetwork::Tcp => true,
 			DeploymentNetwork::Udp | DeploymentNetwork::Icmp => false,
 		});
+		let bindings: Vec<Bound> = std::iter::once(footing)
+			.chain(input.handed.iter().flatten().map(handed))
+			.chain(data.then_some(socket))
+			.chain(compute.then_some(Bound::Environment { name: "ENTRY".to_owned() }))
+			.chain(secrets)
+			.chain(slots)
+			.chain(buckets)
+			.chain(data.then_some(Bound::Object))
+			.chain(compute.then_some(Bound::Storage))
+			.collect();
+		// An app's store calls carry its call's step, so its entry holds the call, RFC 49qyg.
+		let stores =
+			bindings.iter().any(|b| matches!(b, Bound::Database { .. } | Bound::Bucket { .. }));
+		let entered = matches!(input.runs, DeploymentRuns::App { .. }) && stores;
+		let mut compatibility_flags = bundle.compatibility_flags.clone();
+		if entered && !compatibility_flags.iter().any(|f| f == call::FLAG) {
+			compatibility_flags.push(call::FLAG.to_owned());
+		}
 		Self {
 			modules: bundle.modules.iter().map(|m| (m.name.clone(), m.kind)).collect(),
+			entered,
 			compatibility_date: bundle.compatibility_date.clone(),
-			compatibility_flags: bundle.compatibility_flags.clone(),
-			bindings: std::iter::once(footing)
-				.chain(input.handed.iter().flatten().map(handed))
-				.chain(data.then_some(socket))
-				.chain(compute.then_some(Bound::Environment { name: "ENTRY".to_owned() }))
-				.chain(secrets)
-				.chain(slots)
-				.chain(buckets)
-				.chain(data.then_some(Bound::Object))
-				.chain(compute.then_some(Bound::Storage))
-				.collect(),
+			compatibility_flags,
+			bindings,
 			port: PORT,
 			data,
 			outbound,
@@ -218,6 +229,10 @@ impl Configure for Worker {
 		if !buckets.is_empty() {
 			extensions.push(bucket::extension());
 		}
+		// The slot modules import the held call, which none holds unless the entry is wrapped.
+		if !databases.is_empty() || !buckets.is_empty() {
+			extensions.push(call::extension());
+		}
 		if self.bindings.contains(&Bound::Object) {
 			let address = quoted(&format!("unix:{OBJECTS}/{OBJECT_SOCKET}"));
 			let name = quoted(OBJECT_SERVICE);
@@ -245,13 +260,13 @@ impl Configure for Worker {
 			}
 			false => format!("[{http}]"),
 		};
-		let modules: Vec<String> = self
-			.modules
-			.iter()
-			.map(|(name, kind)| {
+		let entered = self.modules.first().filter(|_| self.entered).map(|(main, _)| call::module(main));
+		let modules: Vec<String> = entered
+			.into_iter()
+			.chain(self.modules.iter().map(|(name, kind)| {
 				let file = quoted(&format!("{MODULES}/{name}"));
 				format!("(name = {}, {} = embed {file})", quoted(name), field(*kind))
-			})
+			}))
 			.collect();
 		let flags: Vec<String> = self.compatibility_flags.iter().map(|f| quoted(f)).collect();
 		// A secret is embedded by its name alone, found where `--import-path` names its directory.

@@ -7,12 +7,10 @@
 mod common;
 
 use std::collections::BTreeMap;
-use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 
-use common::{binding, declaring, functions, hash, unquoted};
+use common::{binding, declaring, functions, hash, node};
 use driver_machine_container::{Deployments, Sockets};
 use driver_machine_function::{Bound, Bundle, Configure, SOCKET, Unpack, Worker};
 use envelope::contracts::{
@@ -238,12 +236,8 @@ async fn compute_mounts_the_binding_s_sockets_and_its_own_status_directory_read_
 /// against a fake fetch answering `answer`.
 fn ran(method: &str, arguments: &str, answer: &str) -> serde_json::Value {
 	let config = worker(&deploying("slotted", app(), filling())).capnp();
-	let opening = "(name = \"slots:bucket\", internal = true, esModule = ";
-	let at = config.find(opening).unwrap() + opening.len();
-	let source = unquoted(&config[at..]);
 	let script = format!(
-		"const source = await new Response(process.stdin).text();
-const made = (await import('data:text/javascript,' + encodeURIComponent(source))).default;
+		"const made = (await imported('slots:bucket')).default;
 const asked = [];
 const socket = {{ fetch: async (url, init) => {{
 	asked.push({{ url, method: init.method, type: init.headers['content-type'], body: JSON.parse(init.body) }});
@@ -256,16 +250,7 @@ try {{
 }} catch (error) {{ result = {{ thrown: error instanceof Error, message: error.message }}; }}
 console.log(JSON.stringify({{ asked, result }}));"
 	);
-	let mut node = Command::new("node")
-		.args(["--input-type=module", "--eval", &script])
-		.stdin(Stdio::piped())
-		.stdout(Stdio::piped())
-		.spawn()
-		.expect("node, as mise gives it");
-	node.stdin.take().unwrap().write_all(source.as_bytes()).unwrap();
-	let out = node.wait_with_output().unwrap();
-	assert!(out.status.success(), "node failed");
-	serde_json::from_slice(&out.stdout).unwrap()
+	serde_json::from_str(&node(&config, &script)).unwrap()
 }
 
 fn success(data: &serde_json::Value) -> String {

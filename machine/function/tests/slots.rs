@@ -7,10 +7,8 @@
 mod common;
 
 use std::collections::BTreeMap;
-use std::io::Write;
-use std::process::{Command, Stdio};
 
-use common::{binding, bundle, declaring, from_root, functions, hash, hex, json, unquoted};
+use common::{binding, bundle, declaring, from_root, functions, hash, hex, json, node};
 use driver_machine_container::{Deployments, Sockets};
 use driver_machine_function::{Bound, Bundle, Configure, RESERVED, Unpack, Worker};
 use envelope::Called;
@@ -75,11 +73,8 @@ fn a_deploy_filling_no_database_slot_is_configured_as_before() {
 fn ran_as(answer: &str, called: &str) -> String {
 	let bundle = Bundle::unpack(&bundle("echo-modules")).unwrap();
 	let config = Worker::of(&filling(&[("database", 1)]), &bundle).capnp();
-	let at = config.find("esModule = ").unwrap() + "esModule = ".len();
-	let source = unquoted(&config[at..]);
 	let script = format!(
-		"const source = await new Response(process.stdin).text();
-const made = (await import('data:text/javascript,' + encodeURIComponent(source))).default;
+		"const made = (await imported('slots:database')).default;
 const asked = [];
 const socket = {{ fetch: async (url, init) => {{
 	asked.push({{ url, method: init.method, type: init.headers['content-type'], body: JSON.parse(init.body) }});
@@ -90,16 +85,7 @@ try {{ result = {{ data: await made({{ socket }}).{called} }}; }}
 catch (error) {{ result = {{ thrown: error instanceof Error, message: error.message }}; }}
 console.log(JSON.stringify({{ asked, result }}));"
 	);
-	let mut node = Command::new("node")
-		.args(["--input-type=module", "--eval", &script])
-		.stdin(Stdio::piped())
-		.stdout(Stdio::piped())
-		.spawn()
-		.expect("node, as mise gives it");
-	node.stdin.take().unwrap().write_all(source.as_bytes()).unwrap();
-	let out = node.wait_with_output().unwrap();
-	assert!(out.status.success(), "node failed");
-	String::from_utf8(out.stdout).unwrap()
+	node(&config, &script)
 }
 
 /// The module run with an execute of no statements.

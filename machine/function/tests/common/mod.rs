@@ -272,6 +272,43 @@ pub fn unquoted(from: &str) -> String {
 	panic!("a string left open")
 }
 
+/// Every extension module of a configuration by its name, its source as written.
+pub fn extended(config: &str) -> serde_json::Value {
+	let mut modules = serde_json::Map::new();
+	for (at, _) in config.match_indices("(name = \"slots:") {
+		let name = unquoted(&config[at + "(name = ".len()..]);
+		let opening = config[at..].find("esModule = ").unwrap() + "esModule = ".len();
+		modules.insert(name, unquoted(&config[at + opening..]).into());
+	}
+	modules.into()
+}
+
+/// What opens a node script given [`extended`]'s modules on its input, `imported(name)` importing
+/// one as workerd would, each `slots:` it imports resolved to another of them.
+pub const IMPORTING: &str = "const modules = JSON.parse(await new Response(process.stdin).text());
+const urls = {};
+const url = (name) => (urls[name] ??= 'data:text/javascript,' + encodeURIComponent(
+	modules[name].replace(/(['\"])(slots:[a-z]+)\\1/g, (_, quote, inner) => JSON.stringify(url(inner))),
+));
+const imported = (name) => import(url(name));
+";
+
+/// What node prints running a script opening with [`IMPORTING`], given a configuration's modules.
+pub fn node(config: &str, script: &str) -> String {
+	use std::io::Write;
+	let script = format!("{IMPORTING}{script}");
+	let mut node = std::process::Command::new("node")
+		.args(["--input-type=module", "--eval", &script])
+		.stdin(std::process::Stdio::piped())
+		.stdout(std::process::Stdio::piped())
+		.spawn()
+		.expect("node, as mise gives it");
+	node.stdin.take().unwrap().write_all(extended(config).to_string().as_bytes()).unwrap();
+	let out = node.wait_with_output().unwrap();
+	assert!(out.status.success(), "node failed");
+	String::from_utf8(out.stdout).unwrap()
+}
+
 /// An archive of a main module and metadata declaring the slots given, as a builder would.
 pub fn declaring(slots: &str) -> Vec<u8> {
 	let metadata = format!(
