@@ -26,18 +26,17 @@ fn describe(driver: &Started) -> Value {
 }
 
 #[test]
-fn a_database_is_made_reopened_unmade_and_a_second_item_is_refused() {
+fn database_items_are_made_reopened_and_unmade_individually() {
 	let driver = Started::with("database", 1);
 	apply(&driver, 1, vec![item(1), item(2)]);
 	let held = describe(&driver);
 	assert_eq!(held["items"][0]["state"]["name"], "made");
 	assert!(held["items"][0]["state"]["address"].is_string());
-	assert_eq!(held["items"][1]["state"]["name"], "failed");
-	assert_eq!(held["items"][1]["state"]["reason"], "beyond_host");
+	assert_eq!(held["items"][1]["state"]["name"], "made");
 	assert!(held["kinds"].as_array().unwrap().contains(&json!("database")));
 	let at = driver.mount().join("databases/1/1");
 	assert!(at.join(FILE).is_file());
-	assert!(!driver.mount().join("databases/1/2").exists());
+	assert!(driver.mount().join("databases/1/2").join(FILE).is_file());
 	let asked = std::fs::read_to_string(driver.mount().parent().unwrap().join("asked")).unwrap();
 	assert!(asked.contains(&format!("qgroup limit {} ", 1048576 + ROOM)), "{asked}");
 	// An unchanged item takes no resize path, including after the process starts again.
@@ -54,7 +53,7 @@ fn a_database_is_made_reopened_unmade_and_a_second_item_is_refused() {
 	);
 	apply(&driver, 4, vec![]);
 	assert_eq!(driver.call(1, "management", "end", &json!({ "id": 2 })).0, 200);
-	assert!(at.join(FILE).is_file(), "ending the refused item keeps the held database");
+	assert!(at.join(FILE).is_file(), "ending one item keeps the other database");
 	assert_eq!(driver.call(1, "management", "end", &json!({ "id": 1 })).0, 200);
 	assert!(!at.exists());
 	assert!(describe(&driver)["items"].as_array().unwrap().is_empty());

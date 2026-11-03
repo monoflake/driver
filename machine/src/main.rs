@@ -172,7 +172,7 @@ struct Listed {
 	forgotten: BTreeSet<[u8; 32]>,
 	made: Option<driver_machine_container::Binding>,
 	bucket: Option<(u32, Arc<driver_machine_object::Bucket>)>,
-	database: Option<(u32, Arc<driver_machine_database::Database>)>,
+	pub databases: BTreeMap<u32, Arc<driver_machine_database::Database>>,
 }
 
 /// What the machine holds whole, every core in thousandths and its memory in bytes, read at start,

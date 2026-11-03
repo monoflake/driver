@@ -170,7 +170,7 @@ where
 				Bound::Secret { name }
 				| Bound::Environment { name }
 				| Bound::Text { name, .. }
-				| Bound::Database { name }
+				| Bound::Database { name, .. }
 				| Bound::Bucket { name } => name.clone(),
 				Bound::Object => OBJECT.to_owned(),
 			})

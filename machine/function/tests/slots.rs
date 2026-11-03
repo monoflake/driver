@@ -40,23 +40,23 @@ fn a_database_slot_is_a_wrapped_binding_over_the_binding_s_database_socket() {
 	let worker = Worker::of(&filling(&[("records", 7), ("database", 7)]), &bundle);
 	let slots: Vec<&Bound> =
 		worker.bindings.iter().filter(|b| matches!(b, Bound::Database { .. })).collect();
-	let named = |name: &str| Bound::Database { name: name.to_owned() };
+	let named = |name: &str| Bound::Database { name: name.to_owned(), id: 7 };
 	assert_eq!(slots, [&named("database"), &named("records")]);
 	let config = worker.capnp();
-	let service = "(name = \"database\", external = (address = \"unix:/run/slots/database.sock\", \
+	let service = "(name = \"database-00000007\", external = (address = \"unix:/run/slots/database-00000007.sock\", \
 	               http = ()))";
 	assert!(config.contains(service), "{config}");
 	for slot in ["database", "records"] {
 		let binding = format!(
 			"(name = \"{slot}\", wrapped = (moduleName = \"slots:database\", innerBindings = \
-			 [(name = \"socket\", service = \"database\")]))"
+			 [(name = \"socket\", service = \"database-00000007\")]))"
 		);
 		assert!(config.contains(&binding), "{config}");
 	}
 	let extension = "\textensions = [\n\t\t(modules = [(name = \"slots:database\", internal = \
 	                 true, esModule = \"";
 	assert!(config.contains(extension), "{config}");
-	// No id of the database, token or credential is written for the worker to read.
+	// No token or credential is written for the worker to read.
 	assert!(!config.contains("token") && !config.contains("credential"), "{config}");
 	assert!(!config.contains("= 7") && !config.contains("\"7\""), "{config}");
 }

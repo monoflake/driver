@@ -20,7 +20,8 @@ formatted = "'*.md' '*.json' 'docs/**/*.md'"
 description = "Format ReScript, Rust, Markdown and JSON: `fmt [--dry-run]`"
 usage = 'flag "-n --dry-run" help="List what is not formatted and write nothing"'
 depends = ["//:build"]
-run = "node {{env.WORKSPACE}}/scripts/fmt.res.mjs --rescript --glob {{vars.formatted}}"
+# Each cloudflare block builds alone by its own rescript.json, so each is formatted in its own.
+run = "node {{env.WORKSPACE}}/scripts/fmt.res.mjs --rescript --glob {{vars.formatted}} && for f in cloudflare/rescript.json cloudflare/*/rescript.json; do (cd \"${f%/rescript.json}\" && rescript format ${usage_dry_run:+--check}); done"
 
 [tasks.formatted]
 description = "Fail where anything is not formatted, as verify asks"

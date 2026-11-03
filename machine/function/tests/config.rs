@@ -9,10 +9,12 @@ mod common;
 use std::collections::BTreeMap;
 
 use common::{bundle, from_root, hash, here, hex, json};
-use driver_machine_function::{Bound, Bundle, Configure, Kind, OBJECT, PORT, Unpack, Worker};
+use driver_machine_function::{
+	Bound, Bundle, Configure, Kind, OBJECT, PORT, SLOTS, Unpack, Worker,
+};
 use envelope::Called;
 use envelope::contracts::interface::deployments::Call;
-use envelope::contracts::{DeploymentDeploy, DeploymentHanded, DeploymentNetwork};
+use envelope::contracts::{AppBindings, DeploymentDeploy, DeploymentHanded, DeploymentNetwork};
 
 /// The first deploy of `deploys.json`, of `echo-modules`, as the runner fills it.
 fn deployed() -> DeploymentDeploy {
@@ -96,7 +98,7 @@ fn what_is_handed_follows_the_footing_by_its_reserved_name() {
 			Bound::Text { name, .. }
 			| Bound::Environment { name }
 			| Bound::Secret { name }
-			| Bound::Database { name }
+			| Bound::Database { name, .. }
 			| Bound::Bucket { name } => name.as_str(),
 			Bound::Object => OBJECT,
 		})
@@ -125,4 +127,57 @@ fn a_worker_that_reaches_is_given_the_private_network_and_one_that_does_not_is_n
 	let none = DeploymentDeploy { reaching: Some(Vec::new()), ..deployed() };
 	assert!(!Worker::of(&none, &bundle).reaches);
 	assert!(!Worker::of(&none, &bundle).capnp().contains("private"));
+}
+
+/// A worker filling database slots with the items given by the deploy.
+fn databases(slots: &[(&str, u32)]) -> Worker {
+	let database = slots.iter().map(|(name, id)| ((*name).to_owned(), *id)).collect();
+	let bindings = AppBindings { app: None, database: Some(database), bucket: None };
+	let input = DeploymentDeploy { bindings: Some(bindings), ..deployed() };
+	let bundle = Bundle::unpack(&bundle("echo-modules")).unwrap();
+	Worker::of(&input, &bundle)
+}
+
+/// The complete service and binding for one slot reaching its item.
+fn database_entry(config: &str, slot: &str, id: u32) {
+	let service = format!(
+		"(name = \"database-{id:08x}\", external = (address = \"unix:{SLOTS}/database-{id:08x}.sock\", http = ()))"
+	);
+	assert_eq!(config.matches(&service).count(), 1, "{config}");
+	let binding = format!(
+		"(name = \"{slot}\", wrapped = (moduleName = \"slots:database\", innerBindings = [(name = \"socket\", service = \"database-{id:08x}\")]))"
+	);
+	assert_eq!(config.matches(&binding).count(), 1, "{config}");
+}
+
+#[test]
+fn one_database_slot_reaches_its_item_socket() {
+	let worker = databases(&[("records", 10)]);
+	assert!(worker.bindings.contains(&Bound::Database { name: "records".into(), id: 10 }));
+	let config = worker.capnp();
+	database_entry(&config, "records", 10);
+	assert_eq!(config.matches("external = (address = \"unix:").count(), 1, "{config}");
+	assert_eq!(config.matches("wrapped = (moduleName = \"slots:database\"").count(), 1, "{config}");
+}
+
+#[test]
+fn two_database_slots_reach_two_item_services() {
+	let worker = databases(&[("first", 10), ("second", 11)]);
+	assert!(worker.bindings.contains(&Bound::Database { name: "first".into(), id: 10 }));
+	assert!(worker.bindings.contains(&Bound::Database { name: "second".into(), id: 11 }));
+	let config = worker.capnp();
+	database_entry(&config, "first", 10);
+	database_entry(&config, "second", 11);
+	assert_eq!(config.matches("external = (address = \"unix:").count(), 2, "{config}");
+	assert_eq!(config.matches("wrapped = (moduleName = \"slots:database\"").count(), 2, "{config}");
+}
+
+#[test]
+fn two_database_slots_share_one_item_service() {
+	let config = databases(&[("first", 10), ("second", 10)]).capnp();
+	database_entry(&config, "first", 10);
+	database_entry(&config, "second", 10);
+	assert_eq!(config.matches("external = (address = \"unix:").count(), 1, "{config}");
+	assert_eq!(config.matches("wrapped = (moduleName = \"slots:database\"").count(), 2, "{config}");
+	assert_eq!(config.matches("(modules = [(name = \"slots:database\"").count(), 1, "{config}");
 }

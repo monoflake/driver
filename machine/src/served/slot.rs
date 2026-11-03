@@ -12,7 +12,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, Method, Uri};
 use axum::response::Response;
 use driver_machine_container::Refused;
-use driver_machine_function::{DATABASE, OBJECT_SOCKET, objected, slotted};
+use driver_machine_function::{OBJECT_SOCKET, database_socket, objected, slotted};
 use driver_machine_management::Binding;
 use envelope::contracts::{AppBindings, DeploymentForm};
 
@@ -20,16 +20,16 @@ use super::{Caller, routed};
 use crate::{Driver, Listed};
 
 /// The items a binding holds that a deploy's slots may name, by their ids.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub(super) struct Held {
-	pub database: Option<u32>,
+	pub databases: Vec<u32>,
 	pub bucket: Option<u32>,
 }
 
 /// What a binding's list holds that a slot may name.
 pub(super) fn held(listed: &Listed) -> Held {
 	Held {
-		database: listed.database.as_ref().map(|(id, _)| *id),
+		databases: listed.databases.keys().copied().collect(),
 		bucket: listed.bucket.as_ref().map(|(id, _)| *id),
 	}
 }
@@ -40,11 +40,6 @@ struct Sockets(std::sync::Mutex<BTreeMap<PathBuf, tokio::task::AbortHandle>>);
 /// The sockets of this process's one driver.
 static SOCKETS: Sockets = Sockets(std::sync::Mutex::new(BTreeMap::new()));
 
-/// A binding's database socket, `<slots>/<namespace>/database.sock`, in `Listed::namespaced`.
-fn socket(slots: &Path, namespace: &str) -> PathBuf {
-	slotted(slots, namespace).join(DATABASE)
-}
-
 /// A binding's object socket, `<slots>/object/<namespace>/object.sock`, in `Listed::namespaced`.
 fn object_socket(slots: &Path, namespace: &str) -> PathBuf {
 	objected(slots, namespace).join(OBJECT_SOCKET)
@@ -52,13 +47,18 @@ fn object_socket(slots: &Path, namespace: &str) -> PathBuf {
 
 /// Every request on a binding's socket, answered as the binding's own on its one interface.
 async fn route(
-	State((driver, binding, interface)): State<(Arc<Driver>, Binding, &'static str)>,
+	State((driver, binding, interface, item)): State<(
+		Arc<Driver>,
+		Binding,
+		&'static str,
+		Option<u32>,
+	)>,
 	method: Method,
 	uri: Uri,
 	headers: HeaderMap,
 	body: Body,
 ) -> Response {
-	routed(driver, Caller::Slot(binding, interface), method, uri, headers, body).await
+	routed(driver, Caller::Slot(binding, interface, item), method, uri, headers, body).await
 }
 
 /// A file at the path removed, one absent no failure.
@@ -95,11 +95,29 @@ fn told(path: &Path) {
 /// database is held and the object one while its bucket is, each removed otherwise.
 pub(super) fn kept(driver: &Arc<Driver>, binding: Binding, namespace: &str, held: Held) {
 	let slots = &driver.functions.slots;
-	let database = (socket(slots, namespace), "database", held.database.is_some());
-	let object = (object_socket(slots, namespace), "object", held.bucket.is_some());
-	for (path, interface, holds) in [database, object] {
-		served(driver, binding, path, interface, holds);
+	let directory = slotted(slots, namespace);
+	let paths: Vec<_> =
+		held.databases.iter().map(|id| database_socket(slots, namespace, *id)).collect();
+	let stale: Vec<_> = std::fs::read_dir(&directory)
+		.into_iter()
+		.flatten()
+		.flatten()
+		.map(|entry| entry.path())
+		.filter(|path| {
+			path
+				.file_name()
+				.and_then(|name| name.to_str())
+				.is_some_and(|name| name.starts_with("database-") && name.ends_with(".sock"))
+				&& !paths.contains(path)
+		})
+		.collect();
+	for path in stale {
+		served(driver, binding, path, "database", None, false);
 	}
+	for id in held.databases {
+		served(driver, binding, database_socket(slots, namespace, id), "database", Some(id), true);
+	}
+	served(driver, binding, object_socket(slots, namespace), "object", None, held.bucket.is_some());
 }
 
 /// One socket of a binding served on its one interface while `holds`, and removed otherwise; each
@@ -109,6 +127,7 @@ fn served(
 	binding: Binding,
 	path: PathBuf,
 	interface: &'static str,
+	item: Option<u32>,
 	holds: bool,
 ) {
 	let mut sockets = SOCKETS.0.lock().unwrap_or_else(PoisonError::into_inner);
@@ -129,7 +148,8 @@ fn served(
 			return;
 		}
 	};
-	let router = Router::new().fallback(route).with_state((Arc::clone(driver), binding, interface));
+	let router =
+		Router::new().fallback(route).with_state((Arc::clone(driver), binding, interface, item));
 	let at = path.clone();
 	let task = tokio::spawn(async move {
 		if let Err(e) = axum::serve(listener, router).await {
@@ -159,8 +179,12 @@ pub(super) fn filled(
 		return Err(invalid(message));
 	}
 	for (name, id) in bindings.database.iter().flatten() {
-		if held.database != Some(*id) {
-			let holding = held.database.map_or_else(|| "none".to_owned(), |h| format!("item {h}'s"));
+		if !held.databases.contains(id) {
+			let holding = if held.databases.is_empty() {
+				"none".to_owned()
+			} else {
+				held.databases.iter().map(|h| format!("item {h}'s")).collect::<Vec<_>>().join(", ")
+			};
 			return Err(invalid(format!(
 				"the slot {name} names the database {id}, and the binding holds {holding}"
 			)));
@@ -190,10 +214,10 @@ mod tests {
 	}
 
 	fn database(id: u32) -> Held {
-		Held { database: Some(id), bucket: None }
+		Held { databases: vec![id], bucket: None }
 	}
 
-	const NONE: Held = Held { database: None, bucket: None };
+	const NONE: Held = Held { databases: Vec::new(), bucket: None };
 
 	#[test]
 	fn a_deploy_s_bindings_are_held_to_the_database_the_binding_holds() {
@@ -217,9 +241,24 @@ mod tests {
 	}
 
 	#[test]
+	fn slots_may_name_different_held_databases() {
+		let held = Held { databases: vec![3, 7], bucket: None };
+		let slots =
+			AppBindings { app: None, database: named(&[("first", 3), ("second", 7)]), bucket: None };
+		assert!(filled(Some(&slots), held.clone(), DeploymentForm::Modules).is_ok());
+		let slots = AppBindings { database: named(&[("missing", 9)]), ..slots };
+		let refused = filled(Some(&slots), held, DeploymentForm::Modules).unwrap_err();
+		assert_eq!(refused.reason, "invalid");
+		assert_eq!(
+			refused.message.as_deref(),
+			Some("the slot missing names the database 9, and the binding holds item 3's, item 7's")
+		);
+	}
+
+	#[test]
 	fn a_bucket_slot_is_held_to_an_object_item_whatever_its_id() {
 		let bucket = AppBindings { app: None, database: None, bucket: named(&[("files", 9)]) };
-		let holding = Held { database: None, bucket: Some(2) };
+		let holding = Held { databases: Vec::new(), bucket: Some(2) };
 		assert!(filled(Some(&bucket), holding, DeploymentForm::Modules).is_ok());
 		for held in [NONE, database(2)] {
 			let refused = filled(Some(&bucket), held, DeploymentForm::Modules).unwrap_err();
@@ -234,7 +273,7 @@ mod tests {
 	#[test]
 	fn an_app_slot_is_refused_and_an_empty_map_is_not() {
 		let app = AppBindings { app: named(&[("peer", 1)]), database: None, bucket: None };
-		let all = Held { database: Some(1), bucket: Some(1) };
+		let all = Held { databases: vec![1], bucket: Some(1) };
 		let refused = filled(Some(&app), all, DeploymentForm::Modules).unwrap_err();
 		assert_eq!(refused.reason, "invalid");
 		assert_eq!(

@@ -55,7 +55,7 @@ impl Listed {
 			forgotten: BTreeSet::new(),
 			made: None,
 			bucket: None,
-			database: None,
+			databases: BTreeMap::new(),
 		}
 	}
 }
@@ -135,7 +135,9 @@ pub(crate) fn found(listed: &mut Listed, mount: &Path, namespace: String) {
 					Err("it was not found".to_owned())
 				};
 				match opened {
-					Ok(database) => listed.database = Some((*id, Arc::new(database))),
+					Ok(database) => {
+						listed.databases.insert(*id, Arc::new(database));
+					}
 					Err(why) => {
 						item.state = failed("fault", format!("its database was not opened again, {why}"))
 					}
@@ -303,7 +305,7 @@ impl Listed {
 		ManagementState::Made { address: machine.address.clone() }
 	}
 
-	/// The binding's one database, its volume holding its capacity and WAL room.
+	/// An item's database, its volume holding its capacity and WAL room.
 	fn databased(
 		&mut self,
 		id: u32,
@@ -311,24 +313,21 @@ impl Listed {
 		machine: &Machine,
 		make: &impl Make,
 	) -> ManagementState {
-		if let Some((other, _)) = &self.database
-			&& *other != id
-		{
-			return failed("beyond_host", format!("the binding holds one database, item {other}'s"));
-		}
 		let volume = Volume { binding: self.binding, item: id };
 		let at = match make.volume(DATABASES, volume, size.saturating_add(ROOM)) {
 			Ok(at) => at,
 			Err(why) => return failed("fault", why),
 		};
-		match &self.database {
-			Some((_, database)) => {
+		match self.databases.get(&id) {
+			Some(database) => {
 				if let Err(f) = database.resize(size) {
 					return failed("fault", f.0);
 				}
 			}
 			None => match Database::open(&at, size) {
-				Ok(database) => self.database = Some((id, Arc::new(database))),
+				Ok(database) => {
+					self.databases.insert(id, Arc::new(database));
+				}
 				Err(f) => return failed("fault", f.0),
 			},
 		}
@@ -359,9 +358,7 @@ impl Listed {
 				make.unvolume(BUCKETS, volume).map_err(fault)?;
 			}
 			ManagementCapacity::Database { .. } => {
-				if self.database.as_ref().is_some_and(|(held, _)| *held == id) {
-					self.database = None;
-				}
+				self.databases.remove(&id);
 				make.unvolume(DATABASES, volume).map_err(fault)?;
 			}
 		}
@@ -612,13 +609,38 @@ pub(crate) mod tests {
 	}
 
 	#[test]
+	fn two_database_items_are_reopened_and_removing_one_keeps_the_other() {
+		let mount = Mount::new("databases");
+		let mut listed = Listed::new(7);
+		let database = |id, size| item(id, ManagementCapacity::Database { size: sized(size) });
+		apply(&mut listed, &mount, 1, vec![database(1, 1048576), database(2, 1048576)], 0).unwrap();
+		assert_eq!(listed.databases.keys().copied().collect::<Vec<_>>(), [1, 2]);
+		assert!(matches!(state(&listed, 1), ManagementState::Made { .. }));
+		assert!(matches!(state(&listed, 2), ManagementState::Made { .. }));
+		let first = listed.databases[&1].clone();
+		let second = listed.databases[&2].clone();
+		apply(&mut listed, &mount, 2, vec![database(1, 2097152), database(2, 1048576)], 0).unwrap();
+		assert!(std::sync::Arc::ptr_eq(&first, &listed.databases[&1]));
+		assert!(std::sync::Arc::ptr_eq(&second, &listed.databases[&2]));
+		let mut again = Listed::new(7);
+		again.items = listed.items.clone();
+		drop((listed, first, second));
+		super::found(&mut again, &mount.path, super::namespace(7));
+		assert_eq!(again.databases.keys().copied().collect::<Vec<_>>(), [1, 2]);
+		apply(&mut again, &mount, 3, vec![database(2, 1048576)], 0).unwrap();
+		again.end(&ManagementEnd { id: 1 }, &mount).unwrap();
+		assert_eq!(again.databases.keys().copied().collect::<Vec<_>>(), [2]);
+		assert!(matches!(state(&again, 2), ManagementState::Made { .. }));
+	}
+
+	#[test]
 	fn a_database_counts_its_size_against_free_space() {
 		let mut mount = Mount::new("database-free");
 		mount.free = 4096;
 		let mut listed = Listed::new(7);
 		let database = item(1, ManagementCapacity::Database { size: sized(4097) });
 		assert_eq!(apply(&mut listed, &mount, 1, vec![database], 0), Err("beyond_host"));
-		assert!(listed.database.is_none() && asked(&mount).is_empty());
+		assert!(listed.databases.is_empty() && asked(&mount).is_empty());
 	}
 
 	#[test]

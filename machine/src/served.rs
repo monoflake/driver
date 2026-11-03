@@ -52,7 +52,7 @@ const SERVED: &str = "management, deployments, object, database";
 #[derive(Debug, Clone, Copy)]
 enum Caller {
 	Token,
-	Slot(Binding, &'static str),
+	Slot(Binding, &'static str, Option<u32>),
 }
 
 /// How long a call of nix-store making a root is waited on, a deploy's or a start's, before it is
@@ -452,6 +452,7 @@ fn unexecuted(refusal: Unexecuted) -> Refused {
 async fn queried(
 	driver: Arc<Driver>,
 	binding: Binding,
+	item: Option<u32>,
 	call: database::Call,
 	form: Form,
 ) -> Served {
@@ -470,8 +471,13 @@ async fn queried(
 			);
 		}
 	};
-	let holding = driver.lists.lock().await.get(&binding).and_then(|l| l.database.clone());
-	let Some((_, database)) = holding else {
+	let holding = driver
+		.lists
+		.lock()
+		.await
+		.get(&binding)
+		.and_then(|l| item.and_then(|id| l.databases.get(&id)).cloned());
+	let Some(database) = holding else {
 		return answered::<database::Execute>(
 			Err(Refused {
 				reason: "storage_full",
@@ -517,7 +523,7 @@ async fn serve(
 ) -> Served {
 	let forms = Forms::of(headers);
 	let binding = match caller {
-		Caller::Slot(binding, _) => binding,
+		Caller::Slot(binding, _, _) => binding,
 		Caller::Token => {
 			let authorization = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok());
 			let checked =
@@ -531,7 +537,7 @@ async fn serve(
 	};
 	let (listened, interfaces) = match caller {
 		Caller::Token => (true, SERVED),
-		Caller::Slot(_, one) => (false, one),
+		Caller::Slot(_, one, _) => (false, one),
 	};
 	let reached = |name: &str| listened || interfaces == name;
 	let parts = path.strip_prefix('/').and_then(|p| p.split_once('/'));
@@ -569,7 +575,13 @@ async fn serve(
 			Err(e) => early(forms, e),
 		},
 		"database" if reached("database") => match read::<database::Call>(form, operation, &bytes) {
-			Ok(call) => guarded(reply, queried(driver, binding, call, reply)).await,
+			Ok(call) => {
+				let item = match caller {
+					Caller::Slot(_, _, item) => item,
+					Caller::Token => None,
+				};
+				guarded(reply, queried(driver, binding, item, call, reply)).await
+			}
 			Err(e) => early(forms, e),
 		},
 		other => early(forms, answer::malformed(format!("no interface {other}, one of {interfaces}"))),

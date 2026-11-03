@@ -31,7 +31,7 @@ fn apply(driver: &Started, generation: u32, items: Vec<Value>) {
 
 /// Binding 1's database socket, as the driver names it under its state.
 fn socket(driver: &Started) -> PathBuf {
-	driver.state().join("slots/b00000001/database.sock")
+	driver_machine_function::database_socket(&driver.state().join("slots"), "b00000001", 1)
 }
 
 /// A call in JSON on a socket, carrying no token, and its status and answer.
@@ -73,6 +73,45 @@ fn an_execute_on_the_binding_s_socket_is_answered_with_no_token() {
 	let driver = driver.restarted();
 	let (status, answer) = execute(&socket(&driver));
 	assert_eq!(status, 200, "{answer}");
+}
+
+#[test]
+fn database_items_answer_on_separate_sockets_and_keep_separate_rows() {
+	let driver = Started::short("slot-databases", 1);
+	apply(&driver, 1, vec![item(1), item(2)]);
+	let first = socket(&driver);
+	let second =
+		driver_machine_function::database_socket(&driver.state().join("slots"), "b00000001", 2);
+	for at in [&first, &second] {
+		assert_eq!(execute(at).0, 200);
+		let (status, answer) = called(
+			at,
+			"database",
+			"execute",
+			&json!({ "statements": [{ "sql": "create table entries (value text)" }] }),
+		);
+		assert_eq!(status, 200, "{answer}");
+	}
+	let (status, answer) = called(
+		&first,
+		"database",
+		"execute",
+		&json!({ "statements": [{ "sql": "insert into entries values ('first')" }] }),
+	);
+	assert_eq!(status, 200, "{answer}");
+	let read = json!({ "statements": [{ "sql": "select value from entries" }] });
+	let (_, first_rows) = called(&first, "database", "execute", &read);
+	let (_, second_rows) = called(&second, "database", "execute", &read);
+	assert!(first_rows.to_string().contains("first"), "{first_rows}");
+	assert!(!second_rows.to_string().contains("first"), "{second_rows}");
+	assert_eq!(second_rows["status"], "success");
+	apply(&driver, 2, vec![item(2)]);
+	assert_eq!(driver.call(1, "management", "end", &json!({ "id": 1 })).0, 200);
+	assert!(!first.exists());
+	assert_eq!(execute(&second).0, 200);
+	let driver = driver.restarted();
+	assert_eq!(execute(&second).0, 200);
+	assert!(!socket(&driver).exists());
 }
 
 #[test]
@@ -147,7 +186,9 @@ fn the_socket_goes_with_its_database_item() {
 	let driver = driver.restarted();
 	assert!(!socket(&driver).exists());
 	apply(&driver, 3, vec![item(2)]);
-	assert_eq!(execute(&socket(&driver)).0, 200);
+	let second =
+		driver_machine_function::database_socket(&driver.state().join("slots"), "b00000001", 2);
+	assert_eq!(execute(&second).0, 200);
 }
 
 /// A deploy of modules, its slots filled by `bindings`.

@@ -122,7 +122,7 @@ impl Configure for Worker {
 			.bindings
 			.iter()
 			.flat_map(|b| b.database.iter().flatten())
-			.map(|(name, _)| Bound::Database { name: name.clone() });
+			.map(|(name, id)| Bound::Database { name: name.clone(), id: *id });
 		let buckets = input
 			.bindings
 			.iter()
@@ -167,7 +167,18 @@ impl Configure for Worker {
 			true => format!("(allow = [{}], tlsOptions = (trustBrowserCas = true))", allowed.join(", ")),
 			false => format!("(allow = [{}])", allowed.join(", ")),
 		};
-		let databased = self.bindings.iter().any(|b| matches!(b, Bound::Database { .. }));
+		let databases: std::collections::BTreeSet<u32> = self
+			.bindings
+			.iter()
+			.filter_map(|b| match b {
+				Bound::Database { id, .. } => Some(*id),
+				Bound::Environment { .. }
+				| Bound::Text { .. }
+				| Bound::Secret { .. }
+				| Bound::Bucket { .. }
+				| Bound::Object => None,
+			})
+			.collect();
 		let buckets: Vec<&str> = self
 			.bindings
 			.iter()
@@ -187,8 +198,8 @@ impl Configure for Worker {
 		services.push(format!("(name = {}, network = {network})", quoted(OUTBOUND)));
 		// A deployment filling no slot is configured as one before slots were.
 		let mut extensions = Vec::new();
-		if databased {
-			services.push(database::service());
+		if !databases.is_empty() {
+			services.extend(databases.iter().map(|id| database::service(*id)));
 			extensions.push(database::extension());
 		}
 		services.extend(buckets.iter().map(|slot| bucket::service(slot)));
@@ -238,7 +249,7 @@ impl Configure for Worker {
 				Bound::Secret { name } => {
 					format!("(name = {}, text = embed {})", quoted(name), quoted(&format!("/{name}")))
 				}
-				Bound::Database { name } => database::binding(name),
+				Bound::Database { name, id } => database::binding(name, *id),
 				Bound::Bucket { name } => bucket::binding(name),
 				Bound::Object => {
 					format!("(name = {}, service = {})", quoted(OBJECT), quoted(OBJECT_SERVICE))

@@ -36,13 +36,15 @@ pub const FOOTING: &str = "MONOFLAKE_FOOTING";
 /// [`Functions::slots`], RFC rt6gi.
 pub const SLOTS: &str = "/run/slots";
 
-/// The socket a binding's database is served on, within its directory of sockets.
-pub const DATABASE: &str = "database.sock";
-
 /// A binding's directory of sockets, `<slots>/<namespace>`, bound at [`SLOTS`] in its containers,
 /// by the namespace its containers are in.
 pub fn slotted(slots: &Path, namespace: &str) -> PathBuf {
 	slots.join(namespace)
+}
+
+/// A database item's socket in the binding's directory, with its id in eight hexadecimal digits.
+pub fn database_socket(slots: &Path, namespace: &str, id: u32) -> PathBuf {
+	slotted(slots, namespace).join(format!("database-{id:08x}.sock"))
 }
 
 /// Where a binding's object socket lies in its storage component's container, read-only.
@@ -181,10 +183,12 @@ pub enum Bound {
 		name: String,
 	},
 	/// A slot filled with the binding's database, reached as `env.<name>` speaking the `database`
-	/// contract through [`DATABASE`] under [`SLOTS`], RFC rt6gi.
+	/// contract through [`database_socket`] under [`SLOTS`], RFC rt6gi.
 	Database {
 		/// The slot's name, as the build declares it.
 		name: String,
+		/// The database item the slot reaches.
+		id: u32,
 	},
 	/// A slot filled with a bucket of the binding's storage product, reached as `env.<name>`
 	/// speaking its objects through [`bucket_socket`] under [`BUCKETS`], RFC ahcrp.
