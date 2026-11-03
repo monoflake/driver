@@ -1,6 +1,6 @@
 [package]
 name = "driver-machine-volume"
-version = "0.1.0"
+version = "0.1.1"
 description = "driver(machine)'s volume: a btrfs subvolume of a binding's item under a quota group's limit, which a bucket and a container's layer stand on too, RFC 54q45"
 edition.workspace = true
 publish.workspace = true

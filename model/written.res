@@ -10,6 +10,7 @@ let blocks: dict<Work.state> = dict{
   "driver-cloudflare-object": Accepted,
   "driver-machine": Accepted,
   "driver-machine-container": Accepted,
+  "driver-machine-database": InWork,
   "driver-machine-function": Accepted,
   "driver-machine-management": Accepted,
   "driver-machine-object": Accepted,

@@ -13,6 +13,9 @@ pub const VOLUMES: &str = "volumes";
 /// Where an `object` item's bucket lies under the mount, `<mount>/buckets/<binding>/<item>`.
 pub const BUCKETS: &str = "buckets";
 
+/// Where a `database` item's file lies under the mount, `<mount>/databases/<binding>/<item>`.
+pub const DATABASES: &str = "databases";
+
 /// What btrfs could not do at a moment, answered `fault`, RFC ge55b.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fault(pub String);

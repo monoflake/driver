@@ -1,0 +1,19 @@
+[package]
+name = "driver-machine-database"
+version = "0.1.0"
+description = "driver(machine)'s database: one SQLite file on a volume, with one writer and one copy, RFC 4elqc"
+edition.workspace = true
+publish.workspace = true
+license = "MIT OR Apache-2.0"
+
+[lints]
+workspace = true
+
+[dependencies]
+envelope = { path = "../../../platform/code/libs/envelope" }
+# SQLite compiled in, so a static musl build links no system library, hooks for its authorizer.
+rusqlite = { version = "0.41", features = ["bundled", "hooks"] }
+
+[dev-dependencies]
+blake3 = "1"
+serde_json = "1"

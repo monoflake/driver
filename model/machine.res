@@ -65,7 +65,20 @@ let driver: Made.driver = {
     },
     // A binding's item as a subvolume under a qgroup's limit, which a bucket stands on, RFC 54q45.
     {kind: #volume, language: #rust, as_: "a btrfs subvolume", takes: [rust("rustix", "1")]},
-    {kind: #database, contract: "database", language: #rust, as_: "SQLite on a volume"},
+    // One SQLite file on a volume, one writer and one copy, a rewind waiting on the plan's item.
+    {
+      kind: #database,
+      contract: "database",
+      language: #rust,
+      as_: "SQLite on a volume",
+      uses: ["envelope*"],
+      takes: [rust("rusqlite", "0.41"), rust("serde_json", "1"), rust("blake3", "1")],
+      samples: [
+        "../platform/tests/kinds/databases/statements.json",
+        "../platform/tests/kinds/databases/batches.json",
+        "../platform/tests/kinds/databases/limits.json",
+      ],
+    },
   ],
   // An isolate runs inside its organization's container, which keeps bindings apart, v7v3w.
   runtimes: [
@@ -93,6 +106,7 @@ let driver: Made.driver = {
     ],
     serves: [
       "driver-machine-container",
+      "driver-machine-database",
       "driver-machine-function",
       "driver-machine-management",
       "driver-machine-object",
