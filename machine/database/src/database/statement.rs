@@ -2,29 +2,35 @@
 
 use envelope::contracts::{DatabaseResult, DatabaseStatement, DatabaseValue};
 use envelope::{Bounded, Int53, Uint53};
+use rusqlite::fallible_iterator::FallibleIterator as _;
 use rusqlite::types::{Value, ValueRef};
-use rusqlite::{Connection, params_from_iter};
+use rusqlite::{Batch, Connection, params_from_iter};
 
 use super::policy;
 use crate::Unexecuted;
 
-fn parameter(value: &DatabaseValue) -> Value {
-	match value {
+fn parameter(input: &DatabaseValue) -> Value {
+	match input {
 		DatabaseValue::Null => Value::Null,
-		DatabaseValue::Integer { value } => Value::Integer(value.get()),
-		DatabaseValue::Real { value } => Value::Real(*value),
-		DatabaseValue::Text { value } => Value::Text(value.clone()),
-		DatabaseValue::Bytes { value } => Value::Blob(value.clone()),
+		DatabaseValue::Integer { value: number } => Value::Integer(number.get()),
+		DatabaseValue::Real { value: number } => Value::Real(*number),
+		DatabaseValue::Text { value: text } => Value::Text(text.clone()),
+		DatabaseValue::Bytes { value: bytes } => Value::Blob(bytes.clone()),
 	}
 }
 
-fn value(value: ValueRef<'_>) -> Result<DatabaseValue, Unexecuted> {
-	Ok(match value {
+fn value(cell: ValueRef<'_>) -> Result<DatabaseValue, Unexecuted> {
+	Ok(match cell {
 		ValueRef::Null => DatabaseValue::Null,
 		ValueRef::Integer(n) => DatabaseValue::Integer {
 			value: Int53::new(n).ok_or_else(|| Unexecuted::BeyondRange(n.to_string()))?,
 		},
-		ValueRef::Real(value) => DatabaseValue::Real { value },
+		ValueRef::Real(number) => {
+			if !number.is_finite() {
+				return Err(Unexecuted::BeyondRange(number.to_string()));
+			}
+			DatabaseValue::Real { value: number }
+		}
 		ValueRef::Text(bytes) => DatabaseValue::Text {
 			value: std::str::from_utf8(bytes).map_err(|e| Unexecuted::Invalid(e.to_string()))?.into(),
 		},
@@ -39,8 +45,12 @@ pub(super) fn run(
 	if input.sql.contains('\0') {
 		return Err(Unexecuted::Invalid("SQL contains a NUL byte".into()));
 	}
-	let mut statement = connection.prepare(&input.sql).map_err(policy::error)?;
-	if statement.expanded_sql().is_none() {
+	let mut batch = Batch::new(connection, &input.sql);
+	let mut statement = batch
+		.next()
+		.map_err(policy::error)?
+		.ok_or_else(|| Unexecuted::Invalid("expected one SQL statement".into()))?;
+	if batch.next().map_err(policy::error)?.is_some() {
 		return Err(Unexecuted::Invalid("expected one SQL statement".into()));
 	}
 	let parameters = input.parameters.as_deref().unwrap_or_default();

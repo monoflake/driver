@@ -30,7 +30,7 @@ pub enum Unexecuted {
 	Constraint(String),
 	/// `beyond_limit`, a statement past [`STATEMENT`] or a limit of SQLite's, and which.
 	BeyondLimit(String),
-	/// `beyond_range`, an integer read past what a JavaScript number holds, and which.
+	/// `beyond_range`, an integer past what a JavaScript number holds, or a real not finite, read.
 	BeyondRange(String),
 	/// `storage_full`, past the database's capacity or the file system's room.
 	StorageFull,

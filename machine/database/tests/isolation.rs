@@ -20,9 +20,7 @@ fn tenant_cannot_control_files_transactions_or_connection() {
 		attach.as_str(),
 		vacuum.as_str(),
 		"SELECT load_extension('anything')",
-		"SELECT readfile('/etc/passwd')",
-		"SELECT writefile('/tmp/forbidden', 'x')",
-		"SELECT edit('anything')",
+		"SELECT * FROM pragma_max_page_count(1000000)",
 		"BEGIN",
 		"COMMIT",
 		"END",
@@ -47,6 +45,86 @@ fn tenant_cannot_control_files_transactions_or_connection() {
 			0
 		);
 		assert!(!escaped.exists());
+	}
+}
+
+fn tokenizer_refused(sql: &str, parameters: serde_json::Value) {
+	let (_directory, database) = database(1024 * 1024);
+	let call =
+		DatabaseExecute::from_json(&json!({"statements": [{"sql": sql, "parameters": parameters}]}))
+			.unwrap();
+	let Err(Unexecuted::Invalid(words)) = database.execute(&call) else {
+		panic!("{sql} was not refused as invalid");
+	};
+	assert!(words.contains("not authorized to use function: fts3_tokenizer"), "{words}");
+}
+
+#[test]
+fn tokenizer_name_parameter_is_refused_by_the_authorizer() {
+	tokenizer_refused("SELECT fts3_tokenizer(?1)", json!([{"kind": "text", "value": "simple"}]));
+}
+
+#[test]
+fn tokenizer_pointer_parameter_is_refused_by_the_authorizer() {
+	tokenizer_refused(
+		"SELECT fts3_tokenizer(?1, ?2)",
+		json!([
+			{"kind": "text", "value": "simple"}, {"kind": "bytes", "value": "AAAAAAAAAAA"}
+		]),
+	);
+}
+
+#[test]
+fn a_statement_tail_at_the_bound_is_refused_on_a_small_stack() {
+	std::thread::Builder::new()
+		.stack_size(256 * 1024)
+		.spawn(|| {
+			let (_directory, database) = database(1024 * 1024);
+			let mut sql = "SELECT 1;".repeat(STATEMENT / "SELECT 1;".len());
+			sql.extend(std::iter::repeat_n(' ', STATEMENT - sql.len()));
+			assert_eq!(sql.len(), STATEMENT);
+			assert!(matches!(database.execute(&input(&[&sql])), Err(Unexecuted::Invalid(_))));
+		})
+		.unwrap()
+		.join()
+		.unwrap();
+}
+
+#[test]
+fn nonfinite_reals_are_refused_when_read_and_the_batch_rolls_back() {
+	let (_directory, database) = database(1024 * 1024);
+	output(&database, &["CREATE TABLE t (n)"]);
+	for sql in ["SELECT 9e999", "SELECT -9e999", "INSERT INTO t VALUES (9e999) RETURNING n"] {
+		assert!(matches!(
+			database.execute(&input(&["INSERT INTO t VALUES (1)", sql])),
+			Err(Unexecuted::BeyondRange(_))
+		));
+		assert_eq!(
+			output(&database, &["SELECT count(*) FROM t"])["results"][0]["rows"][0][0]["value"],
+			0
+		);
+	}
+	output(&database, &["INSERT INTO t VALUES (9e999), (-9e999), (9007199254740992)"]);
+	for condition in ["n > 1e300", "n < -1e300", "n = 9007199254740992"] {
+		let sql = format!("SELECT n FROM t WHERE {condition}");
+		assert!(matches!(database.execute(&input(&[&sql])), Err(Unexecuted::BeyondRange(_))));
+	}
+	assert_eq!(
+		output(&database, &["SELECT count(*) FROM t"])["results"][0]["rows"][0][0]["value"],
+		3
+	);
+}
+
+#[test]
+fn sqlite_prepare_limits_keep_the_limit_reason() {
+	let (_directory, database) = database(1024 * 1024);
+	let variables = format!("SELECT {}", vec!["?"; 32767].join(","));
+	let depth = format!("SELECT {}", vec!["1"; 1001].join("+"));
+	let compound = vec!["SELECT 1"; 501].join(" UNION ALL ");
+	for sql in [variables, depth, compound] {
+		assert!(sql.len() <= STATEMENT);
+		let answer = database.execute(&input(&[&sql]));
+		assert!(matches!(answer, Err(Unexecuted::BeyondLimit(_))), "{answer:?}");
 	}
 }
 

@@ -39,7 +39,16 @@ mount, so a list sent again fits however full its volumes are. A making that fai
 the call that finds it so, its volume deleted and waited on until btrfs cleans it, or its containers,
 labelled with the item they run in, removed with its capacity; the binding's qgroup goes with its
 last item. No timer sweeps yet, item 4. At start each made bucket is opened again and a volume or
-bucket not found is `failed`. A `database` item still reaches `todo!("4elqc")`.
+bucket not found is `failed`.
+
+Built further for thread trial's step 3: a `database` item is the binding's one database, one SQLite
+file in a volume at `<mount>/databases/<binding>/<item>`, one connection its one writer and one copy,
+its capacity the item's size as `max_page_count`, its qgroup's limit that and `ROOM` for the WAL, its
+address the driver's, a second item `failed` with `beyond_host`. A machine serves `execute`, and
+`rewind` and copies wait, `machine-rewind-by-wal` in `model/plan.json`. A caller's SQL may reach no
+`ATTACH`, transaction control, `PRAGMA`, virtual table or function beyond SQLite's documented core,
+narrower than D1 reads, and a statement is at most 100,000 bytes, D1's own, RFC nrs5v.
+What is still unbounded is `machine-database-bounds`.
 
 The questions, each as it was asked:
 
@@ -51,7 +60,7 @@ The questions, each as it was asked:
 3. **What each kind's item is, and its address**: a `container` item is a share of cores and
    memory the container kind reads from its `Binding`; a `volume` a subvolume, an `object` a bucket
    `driver-machine-object` opens at a directory and makes a subvolume of, and a `database` a SQLite
-   file, the volume and the database without a block yet. A `made` item reports an address, and
+   file. A `made` item reports an address, and
    for none of the four is it written what the address names, nor which bucket an `object` call
    reaches, since it names none.
 4. **How an item is unmade**, once its grace has passed or `end` asks it, and whether that waits

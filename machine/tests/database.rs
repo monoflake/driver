@@ -83,6 +83,24 @@ fn a_database_volume_missing_at_start_is_failed_then_made_again() {
 }
 
 #[test]
+fn a_database_file_missing_at_start_is_failed_without_replacing_it() {
+	let driver = Started::with("database-file-missing", 1);
+	apply(&driver, 1, vec![item(1)]);
+	let at = driver.mount().join("databases/1/1");
+	std::fs::remove_file(at.join(FILE)).unwrap();
+	let driver = driver.restarted();
+	let held = describe(&driver);
+	assert_eq!(held["items"][0]["state"]["name"], "failed");
+	assert_eq!(held["items"][0]["state"]["reason"], "fault");
+	assert_eq!(
+		held["items"][0]["state"]["message"],
+		"its database was not opened again, it was not found"
+	);
+	assert!(at.is_dir());
+	assert!(!at.join(FILE).exists(), "start must not replace the missing database");
+}
+
+#[test]
 fn database_calls_without_an_item_refuse_execute_and_rewind_and_bound_the_body() {
 	let driver = Started::with("database-refused", 1);
 	let (status, answer) = driver.call(1, "database", "execute", &json!({ "statements": [] }));
@@ -100,6 +118,7 @@ fn database_calls_without_an_item_refuse_execute_and_rewind_and_bound_the_body()
 	let input = json!({ "statements": [{ "sql": text }] });
 	let (status, answer) = driver.call(1, "database", "execute", &input);
 	assert_eq!(status, 400, "{answer}");
-	assert_eq!(answer["reason"], "malformed");
+	assert_eq!(answer["reason"], "beyond_limit");
+	assert_eq!(answer["failure"], "rejected");
 	assert_eq!(answer["message"], "a call's body is at most 2097152 bytes");
 }

@@ -489,7 +489,11 @@ async fn serve(
 	};
 	let largest = if interface == "object" { LARGEST_OBJECT } else { LARGEST };
 	let Ok(bytes) = axum::body::to_bytes(body, largest).await else {
-		return early(forms, answer::malformed(format!("a call's body is at most {largest} bytes")));
+		let message = Some(format!("a call's body is at most {largest} bytes"));
+		if interface == "database" && operation == "execute" {
+			return early(forms, answer::error(database::Execute::REASONS, "beyond_limit", message));
+		}
+		return early(forms, answer::error(&[], "malformed", message));
 	};
 	let reply = forms.answer;
 	match interface {

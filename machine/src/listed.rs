@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use driver_machine_container::{Capacity, Refused};
-use driver_machine_database::{Database, Open as _, ROOM};
+use driver_machine_database::{Database, FILE, Open as _, ROOM};
 use driver_machine_management::Binding;
 use driver_machine_object::{Bucket, MOST, Open as _};
 use driver_machine_volume::{BUCKETS, DATABASES, VOLUMES, Volume, place};
@@ -123,7 +123,7 @@ pub(crate) fn found(listed: &mut Listed, mount: &Path, namespace: String) {
 			}
 			ManagementCapacity::Database { size } => {
 				let at = place(mount, DATABASES, volume);
-				let opened = if at.is_dir() {
+				let opened = if at.join(FILE).is_file() {
 					Database::open(&at, size.get()).map_err(|f| f.0)
 				} else {
 					Err("it was not found".to_owned())

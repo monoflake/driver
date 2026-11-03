@@ -5,7 +5,7 @@ use std::sync::Mutex;
 
 use envelope::contracts::{DatabaseExecute, DatabaseExecuted};
 
-use rusqlite::{Connection, hooks::AuthContext};
+use rusqlite::{Connection, config::DbConfig, hooks::AuthContext};
 
 use crate::{Database, FILE, Fault, Open, STATEMENT, Statements, Unexecuted};
 
@@ -29,6 +29,9 @@ fn capacity(connection: &Connection, bytes: u64) -> Result<(), Fault> {
 impl Open for Database {
 	fn open(directory: &Path, bytes: u64) -> Result<Self, Fault> {
 		let connection = Connection::open(directory.join(FILE)).map_err(fault)?;
+		connection
+			.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_FTS3_TOKENIZER, false)
+			.map_err(fault)?;
 		connection.pragma_update(None, "journal_mode", "WAL").map_err(fault)?;
 		connection.pragma_update(None, "synchronous", "FULL").map_err(fault)?;
 		connection.pragma_update(None, "temp_store", "MEMORY").map_err(fault)?;
