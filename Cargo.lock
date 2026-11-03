@@ -461,12 +461,13 @@ dependencies = [
 
 [[package]]
 name = "driver-machine"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "axum",
  "clap",
  "codec",
  "driver-machine-container",
+ "driver-machine-database",
  "driver-machine-function",
  "driver-machine-management",
  "driver-machine-object",
@@ -497,7 +498,7 @@ dependencies = [
 
 [[package]]
 name = "driver-machine-database"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "blake3",
  "envelope",

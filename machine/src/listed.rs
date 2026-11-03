@@ -1,6 +1,6 @@
 //! A binding's list held by generation, its grace and each item asked or unasked, as
 //! `model/contracts/kinds/management.res` and its samples have it, RFC vr5lw, and what each item is
-//! made of on the machine, RFC 4elqc's proposal as RFC 54q45 takes it.
+//! made of on the machine, including its bucket and database, RFCs 4elqc and 54q45.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::mem::discriminant;
@@ -8,9 +8,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use driver_machine_container::{Capacity, Refused};
+use driver_machine_database::{Database, Open as _, ROOM};
 use driver_machine_management::Binding;
 use driver_machine_object::{Bucket, MOST, Open as _};
-use driver_machine_volume::{BUCKETS, VOLUMES, Volume, place};
+use driver_machine_volume::{BUCKETS, DATABASES, VOLUMES, Volume, place};
 use envelope::contracts::interface::{deployments, management};
 use envelope::contracts::{
 	ManagementApply, ManagementCapacity, ManagementDescribed, ManagementEnd, ManagementEnded,
@@ -27,12 +28,13 @@ const WEEK: u32 = 604_800;
 /// The longest grace, a year of 365 days in seconds.
 const YEAR: u32 = 31_536_000;
 
-/// The kinds it serves today, RFC dg903 leaving an instance and RFC 4elqc a database waiting.
-const OFFERED: [ManagementKind; 4] = [
+/// The kinds it serves today, RFC dg903 leaving an instance waiting.
+const OFFERED: [ManagementKind; 5] = [
 	ManagementKind::Function,
 	ManagementKind::Container,
 	ManagementKind::Object,
 	ManagementKind::Volume,
+	ManagementKind::Database,
 ];
 
 impl Listed {
@@ -47,6 +49,7 @@ impl Listed {
 			forgotten: BTreeSet::new(),
 			made: None,
 			bucket: None,
+			database: None,
 		}
 	}
 }
@@ -84,8 +87,8 @@ fn failed(reason: &str, message: impl Into<String>) -> ManagementState {
 }
 
 /// What the machine made of a list kept, found again from the disk at start, each `container` item
-/// a container of capacity in the namespace its list was kept with and the `object` item's bucket
-/// opened; an item made that is not found is failed, so the next list makes it again.
+/// a container of capacity in its kept namespace, its bucket and database opened again.
+/// An item made that is not found is failed, so the next list makes it again.
 pub(crate) fn found(listed: &mut Listed, mount: &Path, namespace: String) {
 	let binding = listed.binding;
 	let mut made = named(binding, namespace);
@@ -118,7 +121,20 @@ pub(crate) fn found(listed: &mut Listed, mount: &Path, namespace: String) {
 					}
 				}
 			}
-			ManagementCapacity::Database { .. } => {}
+			ManagementCapacity::Database { size } => {
+				let at = place(mount, DATABASES, volume);
+				let opened = if at.is_dir() {
+					Database::open(&at, size.get()).map_err(|f| f.0)
+				} else {
+					Err("it was not found".to_owned())
+				};
+				match opened {
+					Ok(database) => listed.database = Some((*id, Arc::new(database))),
+					Err(why) => {
+						item.state = failed("fault", format!("its database was not opened again, {why}"))
+					}
+				}
+			}
 		}
 	}
 	listed.made = (!made.capacities.is_empty()).then_some(made);
@@ -162,11 +178,13 @@ fn valid(items: &[ManagementItem]) -> Result<(), Refused> {
 	Ok(())
 }
 
-/// The bytes a `volume` or an `object` item holds, none for the other kinds.
+/// The bytes a volume, object or database item holds, none for a container.
 fn space(capacity: &ManagementCapacity) -> Option<u64> {
 	match capacity {
-		ManagementCapacity::Volume { size } | ManagementCapacity::Object { size } => Some(size.get()),
-		ManagementCapacity::Container { .. } | ManagementCapacity::Database { .. } => None,
+		ManagementCapacity::Volume { size }
+		| ManagementCapacity::Object { size }
+		| ManagementCapacity::Database { size } => Some(size.get()),
+		ManagementCapacity::Container { .. } => None,
 	}
 }
 
@@ -179,9 +197,8 @@ impl Listed {
 		})
 	}
 
-	/// A list whose `container` items ask at most the machine's cores and memory, and whose
-	/// `volume` and `object` items ask, past what is made of them, at most the free space of the
-	/// workloads' btrfs, the bound RFC 4elqc proposes; what other bindings hold not yet counted.
+	/// A list within the machine's cores, memory and free btrfs space past what is made already.
+	/// The bound is RFC 4elqc's, with other bindings not yet counted.
 	fn bounded(
 		&self,
 		items: &[ManagementItem],
@@ -244,8 +261,7 @@ impl Listed {
 				Err(why) => failed("fault", why),
 			},
 			ManagementCapacity::Object { size } => self.bucketed(item.id, size.get(), machine, make),
-			// Refused before anything of the list is made, in `apply`.
-			ManagementCapacity::Database { .. } => todo!("4elqc"),
+			ManagementCapacity::Database { size } => self.databased(item.id, size.get(), machine, make),
 		}
 	}
 
@@ -281,8 +297,40 @@ impl Listed {
 		ManagementState::Made { address: machine.address.clone() }
 	}
 
-	/// What the machine made of an item removed, its volume or bucket, or its containers and
-	/// capacity; the item stays where any of it fails, so a call after removes it.
+	/// The binding's one database, its volume holding its capacity and WAL room.
+	fn databased(
+		&mut self,
+		id: u32,
+		size: u64,
+		machine: &Machine,
+		make: &impl Make,
+	) -> ManagementState {
+		if let Some((other, _)) = &self.database
+			&& *other != id
+		{
+			return failed("beyond_host", format!("the binding holds one database, item {other}'s"));
+		}
+		let volume = Volume { binding: self.binding, item: id };
+		let at = match make.volume(DATABASES, volume, size.saturating_add(ROOM)) {
+			Ok(at) => at,
+			Err(why) => return failed("fault", why),
+		};
+		match &self.database {
+			Some((_, database)) => {
+				if let Err(f) = database.resize(size) {
+					return failed("fault", f.0);
+				}
+			}
+			None => match Database::open(&at, size) {
+				Ok(database) => self.database = Some((id, Arc::new(database))),
+				Err(f) => return failed("fault", f.0),
+			},
+		}
+		ManagementState::Made { address: machine.address.clone() }
+	}
+
+	/// An item's volume, bucket, database or containers and capacity removed.
+	/// The item stays where any removal fails, so a call after removes it.
 	fn unmade(&mut self, id: u32, make: &impl Make) -> Result<(), Refused> {
 		let Some(item) = self.items.get(&id) else { return Ok(()) };
 		let volume = Volume { binding: self.binding, item: id };
@@ -304,7 +352,12 @@ impl Listed {
 				}
 				make.unvolume(BUCKETS, volume).map_err(fault)?;
 			}
-			ManagementCapacity::Database { .. } => {}
+			ManagementCapacity::Database { .. } => {
+				if self.database.as_ref().is_some_and(|(held, _)| *held == id) {
+					self.database = None;
+				}
+				make.unvolume(DATABASES, volume).map_err(fault)?;
+			}
 		}
 		Ok(())
 	}
@@ -353,10 +406,6 @@ impl Manage for Listed {
 		}
 		self.bounded(&input.items, machine, make)?;
 		let making: Vec<&ManagementItem> = input.items.iter().filter(|i| !self.kept(i)).collect();
-		// A database waits for its block, RFC 4elqc, and nothing of the list is made before it.
-		if making.iter().any(|i| matches!(i.capacity, ManagementCapacity::Database { .. })) {
-			todo!("4elqc");
-		}
 		for item in making {
 			let other = self.items.get(&item.id).map(|held| discriminant(&held.capacity));
 			if other.is_some_and(|kind| kind != discriminant(&item.capacity)) {
@@ -557,6 +606,16 @@ pub(crate) mod tests {
 	}
 
 	#[test]
+	fn a_database_counts_its_size_against_free_space() {
+		let mut mount = Mount::new("database-free");
+		mount.free = 4096;
+		let mut listed = Listed::new(7);
+		let database = item(1, ManagementCapacity::Database { size: sized(4097) });
+		assert_eq!(apply(&mut listed, &mount, 1, vec![database], 0), Err("beyond_host"));
+		assert!(listed.database.is_none() && asked(&mount).is_empty());
+	}
+
+	#[test]
 	fn a_volume_item_is_made_a_volume_of_its_size_at_its_path() {
 		let mount = Mount::new("volume");
 		let mut listed = Listed::new(7);
@@ -725,6 +784,7 @@ pub(crate) mod tests {
 			ManagementKind::Container,
 			ManagementKind::Object,
 			ManagementKind::Volume,
+			ManagementKind::Database,
 		];
 		assert_eq!(described.kinds.as_deref(), Some(served.as_slice()));
 		assert!(described.adopted.is_none() && described.warnings.is_none());

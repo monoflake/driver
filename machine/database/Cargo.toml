@@ -1,6 +1,6 @@
 [package]
 name = "driver-machine-database"
-version = "0.1.0"
+version = "0.1.1"
 description = "driver(machine)'s database: one SQLite file on a volume, with one writer and one copy, RFC 4elqc"
 edition.workspace = true
 publish.workspace = true

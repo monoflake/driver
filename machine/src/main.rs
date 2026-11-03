@@ -161,7 +161,7 @@ struct Item {
 }
 
 /// A binding's list, its generations, grace and items, the hashes of its tokens an apply forgot,
-/// and what the machine made of it, which its deployments run within, and its bucket by its item.
+/// and what the machine made of it, its deployment capacity, bucket and database by their items.
 #[derive(Debug, Clone)]
 struct Listed {
 	binding: Binding,
@@ -172,6 +172,7 @@ struct Listed {
 	forgotten: BTreeSet<[u8; 32]>,
 	made: Option<driver_machine_container::Binding>,
 	bucket: Option<(u32, Arc<driver_machine_object::Bucket>)>,
+	database: Option<(u32, Arc<driver_machine_database::Database>)>,
 }
 
 /// What the machine holds whole, every core in thousandths and its memory in bytes, read at start,
@@ -188,8 +189,8 @@ struct Machine {
 trait Make {
 	/// The bytes free on the workloads' btrfs.
 	fn free(&self) -> Result<u64, String>;
-	/// A volume made, or limited again, to `size` bytes under `under`, `volumes` or `buckets`; its
-	/// directory.
+	/// A volume made, or limited again, to `size` bytes under `under`, `volumes`, `buckets` or
+	/// `databases`, and its directory.
 	fn volume(&self, under: &str, volume: Volume, size: u64) -> Result<PathBuf, String>;
 	/// A volume removed; one absent is no failure.
 	fn unvolume(&self, under: &str, volume: Volume) -> Result<(), String>;

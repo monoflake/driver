@@ -18,14 +18,15 @@ use driver_machine_container::{
 	Bridge, Btrfs, Containers, Deployments, Https, Refused, Restart as _, Roots, Runtimes, STORE,
 	Socket, Unmake as _,
 };
+use driver_machine_database::{Statements as _, Unexecuted};
 use driver_machine_function::Functions;
 use driver_machine_management::{Binding, Hold, Memory, Parse, Processor, Tokens, Unread};
 use driver_machine_object::{MOST, Objects as _, Unwritten};
 use driver_machine_volume::{Quotas as _, Volume, Volumes as _, qgroup};
-use envelope::contracts::interface::{deployments, management, object};
+use envelope::contracts::interface::{database, deployments, management, object};
 use envelope::contracts::{
-	DeploymentDeleted, DeploymentForm, DeploymentRuns, DeploymentRuntime, Error, Failure,
-	ManagementHeld, ObjectDeleted, ObjectDescribed, ObjectListed,
+	DatabaseExecuted, DeploymentDeleted, DeploymentForm, DeploymentRuns, DeploymentRuntime, Error,
+	Failure, ManagementHeld, ObjectDeleted, ObjectDescribed, ObjectListed,
 };
 use envelope::{Called, Encoded, Operation};
 
@@ -41,7 +42,7 @@ const LARGEST: usize = 2 * 1024 * 1024;
 const LARGEST_OBJECT: usize = MOST.div_ceil(3) * 4 + LARGEST;
 
 /// The interfaces it serves, as a call names them.
-const SERVED: &str = "management, deployments, object";
+const SERVED: &str = "management, deployments, object, database";
 
 /// How long a call of nix-store making a root is waited on, a deploy's or a start's, before it is
 /// killed.
@@ -390,6 +391,63 @@ async fn stored(driver: Arc<Driver>, binding: Binding, call: object::Call, form:
 	}
 }
 
+/// What a database refused a batch for, keeping its words as the message.
+fn unexecuted(refusal: Unexecuted) -> Refused {
+	let (reason, message) = match refusal {
+		Unexecuted::Invalid(words) => ("invalid", words),
+		Unexecuted::Constraint(words) => ("constraint", words),
+		Unexecuted::BeyondLimit(words) => ("beyond_limit", words),
+		Unexecuted::BeyondRange(words) => ("beyond_range", words),
+		Unexecuted::StorageFull => return Refused { reason: "storage_full", message: None },
+		Unexecuted::Fault(f) => ("fault", f.0),
+	};
+	Refused { reason, message: Some(message) }
+}
+
+/// A database call on its binding's database, SQLite running on a thread that may block.
+async fn queried(
+	driver: Arc<Driver>,
+	binding: Binding,
+	call: database::Call,
+	form: Form,
+) -> Served {
+	let input = match call {
+		database::Call::Execute(input) => input,
+		database::Call::Rewind(_) => {
+			return answered::<database::Rewind>(
+				Err(Refused {
+					reason: "fault",
+					message: Some(
+						"a machine serves execute alone until plan item machine-rewind-by-wal".into(),
+					),
+				}),
+				form,
+			);
+		}
+	};
+	let holding = driver.lists.lock().await.get(&binding).and_then(|l| l.database.clone());
+	let Some((_, database)) = holding else {
+		return answered::<database::Execute>(
+			Err(Refused {
+				reason: "storage_full",
+				message: Some("the binding holds no database".into()),
+			}),
+			form,
+		);
+	};
+	let ran = tokio::task::spawn_blocking(move || {
+		answered::<database::Execute>(database.execute(&input).map_err(unexecuted), form)
+	})
+	.await;
+	match ran {
+		Ok(served) => served,
+		Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
+		Err(e) => {
+			Served::of::<DatabaseExecuted>(Err(answer::error(&[], "fault", Some(e.to_string()))), form)
+		}
+	}
+}
+
 /// A refusal before any operation is reached, a denial or a call not as its interface writes it.
 fn early(forms: Forms, error: Error) -> Served {
 	Served::of::<DeploymentDeleted>(Err(error), forms.answer)
@@ -445,6 +503,10 @@ async fn serve(
 		},
 		"object" => match read::<object::Call>(form, operation, &bytes) {
 			Ok(call) => guarded(reply, stored(driver, binding, call, reply)).await,
+			Err(e) => early(forms, e),
+		},
+		"database" => match read::<database::Call>(form, operation, &bytes) {
+			Ok(call) => guarded(reply, queried(driver, binding, call, reply)).await,
 			Err(e) => early(forms, e),
 		},
 		other => early(forms, answer::malformed(format!("no interface {other}, one of {SERVED}"))),
@@ -672,6 +734,23 @@ mod tests {
 		assert!(matches!(apart, Poll::Ready(_)));
 		drop(held);
 		assert_eq!(waiting.await.outcome, "error rejected not_found");
+	}
+
+	#[test]
+	fn a_database_refusal_keeps_its_reason_and_words() {
+		use driver_machine_database::{Fault, Unexecuted};
+		let cases = [
+			(Unexecuted::Invalid("syntax".into()), "invalid", Some("syntax")),
+			(Unexecuted::Constraint("unique".into()), "constraint", Some("unique")),
+			(Unexecuted::BeyondLimit("statement".into()), "beyond_limit", Some("statement")),
+			(Unexecuted::BeyondRange("integer".into()), "beyond_range", Some("integer")),
+			(Unexecuted::StorageFull, "storage_full", None),
+			(Unexecuted::Fault(Fault("disk".into())), "fault", Some("disk")),
+		];
+		for (refusal, reason, words) in cases {
+			let refused = super::unexecuted(refusal);
+			assert_eq!((refused.reason, refused.message.as_deref()), (reason, words));
+		}
 	}
 
 	#[test]
