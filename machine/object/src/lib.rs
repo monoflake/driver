@@ -1,5 +1,6 @@
 //! `driver(machine)`'s object, a bucket of objects by name on the machine's file system, RFC
-//! vr5lw. This file is its interface, the model's, `docs/code.md`.
+//! vr5lw, reached by the storage product alone. This file is its interface, the model's,
+//! `docs/code.md`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
