@@ -45,6 +45,17 @@ pub fn slotted(slots: &Path, namespace: &str) -> PathBuf {
 	slots.join(namespace)
 }
 
+/// Where a binding's object socket lies in its storage component's container, read-only.
+pub const OBJECTS: &str = "/run/object";
+
+/// The socket a binding's bucket is served on, within its object directory.
+pub const OBJECT_SOCKET: &str = "object.sock";
+
+/// A binding's object directory, `<slots>/object/<namespace>`, its storage component's alone.
+pub fn objected(slots: &Path, namespace: &str) -> PathBuf {
+	slots.join("object").join(namespace)
+}
+
 /// Where a deployment's own sockets lie in its container, one for each of its `object_bucket`
 /// slots, bound in from [`bucketed`] read-only.
 pub const BUCKETS: &str = "/run/buckets";

@@ -1,5 +1,5 @@
-//! A binding's database on its own Unix socket, reached with no token, and a deploy's `bindings`
-//! held to what the binding holds, RFC rt6gi.
+//! A binding's database and bucket on its own Unix socket, reached with no token, and a deploy's
+//! `bindings` held to what the binding holds, RFCs rt6gi and ahcrp.
 
 // What is here is all a test's, so the lints a test may break by are its helpers' as well.
 #![cfg(test)]
@@ -89,6 +89,51 @@ fn a_binding_s_socket_serves_its_database_alone() {
 	}
 }
 
+/// An `object` item of a kibibyte, the binding's bucket.
+fn object(id: u32) -> Value {
+	json!({ "id": id, "capacity": { "name": "object", "size": 1024 },
+		"credentials": ["00".repeat(32)] })
+}
+
+/// Binding 1's object socket, as the driver names it under its state.
+fn object_socket(driver: &Started) -> PathBuf {
+	driver.state().join("slots/object/b00000001/object.sock")
+}
+
+#[test]
+fn an_object_call_is_answered_on_the_object_socket_alone_with_no_token() {
+	use std::os::unix::fs::PermissionsExt as _;
+	let driver = Started::short("slot-object", 1);
+	assert!(!object_socket(&driver).exists(), "no socket before the bucket");
+	apply(&driver, 1, vec![item(1), object(2)]);
+	let at = object_socket(&driver);
+	let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+	assert_eq!((mode(&at), mode(at.parent().unwrap())), (0o666, 0o755));
+	let write = json!({ "name": "a", "content": "aGVsbG8" });
+	let (status, answer) = called(&socket(&driver), "object", "write", &write);
+	assert_eq!(status, 400, "{answer}");
+	assert_eq!(answer["message"], "no interface object, one of database");
+	let (status, answer) = called(&at, "object", "write", &write);
+	assert_eq!(status, 200, "{answer}");
+	let (status, answer) = called(&at, "object", "read", &json!({ "name": "a" }));
+	assert_eq!((status, &answer["status"]), (200, &json!("success")), "{answer}");
+	// The token path reads the same bucket the socket wrote.
+	assert_eq!(driver.call(1, "object", "read", &json!({ "name": "a" })).1, answer);
+	let line = driver.logged("object read");
+	assert!(line.starts_with("object read success "), "{line}");
+	let (status, answer) = execute(&at);
+	assert_eq!(status, 400, "{answer}");
+	assert_eq!(answer["message"], "no interface database, one of object");
+	// The object socket goes with the bucket and the database socket stays with its database.
+	apply(&driver, 2, vec![item(1)]);
+	assert!(at.exists(), "an item unasked keeps its bucket within its grace");
+	assert_eq!(driver.call(1, "management", "end", &json!({ "id": 2 })).0, 200);
+	assert!(!at.exists());
+	assert_eq!(execute(&socket(&driver)).0, 200);
+	let driver = driver.restarted();
+	assert!(!object_socket(&driver).exists());
+}
+
 #[test]
 fn the_socket_goes_with_its_database_item() {
 	let driver = Started::short("slot-gone", 1);
@@ -150,6 +195,10 @@ fn a_deploy_naming_a_database_the_binding_does_not_hold_is_refused_invalid() {
 	let bucket = AppBindings { app: None, database: None, bucket: slots("files", 1) };
 	let (_, answer) = driver.call(1, "deployments", "deploy", &deploy(bucket));
 	assert_eq!(answer["reason"], "invalid", "{answer}");
+	assert_eq!(
+		answer["message"],
+		"the slot files is filled under bucket, and the binding holds no object"
+	);
 	let app = AppBindings { app: slots("peer", 1), database: None, bucket: None };
 	let (_, answer) = driver.call(1, "deployments", "deploy", &deploy(app));
 	assert_eq!(answer["reason"], "invalid", "{answer}");
@@ -157,4 +206,21 @@ fn a_deploy_naming_a_database_the_binding_does_not_hold_is_refused_invalid() {
 	let held = AppBindings { app: None, database: slots("database", 2), bucket: None };
 	let (_, answer) = driver.call(1, "deployments", "deploy", &deploy(held));
 	assert_eq!(answer["reason"], "beyond_host", "{answer}");
+}
+
+#[test]
+fn a_bucket_slot_passes_where_the_binding_holds_an_object_item() {
+	let driver = Started::short("slot-bucket", 1);
+	apply(&driver, 1, vec![object(3)]);
+	// The bucket id is the storage product's, so any passes once an object item is held.
+	let bucket = AppBindings { app: None, database: None, bucket: slots("files", 41) };
+	let (_, answer) = driver.call(1, "deployments", "deploy", &deploy(bucket));
+	assert_eq!(answer["reason"], "beyond_host", "{answer}");
+	let app = AppBindings { app: slots("peer", 1), database: None, bucket: slots("files", 41) };
+	let (_, answer) = driver.call(1, "deployments", "deploy", &deploy(app));
+	assert_eq!(answer["reason"], "invalid", "{answer}");
+	assert_eq!(
+		answer["message"],
+		"the slot peer is filled under app, which a machine serves not yet"
+	);
 }

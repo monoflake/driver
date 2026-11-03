@@ -31,6 +31,7 @@ use envelope::contracts::{
 use envelope::{Called, Encoded, Operation};
 
 mod fence;
+mod forward;
 mod slot;
 
 use crate::answer::{self, Form, Forms};
@@ -45,14 +46,12 @@ const LARGEST_OBJECT: usize = MOST.div_ceil(3) * 4 + LARGEST;
 /// The interfaces it serves, as a call names them.
 const SERVED: &str = "management, deployments, object, database";
 
-/// The one interface a binding's socket serves.
-const SLOTTED: &str = "database";
-
-/// Whose a call is, the binding its token names on the listener or the one its socket is.
+/// Whose a call is, the binding its token names on the listener or the one its socket is, with
+/// the one interface that socket serves.
 #[derive(Debug, Clone, Copy)]
 enum Caller {
 	Token,
-	Slot(Binding),
+	Slot(Binding, &'static str),
 }
 
 /// How long a call of nix-store making a root is waited on, a deploy's or a start's, before it is
@@ -225,10 +224,10 @@ async fn managed(
 			}
 		}
 	});
-	// The socket follows the database whatever the call made or unmade of it.
+	// The sockets follow the database and bucket whatever the call made or unmade of them.
 	let listed = lists.get(&binding);
 	let namespace = listed.map_or_else(|| crate::listed::namespace(binding), Listed::namespaced);
-	slot::kept(&driver, binding, &namespace, listed.is_some_and(|l| l.database.is_some()));
+	slot::kept(&driver, binding, &namespace, listed.map(slot::held).unwrap_or_default());
 	served
 }
 
@@ -291,12 +290,11 @@ async fn deployed(
 		Some(runs) => Some(TURNS.taken(deployment(binding, runs)).await),
 		None => None,
 	};
-	let listed =
-		driver.lists.lock().await.get(&binding).map(|l| (l.made.clone(), l.database.clone()));
-	let (holding, database) = listed.unwrap_or_default();
+	let listed = driver.lists.lock().await.get(&binding).map(|l| (l.made.clone(), slot::held(l)));
+	let (holding, held) = listed.unwrap_or_default();
 	// A slot is held to what the binding holds before anything else of the deploy is asked.
 	if let deployments::Call::Deploy(i) = &call
-		&& let Err(refused) = slot::filled(i.bindings.as_ref(), database.map(|(id, _)| id), i.form)
+		&& let Err(refused) = slot::filled(i.bindings.as_ref(), held, i.form)
 	{
 		return answered::<deployments::Deploy>(Err(refused), form);
 	}
@@ -496,7 +494,7 @@ async fn serve(
 ) -> Served {
 	let forms = Forms::of(headers);
 	let binding = match caller {
-		Caller::Slot(binding) => binding,
+		Caller::Slot(binding, _) => binding,
 		Caller::Token => {
 			let authorization = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok());
 			let checked =
@@ -510,8 +508,9 @@ async fn serve(
 	};
 	let (listened, interfaces) = match caller {
 		Caller::Token => (true, SERVED),
-		Caller::Slot(_) => (false, SLOTTED),
+		Caller::Slot(_, one) => (false, one),
 	};
+	let reached = |name: &str| listened || interfaces == name;
 	let parts = path.strip_prefix('/').and_then(|p| p.split_once('/'));
 	let (Some((interface, operation)), Method::POST) = (parts, method) else {
 		drained(body).await;
@@ -524,7 +523,7 @@ async fn serve(
 			answer::malformed("a call's body is application/json or application/cbor"),
 		);
 	};
-	let largest = if listened && interface == "object" { LARGEST_OBJECT } else { LARGEST };
+	let largest = if interface == "object" && reached("object") { LARGEST_OBJECT } else { LARGEST };
 	let Ok(bytes) = axum::body::to_bytes(body, largest).await else {
 		let message = Some(format!("a call's body is at most {largest} bytes"));
 		if interface == "database" && operation == "execute" {
@@ -542,11 +541,11 @@ async fn serve(
 			Ok(call) => guarded(reply, deployed(driver, binding, call, reply)).await,
 			Err(e) => early(forms, e),
 		},
-		"object" if listened => match read::<object::Call>(form, operation, &bytes) {
+		"object" if reached("object") => match read::<object::Call>(form, operation, &bytes) {
 			Ok(call) => guarded(reply, stored(driver, binding, call, reply)).await,
 			Err(e) => early(forms, e),
 		},
-		"database" => match read::<database::Call>(form, operation, &bytes) {
+		"database" if reached("database") => match read::<database::Call>(form, operation, &bytes) {
 			Ok(call) => guarded(reply, queried(driver, binding, call, reply)).await,
 			Err(e) => early(forms, e),
 		},
@@ -710,7 +709,7 @@ pub(crate) async fn run(arguments: Arguments) -> ExitCode {
 	rooted(&driver).await;
 	let lists = driver.lists.lock().await;
 	for (binding, listed) in lists.iter() {
-		slot::kept(&driver, *binding, &listed.namespaced(), listed.database.is_some());
+		slot::kept(&driver, *binding, &listed.namespaced(), slot::held(listed));
 	}
 	drop(lists);
 	tokio::spawn(restarted(Arc::clone(&driver)));
