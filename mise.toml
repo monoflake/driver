@@ -8,7 +8,7 @@ cargo-deny = "0.20"
 protoc = "36.2"
 # What `archive` links the program's two static Linux binaries with, RFC 8c0rg.
 zig = "0.17" # pre-1.0, where a minor is the breaking release
-"aqua:rust-cross/cargo-zigbuild" = "0.23" # pre-1.0, where a minor is the breaking release
+"aqua:rust-cross/cargo-zigbuild" = "0.24" # pre-1.0, where a minor is the breaking release
 # What `dev --watch` runs a test machine's loop again with on every save.
 watchexec = "2"
 
