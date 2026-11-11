@@ -65,6 +65,14 @@
 				"owes": "the entry admitting declared names alone"
 			},
 			"why": "3txyw"
+		},
+		{
+			"id": "driver-wrangler-retired",
+			"says": "The driver's Wrangler calls, installing and deploying its Workers, D1 and R2 from the local command line, are not moved to cf: the console operates the platform through its online API and replaces them, by the author's word; until then they stay as they are",
+			"holds": {
+				"owes": "the author's word"
+			},
+			"waits": "author"
 		}
 	]
 }
