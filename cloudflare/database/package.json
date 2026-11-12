@@ -1,6 +1,6 @@
 {
 	"name": "@monoflake/driver-cloudflare-database",
-	"version": "0.3.12",
+	"version": "0.3.13",
 	"private": true,
 	"license": "MIT OR Apache-2.0",
 	"type": "module",
@@ -10,6 +10,6 @@
 		"@monoflake/keys": "link:../../../platform/code/libs/keys"
 	},
 	"devDependencies": {
-		"wrangler": "4.156.0"
+		"wrangler": "4.160.0"
 	}
 }
