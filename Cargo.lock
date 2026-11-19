@@ -461,7 +461,7 @@ dependencies = [
 
 [[package]]
 name = "driver-machine"
-version = "0.2.40"
+version = "0.2.41"
 dependencies = [
  "axum",
  "clap",
@@ -498,7 +498,7 @@ dependencies = [
 
 [[package]]
 name = "driver-machine-database"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "blake3",
  "envelope",
@@ -528,7 +528,7 @@ dependencies = [
 
 [[package]]
 name = "driver-machine-object"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "blake3",
  "envelope",
@@ -1598,9 +1598,9 @@ dependencies = [
 
 [[package]]
 name = "rusqlite"
-version = "0.42.0"
+version = "0.43.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4edff0039f148731aee2fd80f76dbfeb12d204ab3d1c544838d34e02151049b"
+checksum = "f172c4812a19b26d1c23cdb0070e69db335503dfa378b910eb857386e5b8beba"
 dependencies = [
  "bitflags",
  "fallible-iterator",
